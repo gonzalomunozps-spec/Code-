@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+
+# datos generados en runtime
+parcelas.json
+historico_reportes.json
+registro_multi_parcelas.json
+eventos_parcela.json
+cache_mapas/
