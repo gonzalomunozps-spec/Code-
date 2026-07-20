@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 
 import requests
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import tkinter.font as tkfont
 
 try:
@@ -65,6 +65,7 @@ import matplotlib.colors as mcolors
 from interpretacion_fenologica import evaluar_parcela, texto_interpretacion
 import registro_parcela as REG
 import fenologia_especies as FEN
+import credenciales as CRED
 
 
 # =====================================================================
@@ -375,6 +376,10 @@ def _actualizar(path, mutador):
 
 INTERVALO_AUTOSYNC_MS = 6 * 60 * 60 * 1000   # cada 6 h se comprueba si el satelite paso
 
+# Resultado de la ultima sincronizacion (la automatica es silenciosa; esto deja
+# constancia de si fallo, para poder mostrarlo en la pestana de Credenciales).
+ULTIMO_SYNC = {"estado": None, "msg": "aun no se ha sincronizado"}
+
 
 def sincronizar_parcela(nombre, campana, silencioso=True):
     """
@@ -383,6 +388,7 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
     Devuelve (n_nuevos, mensaje).
     """
     if not _EE:
+        ULTIMO_SYNC.update(estado="fallo", msg="earthengine-api no disponible")
         return (0, "earthengine-api no disponible")
     try:
         ficha = _load(ARCHIVO_PARCELAS).get(nombre)
@@ -456,6 +462,8 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
             return ee.Feature(None, props)
 
         data = col.map(feat).getInfo()["features"]
+        # el getInfo ha ido bien -> la conexion con GEE funciona
+        ULTIMO_SYNC.update(estado="ok", msg="conexion con GEE correcta")
 
         # --- 4. FILTRO DE VALIDEZ POR PARCELA (no por escena) ---
         # Se acepta la pasada solo si al menos el 80 % de los pixeles de la parcela
@@ -492,6 +500,7 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
         _actualizar(ARCHIVO_HISTORICO, _merge)
         return (len(nuevos), f"anadidas {len(nuevos)} fechas nuevas")
     except Exception as e:
+        ULTIMO_SYNC.update(estado="fallo", msg=f"{e}")
         if not silencioso:
             raise
         return (0, f"error: {e}")
@@ -1663,19 +1672,186 @@ class FichaParcela:
 
 
 # =====================================================================
+# PANEL DE CREDENCIALES / CONEXIONES
+# =====================================================================
+# Insignia de estado por servicio: color de fondo/texto segun el resultado.
+_EST_COLOR = {"ok": ("ok_fg", "ok_bg"), "aviso": ("warn_fg", "warn_bg"),
+              "fallo": ("danger_fg", "danger_bg"), "prueba": ("text_muted", "muted_bg")}
+_EST_TEXTO = {"ok": "CONECTADO", "aviso": "SIN CONFIGURAR", "fallo": "FALLA",
+              "prueba": "Probando…"}
+
+
+class PanelCredenciales(ttk.Frame):
+    """Pestana para ver/cambiar las credenciales (Google Earth Engine y OpenAI)
+    y probar la conexion de cada una, mostrando en rojo el error si alguna falla."""
+
+    def __init__(self, master, al_cambiar=None, *a, **k):
+        super().__init__(master, *a, **k)
+        self.al_cambiar = al_cambiar          # callback tras guardar (refrescar panel)
+        self.cfg = CRED.cargar()
+        self.badges, self.msgs = {}, {}
+        self._build()
+        self.after(400, self.probar_todo)     # estado inicial en segundo plano
+
+    # ---- construccion ----
+    def _build(self):
+        cab = tk.Frame(self, bg=TEMA["header_bg"])
+        cab.pack(fill="x")
+        tk.Label(cab, text="Credenciales y conexiones", bg=TEMA["header_bg"], fg="#fff",
+                 font=FUENTES["h1"]).pack(anchor="w", padx=18, pady=(12, 0))
+        tk.Label(cab, text="Configura los servicios externos y comprueba que responden",
+                 bg=TEMA["header_bg"], fg=TEMA["header_sub"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=18, pady=(0, 12))
+
+        cuerpo = tk.Frame(self, bg=TEMA["page"])
+        cuerpo.pack(fill="both", expand=True, padx=18, pady=16)
+
+        # --- Google Earth Engine ---
+        g = self._tarjeta(cuerpo, "gee", "Google Earth Engine",
+                          "Necesario para descargar imagenes Sentinel-2 y sincronizar las parcelas.")
+        self.e_gee_project = self._campo(g, "Project ID de Google Cloud (opcional)",
+                                         self.cfg.get("gee_project", ""))
+        self.e_gee_sa = self._campo(g, "Cuenta de servicio · email (opcional)",
+                                    self.cfg.get("gee_service_account", ""))
+        tk.Label(g, text="Fichero de clave de la cuenta de servicio (.json, opcional)",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w", pady=(6, 2))
+        fila = tk.Frame(g, bg=TEMA["surface"])
+        fila.pack(fill="x")
+        self.e_gee_key = ttk.Entry(fila)
+        if self.cfg.get("gee_key_file"):
+            self.e_gee_key.insert(0, self.cfg["gee_key_file"])
+        self.e_gee_key.pack(side="left", fill="x", expand=True)
+        ttk.Button(fila, text="Examinar", command=self._elegir_key).pack(side="left", padx=(6, 0))
+        acc = tk.Frame(g, bg=TEMA["surface"])
+        acc.pack(fill="x", pady=(10, 0))
+        ttk.Button(acc, text="Probar conexion", command=lambda: self._probar("gee")).pack(side="left")
+        tk.Label(acc, text="Sin cuenta de servicio se usa la sesion de 'earthengine authenticate'.",
+                 bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(side="left", padx=10)
+
+        # --- OpenAI ---
+        o = self._tarjeta(cuerpo, "openai", "OpenAI · ChatGPT",
+                          "Opcional: genera la interpretacion con IA. Sin clave se usa el texto por reglas.")
+        self.e_openai = self._campo(o, "API key (sk-...)", self.cfg.get("openai_api_key", ""),
+                                    secreto=True)
+        acc2 = tk.Frame(o, bg=TEMA["surface"])
+        acc2.pack(fill="x", pady=(10, 0))
+        ttk.Button(acc2, text="Probar conexion", command=lambda: self._probar("openai")).pack(side="left")
+        self.var_ver = tk.IntVar(value=0)
+        tk.Checkbutton(acc2, text="Mostrar clave", variable=self.var_ver, command=self._toggle_ver,
+                       bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"],
+                       activebackground=TEMA["surface"], selectcolor=TEMA["surface"], bd=0).pack(side="left", padx=10)
+
+        barra = tk.Frame(cuerpo, bg=TEMA["page"])
+        barra.pack(fill="x", pady=(4, 0))
+        tk.Label(barra, text="Se guardan en config_credenciales.json (texto plano) en este equipo.",
+                 bg=TEMA["page"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(side="left")
+        ttk.Button(barra, text="  Guardar y probar todo  ", style="Accent.TButton",
+                   command=self.guardar).pack(side="right")
+
+    def _tarjeta(self, parent, clave, titulo, subtitulo):
+        card = tarjeta(parent)
+        card.pack(fill="x", pady=(0, 14))
+        top = tk.Frame(card, bg=TEMA["surface"])
+        top.pack(fill="x", padx=16, pady=(14, 4))
+        izq = tk.Frame(top, bg=TEMA["surface"])
+        izq.pack(side="left")
+        tk.Label(izq, text=titulo, bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w")
+        tk.Label(izq, text=subtitulo, bg=TEMA["surface"], fg=TEMA["text_muted"],
+                 font=FUENTES["small"]).pack(anchor="w")
+        self.badges[clave] = tk.Label(top, text="Probando…", font=FUENTES["small"], padx=10, pady=3, bd=0)
+        self.badges[clave].pack(side="right")
+        cuerpo = tk.Frame(card, bg=TEMA["surface"])
+        cuerpo.pack(fill="x", padx=16, pady=(4, 8))
+        self.msgs[clave] = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                    font=FUENTES["small"], wraplength=780, justify="left", anchor="w")
+        self.msgs[clave].pack(fill="x", padx=16, pady=(0, 12))
+        return cuerpo
+
+    def _campo(self, parent, etiqueta, valor="", secreto=False):
+        tk.Label(parent, text=etiqueta, bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", pady=(6, 2))
+        e = ttk.Entry(parent, show="•" if secreto else "")
+        if valor:
+            e.insert(0, valor)
+        e.pack(fill="x")
+        return e
+
+    def _set_badge(self, clave, estado, msg):
+        fg, bg = _EST_COLOR.get(estado, _EST_COLOR["prueba"])
+        self.badges[clave].config(text=_EST_TEXTO.get(estado, "?"), fg=TEMA[fg], bg=TEMA[bg])
+        self.msgs[clave].config(text=msg, fg=TEMA["danger_fg"] if estado == "fallo" else TEMA["text_sec"])
+
+    def _toggle_ver(self):
+        self.e_openai.config(show="" if self.var_ver.get() else "•")
+
+    def _elegir_key(self):
+        ruta = filedialog.askopenfilename(title="Clave de cuenta de servicio",
+                                          filetypes=[("JSON", "*.json"), ("Todos", "*.*")])
+        if ruta:
+            self.e_gee_key.delete(0, tk.END)
+            self.e_gee_key.insert(0, ruta)
+
+    def _cfg_actual(self):
+        return {"gee_project": self.e_gee_project.get().strip(),
+                "gee_service_account": self.e_gee_sa.get().strip(),
+                "gee_key_file": self.e_gee_key.get().strip(),
+                "openai_api_key": self.e_openai.get().strip()}
+
+    def _probar(self, servicio):
+        self._set_badge(servicio, "prueba", "Probando conexion…")
+        cfg = self._cfg_actual()
+        CRED.aplicar_entorno(cfg)
+
+        def run():
+            if servicio == "gee":
+                est, msg = CRED.probar_gee(cfg["gee_project"], cfg["gee_key_file"],
+                                           cfg["gee_service_account"])
+                if ULTIMO_SYNC.get("estado") == "fallo" and est == "ok":
+                    est, msg = "aviso", msg + f"  ·  Aviso: el ultimo sync automatico fallo ({ULTIMO_SYNC['msg']})."
+            else:
+                est, msg = CRED.probar_openai(cfg["openai_api_key"])
+            self.after(0, lambda: self._set_badge(servicio, est, msg))
+        threading.Thread(target=run, daemon=True).start()
+
+    def probar_todo(self):
+        for s in ("gee", "openai"):
+            self._probar(s)
+
+    def guardar(self):
+        cfg = self._cfg_actual()
+        try:
+            CRED.guardar(cfg)
+        except Exception as e:
+            return messagebox.showerror("Credenciales", f"No se pudieron guardar: {e}")
+        self.cfg = cfg
+        CRED.aplicar_entorno(cfg)
+        self.probar_todo()
+        if callable(self.al_cambiar):
+            try:
+                self.al_cambiar()
+            except Exception:
+                pass
+        messagebox.showinfo("Credenciales", "Credenciales guardadas. Probando conexiones…")
+
+
+# =====================================================================
 # DEMO
 # =====================================================================
 if __name__ == "__main__":
+    _cfg = CRED.cargar()
+    CRED.aplicar_entorno(_cfg)
     if _EE:
-        try:
-            ee.Initialize()
-        except Exception as e:
-            print(f"Aviso GEE: {e}. Ejecuta 'earthengine authenticate'.")
+        _est, _msg = CRED.probar_gee(_cfg.get("gee_project"), _cfg.get("gee_key_file"),
+                                     _cfg.get("gee_service_account"))
+        if _est != "ok":
+            print(f"Aviso GEE: {_msg}")
     root = tk.Tk()
     root.title("Gestion de Parcelas - Copernicus")
     root.geometry("1440x900")
     aplicar_tema(root)
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
-    nb.add(PanelGestionParcelas(nb), text="  Gestion de Parcelas  ")
+    panel = PanelGestionParcelas(nb)
+    nb.add(panel, text="  Gestion de Parcelas  ")
+    nb.add(PanelCredenciales(nb, al_cambiar=panel._refrescar), text="  Credenciales  ")
     root.mainloop()
