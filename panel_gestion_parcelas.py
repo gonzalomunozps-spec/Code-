@@ -1709,12 +1709,24 @@ class PanelCredenciales(ttk.Frame):
         # --- Google Earth Engine ---
         g = self._tarjeta(cuerpo, "gee", "Google Earth Engine",
                           "Necesario para descargar imagenes Sentinel-2 y sincronizar las parcelas.")
-        self.e_gee_project = self._campo(g, "Project ID de Google Cloud (opcional)",
-                                         self.cfg.get("gee_project", ""))
-        self.e_gee_sa = self._campo(g, "Cuenta de servicio · email (opcional)",
-                                    self.cfg.get("gee_service_account", ""))
-        tk.Label(g, text="Fichero de clave de la cuenta de servicio (.json, opcional)",
-                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w", pady=(6, 2))
+        tk.Label(g, text="Inicia sesion con tu cuenta de Google: se abre el navegador y escribes tu "
+                         "correo y contrasena EN LA PAGINA DE GOOGLE (no aqui). No vemos ni guardamos "
+                         "tu contrasena; Google nos da solo un permiso de acceso.",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"],
+                 wraplength=760, justify="left").pack(anchor="w", pady=(2, 8))
+        login = tk.Frame(g, bg=TEMA["surface"])
+        login.pack(fill="x")
+        ttk.Button(login, text="  Iniciar sesion con Google  ", style="Accent.TButton",
+                   command=self._login_google).pack(side="left")
+        ttk.Button(login, text="Probar conexion", command=lambda: self._probar("gee")).pack(side="left", padx=(8, 0))
+
+        # avanzado: cuenta de servicio (para servidores sin navegador)
+        tk.Label(g, text="Avanzado · cuenta de servicio (opcional, solo para servidores sin navegador)",
+                 bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(anchor="w", pady=(12, 4))
+        self.e_gee_project = self._campo(g, "Project ID de Google Cloud", self.cfg.get("gee_project", ""))
+        self.e_gee_sa = self._campo(g, "Cuenta de servicio · email", self.cfg.get("gee_service_account", ""))
+        tk.Label(g, text="Fichero de clave (.json)", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", pady=(6, 2))
         fila = tk.Frame(g, bg=TEMA["surface"])
         fila.pack(fill="x")
         self.e_gee_key = ttk.Entry(fila)
@@ -1722,20 +1734,20 @@ class PanelCredenciales(ttk.Frame):
             self.e_gee_key.insert(0, self.cfg["gee_key_file"])
         self.e_gee_key.pack(side="left", fill="x", expand=True)
         ttk.Button(fila, text="Examinar", command=self._elegir_key).pack(side="left", padx=(6, 0))
-        acc = tk.Frame(g, bg=TEMA["surface"])
-        acc.pack(fill="x", pady=(10, 0))
-        ttk.Button(acc, text="Probar conexion", command=lambda: self._probar("gee")).pack(side="left")
-        tk.Label(acc, text="Sin cuenta de servicio se usa la sesion de 'earthengine authenticate'.",
-                 bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(side="left", padx=10)
 
         # --- OpenAI ---
         o = self._tarjeta(cuerpo, "openai", "OpenAI · ChatGPT",
                           "Opcional: genera la interpretacion con IA. Sin clave se usa el texto por reglas.")
+        tk.Label(o, text="OpenAI no usa correo/contrasena para programar: usa una API key. Tu correo y "
+                         "contrasena solo sirven para entrar en su web y crear la clave; pegala aqui.",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"],
+                 wraplength=760, justify="left").pack(anchor="w", pady=(2, 8))
         self.e_openai = self._campo(o, "API key (sk-...)", self.cfg.get("openai_api_key", ""),
                                     secreto=True)
         acc2 = tk.Frame(o, bg=TEMA["surface"])
         acc2.pack(fill="x", pady=(10, 0))
         ttk.Button(acc2, text="Probar conexion", command=lambda: self._probar("openai")).pack(side="left")
+        ttk.Button(acc2, text="Conseguir clave (web)", command=self._abrir_openai).pack(side="left", padx=(8, 0))
         self.var_ver = tk.IntVar(value=0)
         tk.Checkbutton(acc2, text="Mostrar clave", variable=self.var_ver, command=self._toggle_ver,
                        bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"],
@@ -1783,6 +1795,25 @@ class PanelCredenciales(ttk.Frame):
 
     def _toggle_ver(self):
         self.e_openai.config(show="" if self.var_ver.get() else "•")
+
+    def _login_google(self):
+        """Abre el flujo OAuth de Google (el usuario mete correo/contrasena en la
+        pagina de Google) y verifica la conexion, en segundo plano."""
+        self._set_badge("gee", "prueba", "Abriendo el navegador para iniciar sesion con Google…")
+        project = self.e_gee_project.get().strip()
+
+        def run():
+            est, msg = CRED.autenticar_google(project)
+            self.after(0, lambda: self._set_badge("gee", est, msg))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _abrir_openai(self):
+        """Abre la web de OpenAI donde el usuario crea su API key."""
+        import webbrowser
+        try:
+            webbrowser.open(CRED.URL_OPENAI_KEYS)
+        except Exception:
+            pass
 
     def _elegir_key(self):
         ruta = filedialog.askopenfilename(title="Clave de cuenta de servicio",

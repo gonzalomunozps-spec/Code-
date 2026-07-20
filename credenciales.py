@@ -106,6 +106,28 @@ def probar_gee(project=None, key_file=None, service_account=None):
                          f"Prueba 'earthengine authenticate' o revisa la cuenta de servicio.")
 
 
+def autenticar_google(project=None):
+    """Inicio de sesion SENCILLO en Google Earth Engine mediante el flujo OAuth
+    oficial: abre el navegador para que el usuario escriba su correo y contrasena
+    EN LA PAGINA SEGURA DE GOOGLE (no en esta app). Google devuelve un token que
+    earthengine-api guarda en el equipo; la contrasena no pasa por aqui ni se
+    almacena. Devuelve (estado, mensaje)."""
+    try:
+        import ee
+    except Exception:
+        return ("fallo", "El paquete 'earthengine-api' no esta instalado.")
+    try:
+        ee.Authenticate()                        # abre el navegador (login de Google)
+        ee.Initialize(project=project or None)
+        ee.Number(1).getInfo()                   # verifica la conexion real
+        return ("ok", "Sesion de Google iniciada y verificada correctamente.")
+    except Exception as e:
+        return ("fallo", f"No se pudo iniciar sesion con Google: {_breve(e)}")
+
+
+URL_OPENAI_KEYS = "https://platform.openai.com/api-keys"
+
+
 def estado_credenciales(cfg):
     """Aplica el entorno y prueba ambos servicios. Devuelve un dict pintable."""
     cfg = aplicar_entorno(cfg or {})
