@@ -19,6 +19,7 @@ Persistencia en JSON (misma carpeta que el resto de datos).
 
 import os
 import json
+import tempfile
 from datetime import datetime, timedelta
 
 ARCHIVO_EVENTOS = "eventos_parcela.json"
@@ -38,8 +39,20 @@ def _load(path):
 
 
 def _save(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+    """Escritura atomica: temporal + os.replace, para no dejar el JSON del
+    cuaderno corrupto si el proceso se corta a mitad."""
+    carpeta = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=carpeta)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _dias(f1, f2):

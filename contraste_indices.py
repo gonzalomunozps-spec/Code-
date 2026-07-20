@@ -279,6 +279,8 @@ def analizar_por_contraste(tipo, subtipo, serie, fecha_iso=None):
     if not serie:
         return None
     fecha = fecha_iso or serie[-1].get("fecha")
+    if not fecha:                      # sin fecha no se puede situar la fenologia
+        return None
     if tipo == "LENOSO":
         d = diagnostico_lenoso(serie, fecha, subtipo)
         if d:

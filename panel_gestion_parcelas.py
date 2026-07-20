@@ -26,6 +26,7 @@ import os
 import io
 import json
 import math
+import tempfile
 import threading
 from datetime import datetime, timedelta
 
@@ -57,11 +58,8 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.colors as mcolors
 
-try:
-    from openai import OpenAI
-    _OPENAI = True
-except Exception:
-    _OPENAI = False
+# La interpretacion (y la llamada opcional a ChatGPT) viven en
+# interpretacion_fenologica; el panel no habla con OpenAI directamente.
 
 # Modulo de interpretacion fenologica + deteccion de cubierta vegetal (IA)
 from interpretacion_fenologica import evaluar_parcela, texto_interpretacion
@@ -205,7 +203,7 @@ os.makedirs(DIR_MAPAS, exist_ok=True)
 
 
 # =====================================================================
-# INDICES / UMBRALES
+# INDICES (definicion, rangos y paletas)
 # =====================================================================
 PAL_VEG = ['a50026', 'd73027', 'f46d43', 'fdae61', 'fee08b',
            'ffffbf', 'd9ef8b', 'a6d96a', '66bd63', '1a9850', '006837']
@@ -244,11 +242,9 @@ def dimensiones_para(coords, metros_px):
     lado_m = max(ancho_m, alto_m, 1.0)
     return int(max(64, min(MAX_PIXELES, round(lado_m / max(1, metros_px)))))
 
-UMBRALES = {
-    "LENOSO_TRADICIONAL": (0.30, 0.60), "LENOSO_INTENSIVO": (0.40, 0.70),
-    "LENOSO_SUPERINTENSIVO": (0.55, 0.85), "EXTENSIVO_SIEGA_VERDE": (0.30, 0.80),
-    "EXTENSIVO_COSECHA_GRANO": (0.20, 0.85), "BARBECHO": (0.05, 0.30),
-}
+# Los umbrales de vigor ya no son fijos por cultivo: se calculan por FASE
+# fenologica en interpretacion_fenologica / fenologia_especies (rango esperado
+# de NDVI segun especie, fecha y marco). Aqui solo quedan los nombres visibles.
 SUBTIPOS = {"EXTENSIVO": ["SIEGA_VERDE", "COSECHA_GRANO"],
             "LENOSO": ["TRADICIONAL", "INTENSIVO", "SUPERINTENSIVO"], "BARBECHO": []}
 NOMBRE_CULTIVO = {
@@ -326,74 +322,55 @@ def construir_indice(img, indice):
 
 
 # =====================================================================
-# ESTADO / INTERPRETACION
+# PERSISTENCIA JSON (atomica y tolerante)
 # =====================================================================
-def estado_semaforo(valor_ndvi, cc, delta=None):
-    if valor_ndvi is None:
-        return ("Sin", "Sin dato")
-    mn, mx = UMBRALES.get(cc, (0.30, 0.80))
-    if valor_ndvi < mn * 0.75 or (delta is not None and delta < -0.15):
-        return ("Revisar", "Revisar")
-    if valor_ndvi < mn or (delta is not None and delta < -0.07):
-        return ("Vigilar", "Vigilar")
-    return ("OK", "OK")
+# El estado y la interpretacion se calculan en interpretacion_fenologica
+# (evaluar_parcela / texto_interpretacion). Aqui solo se persiste y se pinta.
 
-
-def _pct(a, p):
-    return None if p in (None, 0) else (a - p) / abs(p) * 100.0
-
-
-def interpretar_reglas(actual, previo, cc):
-    partes = []
-    for idx in INDICES_ORDEN:
-        va = actual.get(idx.lower())
-        if va is None:
-            continue
-        p = _pct(va, (previo or {}).get(idx.lower()))
-        tend = ("primer dato" if p is None else
-                f"estable ({p:+.1f}%)" if abs(p) < 2 else
-                f"sube {p:+.1f}%" if p > 0 else f"baja {p:+.1f}%")
-        partes.append(f"{idx}={va:.3f} ({tend})")
-    ndvi = actual.get("ndvi")
-    _, est = estado_semaforo(ndvi, cc)
-    rec = ""
-    if actual.get("ndmi") is not None and actual["ndmi"] < 0:
-        rec = " Posible estres hidrico (NDMI negativo): revisar riego."
-    elif ndvi is not None and ndvi < UMBRALES.get(cc, (0.3, 0.8))[0]:
-        rec = " Vigor por debajo del umbral: revisar abonado/plagas."
-    return f"[Reglas] {'; '.join(partes)}. Estado: {est}.{rec}"
-
-
-def interpretar_ia(actual, previo, tipo, subtipo, fecha, cc):
-    if not (_OPENAI and os.environ.get("OPENAI_API_KEY")):
-        return interpretar_reglas(actual, previo, cc)
-    try:
-        deltas = {k: {"actual": actual.get(k.lower()), "previo": (previo or {}).get(k.lower()),
-                      "pct": _pct(actual.get(k.lower()), (previo or {}).get(k.lower()))}
-                  for k in INDICES_ORDEN if actual.get(k.lower()) is not None}
-        client = OpenAI()
-        sys = ("Eres un ingeniero agronomo experto en teledeteccion con Sentinel-2. Explica en "
-               "4-6 frases y en castellano como evoluciona cada indice (sube/baja y % de variacion) "
-               "y que implica para el cultivo. No inventes valores. Termina con una recomendacion.")
-        usr = (f"Cultivo: {tipo}/{subtipo}. Fecha: {fecha}. "
-               f"Indices (actual, previo, %): {json.dumps(deltas, ensure_ascii=False)}")
-        r = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": sys}, {"role": "user", "content": usr}],
-            temperature=0.3, max_tokens=350)
-        return r.choices[0].message.content.strip()
-    except Exception as e:
-        return interpretar_reglas(actual, previo, cc) + f"  (IA no disponible: {e})"
+# Un unico cerrojo para todas las lecturas/escrituras de los JSON: el auto-sync
+# y el worker de interpretacion corren en hilos aparte y tocan los mismos
+# ficheros; sin esto podrian pisarse y perder datos.
+_IO_LOCK = threading.RLock()
 
 
 def _load(path):
-    with open(path, "r") as f:
-        return json.load(f)
+    """Lectura tolerante: si el fichero falta o esta corrupto, devuelve {} en vez
+    de reventar (p. ej. un JSON a medio escribir por un corte anterior)."""
+    with _IO_LOCK:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (FileNotFoundError, ValueError):
+            return {}
 
 
 def _save(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+    """Escritura ATOMICA: se vuelca a un temporal y se reemplaza de golpe con
+    os.replace. Asi un corte a mitad nunca deja el JSON corrupto (o esta el
+    fichero viejo intacto, o el nuevo completo)."""
+    with _IO_LOCK:
+        carpeta = os.path.dirname(os.path.abspath(path)) or "."
+        fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=carpeta)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+
+
+def _actualizar(path, mutador):
+    """Read-modify-write serializado: relee el fichero MAS RECIENTE bajo cerrojo,
+    aplica el cambio y lo guarda. Evita que dos hilos que cargaron el JSON en
+    momentos distintos se pisen al guardar (auto-sync vs. worker de IA)."""
+    with _IO_LOCK:
+        data = _load(path)
+        mutador(data)
+        _save(path, data)
 
 
 INTERVALO_AUTOSYNC_MS = 6 * 60 * 60 * 1000   # cada 6 h se comprueba si el satelite paso
@@ -502,14 +479,17 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
                 msg += f" ({descartadas} descartadas por nube/sombra sobre la parcela)"
             return (0, msg)
 
-        # anadir sin sobrescribir, deduplicando por fecha y ordenando
-        combinado = {r["fecha"]: r for r in existentes}
-        for r in nuevos:
-            combinado.setdefault(r["fecha"], r)
-        registros = [combinado[f] for f in sorted(combinado)]
+        # anadir sin sobrescribir. Se relee el historico MAS RECIENTE bajo cerrojo
+        # (no el que se cargo antes de la descarga de GEE) para no pisar cambios
+        # que otro hilo haya guardado entretanto (p. ej. una interpretacion).
+        def _merge(hist_actual):
+            previos = hist_actual.get(nombre, {}).get(campana, [])
+            combinado = {r["fecha"]: r for r in previos}      # conserva lo ya guardado
+            for r in nuevos:
+                combinado.setdefault(r["fecha"], r)
+            hist_actual.setdefault(nombre, {})[campana] = [combinado[f] for f in sorted(combinado)]
 
-        hist.setdefault(nombre, {})[campana] = registros
-        _save(ARCHIVO_HISTORICO, hist)
+        _actualizar(ARCHIVO_HISTORICO, _merge)
         return (len(nuevos), f"anadidas {len(nuevos)} fechas nuevas")
     except Exception as e:
         if not silencioso:
@@ -1426,11 +1406,12 @@ class FichaParcela:
         def worker():
             texto, _d = texto_interpretacion(tipo, sub, regs, actual.get("fecha"),
                                              eventos_cerca=eventos_cerca, spec=spec)
-            hist = _load(ARCHIVO_HISTORICO)
-            for r in hist.get(self.nombre, {}).get(self.campana, []):
-                if r.get("fecha") == actual.get("fecha"):
-                    r["interpretacion"] = texto
-            _save(ARCHIVO_HISTORICO, hist)
+
+            def _set(hist):
+                for r in hist.get(self.nombre, {}).get(self.campana, []):
+                    if r.get("fecha") == actual.get("fecha"):
+                        r["interpretacion"] = texto
+            _actualizar(ARCHIVO_HISTORICO, _set)
 
             def pintar():
                 self.txt.delete("1.0", tk.END)

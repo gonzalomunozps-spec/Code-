@@ -80,7 +80,10 @@ def fase_fenologica(tipo, subtipo, fecha_iso):
     if tipo == "BARBECHO":
         return ("barbecho", 0.05, 0.30, False)
 
-    mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    try:
+        mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    except (TypeError, ValueError):
+        return ("sin fase", 0.30, 0.80, False)   # fecha ausente o mal formada
     clave = "LENOSO" if tipo == "LENOSO" else f"EXTENSIVO_{subtipo}"
     tabla = FENOLOGIA.get(clave, FENOLOGIA["LENOSO"])
 
@@ -139,12 +142,15 @@ def detectar_cubierta(tipo, subtipo, serie, fecha_iso):
 
     Devuelve dict con los indicadores y una hipotesis preliminar (la IA la matiza).
     """
-    if tipo != "LENOSO" or not serie:
+    if tipo != "LENOSO" or not serie or not fecha_iso:
         return None
 
     act = serie[-1]
     prev = serie[-2] if len(serie) > 1 else None
-    mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    try:
+        mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    except (TypeError, ValueError):
+        return None
 
     ndvi = act.get("ndvi")
     msavi = act.get("msavi")
