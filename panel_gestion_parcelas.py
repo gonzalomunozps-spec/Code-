@@ -374,7 +374,12 @@ def _actualizar(path, mutador):
         _save(path, data)
 
 
-INTERVALO_AUTOSYNC_MS = 6 * 60 * 60 * 1000   # cada 6 h se comprueba si el satelite paso
+# Cada cuanto se comprueba AUTOMATICAMENTE si hay pasadas nuevas del satelite.
+# Sentinel-2 repite orbita cada ~5 dias (menos aun con nubes), asi que no hace
+# falta mirar a menudo. Ademas se sincroniza al abrir la app y se puede forzar a
+# mano en cualquier momento (boton "Sincronizar ahora" o desde cada ficha).
+DIAS_AUTOSYNC = 1                            # pon 2 para comprobar cada dos dias
+INTERVALO_AUTOSYNC_MS = DIAS_AUTOSYNC * 24 * 60 * 60 * 1000
 
 # Resultado de la ultima sincronizacion (la automatica es silenciosa; esto deja
 # constancia de si fallo, para poder mostrarlo en la pestana de Credenciales).
@@ -645,6 +650,42 @@ class PanelGestionParcelas(ttk.Frame):
 
         ttk.Button(barra, text="  + Nueva parcela  ", style="Accent.TButton",
                    command=self.abrir_alta_parcela).pack(side="right")
+        self.btn_sync = ttk.Button(barra, text="  ↻ Sincronizar ahora  ",
+                                   command=self._sincronizar_ahora)
+        self.btn_sync.pack(side="right", padx=(0, 8))
+
+    def _sincronizar_ahora(self):
+        """Sincronizacion manual de TODAS las parcelas, por si hay alguna pasada
+        nueva antes de la comprobacion automatica."""
+        if not _EE:
+            return messagebox.showwarning(
+                "Sincronizacion", "earthengine-api no disponible. Configura la conexion "
+                "en la pestana 'Credenciales'.")
+        self.btn_sync.config(text="  ↻ Sincronizando…  ", state="disabled")
+        self.lbl_sync.config(text="↻ GEE: sincronizando…", fg=TEMA["header_sub"])
+        threading.Thread(target=self._sync_todas_notificando, daemon=True).start()
+
+    def _sync_todas_notificando(self):
+        total, n_par = 0, 0
+        for nombre in _load(ARCHIVO_PARCELAS):
+            n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
+            total += n
+            n_par += 1
+
+        def fin():
+            self.btn_sync.config(text="  ↻ Sincronizar ahora  ", state="normal")
+            self._actualizar_estado_sync()
+            self._refrescar()
+            if ULTIMO_SYNC.get("estado") == "fallo":
+                messagebox.showerror("Sincronizacion",
+                                     f"No se pudo sincronizar con Copernicus:\n\n{ULTIMO_SYNC.get('msg','')}")
+            elif total:
+                messagebox.showinfo("Sincronizacion",
+                                    f"{n_par} parcela(s) revisadas. {total} pasada(s) nueva(s) anadida(s).")
+            else:
+                messagebox.showinfo("Sincronizacion",
+                                    f"{n_par} parcela(s) revisadas. Sin pasadas nuevas por ahora.")
+        self.after(0, fin)
 
     def _campanas(self):
         c = {campana_actual()}
