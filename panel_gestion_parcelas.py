@@ -566,16 +566,50 @@ class PanelGestionParcelas(ttk.Frame):
         for nombre in _load(ARCHIVO_PARCELAS):
             n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
             total += n
+        self.after(0, self._actualizar_estado_sync)   # refleja exito/fallo del auto-sync
         if total:
             self.after(0, self._refrescar)
 
     def _build_cabecera(self):
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x", side="top")
-        tk.Label(cab, text="Gestion y Monitoreo de Parcelas", bg=TEMA["header_bg"],
+        # indicador de estado de la sincronizacion (siempre visible, a la derecha)
+        der = tk.Frame(cab, bg=TEMA["header_bg"])
+        der.pack(side="right", padx=18)
+        self.lbl_sync = tk.Label(der, text="○ GEE: sin sincronizar", bg=TEMA["header_bg"],
+                                 fg=TEMA["header_sub"], font=FUENTES["small"], cursor="hand2")
+        self.lbl_sync.pack(side="right", pady=14)
+        self.lbl_sync.bind("<Button-1>", lambda e: self._detalle_sync())
+        izq = tk.Frame(cab, bg=TEMA["header_bg"])
+        izq.pack(side="left", fill="x")
+        tk.Label(izq, text="Gestion y Monitoreo de Parcelas", bg=TEMA["header_bg"],
                  fg="#ffffff", font=FUENTES["h1"]).pack(anchor="w", padx=18, pady=(12, 0))
-        tk.Label(cab, text="Ecosistema Copernicus  -  Sentinel-2", bg=TEMA["header_bg"],
+        tk.Label(izq, text="Ecosistema Copernicus  -  Sentinel-2", bg=TEMA["header_bg"],
                  fg=TEMA["header_sub"], font=FUENTES["small"]).pack(anchor="w", padx=18, pady=(0, 12))
+
+    # colores legibles sobre la cabecera verde oscura
+    _SYNC_COLOR = {"ok": "#86efac", "fallo": "#fca5a5", None: TEMA["header_sub"]}
+    _SYNC_TEXTO = {"ok": "● GEE: conectado", "fallo": "● GEE: fallo",
+                   None: "○ GEE: sin sincronizar"}
+
+    def _actualizar_estado_sync(self):
+        """Refresca el indicador de la cabecera a partir de ULTIMO_SYNC."""
+        if not hasattr(self, "lbl_sync"):
+            return
+        est = ULTIMO_SYNC.get("estado")
+        self.lbl_sync.config(text=self._SYNC_TEXTO.get(est, self._SYNC_TEXTO[None]),
+                             fg=self._SYNC_COLOR.get(est, self._SYNC_COLOR[None]))
+
+    def _detalle_sync(self):
+        est = ULTIMO_SYNC.get("estado")
+        msg = ULTIMO_SYNC.get("msg", "")
+        if est == "fallo":
+            messagebox.showerror("Sincronizacion Copernicus", f"La ultima sincronizacion fallo:\n\n{msg}")
+        elif est == "ok":
+            messagebox.showinfo("Sincronizacion Copernicus", f"Conexion con Google Earth Engine correcta.\n{msg}")
+        else:
+            messagebox.showinfo("Sincronizacion Copernicus",
+                                "Aun no se ha sincronizado en esta sesion.")
 
     def _build_barra(self):
         barra = tk.Frame(self, bg=TEMA["page"])
@@ -1666,6 +1700,7 @@ class FichaParcela:
         n, msg = sincronizar_parcela(self.nombre, self.campana, silencioso=True)
         self.master.after(0, self.refrescar)
         self.master.after(0, self.panel._refrescar)
+        self.master.after(0, self.panel._actualizar_estado_sync)
         self.master.after(0, lambda: messagebox.showinfo(
             "Sincronizacion", f"{self.nombre}: {msg}." if n == 0 else
             f"{self.nombre}: {msg} (incremental, sin sobrescribir)."))
@@ -1752,10 +1787,17 @@ class PanelCredenciales(ttk.Frame):
         tk.Checkbutton(acc2, text="Mostrar clave", variable=self.var_ver, command=self._toggle_ver,
                        bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"],
                        activebackground=TEMA["surface"], selectcolor=TEMA["surface"], bd=0).pack(side="left", padx=10)
+        # recordar o no la clave en disco
+        self.var_recordar = tk.IntVar(value=1 if self.cfg.get("openai_api_key") else 0)
+        tk.Checkbutton(o, text="Recordar la clave en este equipo (ofuscada; si no, usa la variable OPENAI_API_KEY)",
+                       variable=self.var_recordar, bg=TEMA["surface"], fg=TEMA["text_muted"],
+                       font=FUENTES["small"], activebackground=TEMA["surface"],
+                       selectcolor=TEMA["surface"], bd=0).pack(anchor="w", pady=(8, 0))
 
         barra = tk.Frame(cuerpo, bg=TEMA["page"])
         barra.pack(fill="x", pady=(4, 0))
-        tk.Label(barra, text="Se guardan en config_credenciales.json (texto plano) en este equipo.",
+        tk.Label(barra, text="La clave de OpenAI se guarda ofuscada (base64), no en texto plano. "
+                             "La variable de entorno OPENAI_API_KEY tiene prioridad.",
                  bg=TEMA["page"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(side="left")
         ttk.Button(barra, text="  Guardar y probar todo  ", style="Accent.TButton",
                    command=self.guardar).pack(side="right")
@@ -1851,11 +1893,11 @@ class PanelCredenciales(ttk.Frame):
     def guardar(self):
         cfg = self._cfg_actual()
         try:
-            CRED.guardar(cfg)
+            CRED.guardar(cfg, recordar_openai=bool(self.var_recordar.get()))
         except Exception as e:
             return messagebox.showerror("Credenciales", f"No se pudieron guardar: {e}")
         self.cfg = cfg
-        CRED.aplicar_entorno(cfg)
+        CRED.aplicar_entorno(cfg, forzar=True)   # aplica la clave recien tecleada
         self.probar_todo()
         if callable(self.al_cambiar):
             try:

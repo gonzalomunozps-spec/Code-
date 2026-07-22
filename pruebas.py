@@ -186,6 +186,21 @@ def pruebas_credenciales():
     C.aplicar_entorno({"openai_api_key": " sk-x "})
     check("credenciales: aplicar_entorno vuelca la clave",
           lambda: os.environ.get("OPENAI_API_KEY"), lambda r: r == "sk-x")
+    # seguridad de la clave (ofuscacion, recordar y prioridad del entorno)
+    C.guardar({"openai_api_key": "sk-secreta-999", "gee_project": "pz"}, recordar_openai=True)
+    check("credenciales: clave NO en texto plano",
+          lambda: "sk-secreta-999" in open(C.ARCHIVO_CRED, encoding="utf-8").read(), lambda r: r is False)
+    check("credenciales: clave ofuscada + roundtrip",
+          lambda: C.cargar().get("openai_api_key"), lambda r: r == "sk-secreta-999")
+    C.guardar({"openai_api_key": "sk-no-guardar", "gee_project": "pz"}, recordar_openai=False)
+    check("credenciales: recordar=False no escribe la clave",
+          lambda: "sk-no-guardar" in open(C.ARCHIVO_CRED, encoding="utf-8").read()
+                  or "openai_api_key_b64" in open(C.ARCHIVO_CRED, encoding="utf-8").read(), lambda r: r is False)
+    os.environ["OPENAI_API_KEY"] = "sk-entorno"
+    C.aplicar_entorno({"openai_api_key": "sk-guardada"})
+    check("credenciales: la variable de entorno tiene prioridad",
+          lambda: os.environ.get("OPENAI_API_KEY"), lambda r: r == "sk-entorno")
+    os.environ.pop("OPENAI_API_KEY", None)
 
 
 # =====================================================================

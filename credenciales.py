@@ -19,12 +19,20 @@ Estados que devuelven las pruebas:
   "fallo"  -> configurado pero falla (rojo): paquete ausente, clave invalida,
               sin red, credenciales caducadas...
 
-La configuracion se guarda en config_credenciales.json (texto plano, en este
-equipo). Contiene: openai_api_key, gee_project, gee_service_account, gee_key_file.
+Seguridad de la clave de OpenAI:
+  - Si existe la variable de entorno OPENAI_API_KEY, TIENE PRIORIDAD y la clave
+    nunca se guarda en disco (opcion recomendada para equipos compartidos).
+  - Si el usuario decide recordarla, se guarda OFUSCADA (base64) en
+    config_credenciales.json. Ojo: base64 es ofuscacion, NO cifrado; evita el
+    texto plano a simple vista pero no protege frente a alguien con acceso al
+    equipo. Para no guardarla, basta con desmarcar "recordar" y usar la variable
+    de entorno.
+El resto (gee_project, gee_service_account, gee_key_file) se guarda en claro.
 """
 
 import os
 import json
+import base64
 import tempfile
 
 ARCHIVO_CRED = "config_credenciales.json"
@@ -36,17 +44,34 @@ ARCHIVO_CRED = "config_credenciales.json"
 def cargar():
     try:
         with open(ARCHIVO_CRED, "r", encoding="utf-8") as f:
-            return json.load(f)
+            cfg = json.load(f)
     except (FileNotFoundError, ValueError):
         return {}
+    # la clave de OpenAI se guarda ofuscada (base64): se descodifica al cargar
+    if cfg.get("openai_api_key_b64") and not cfg.get("openai_api_key"):
+        try:
+            cfg["openai_api_key"] = base64.b64decode(cfg["openai_api_key_b64"].encode()).decode()
+        except Exception:
+            pass
+    return cfg
 
 
-def guardar(cfg):
+def guardar(cfg, recordar_openai=True):
+    """Guarda la configuracion de forma atomica. La clave de OpenAI solo se
+    escribe si recordar_openai es True, y entonces OFUSCADA (base64), nunca en
+    claro. Si es False, la clave no toca el disco (se usa solo en memoria)."""
+    cfg = cfg or {}
+    almacen = {k: v for k, v in cfg.items()
+               if k not in ("openai_api_key", "openai_api_key_b64")}
+    key = (cfg.get("openai_api_key") or "").strip()
+    if recordar_openai and key:
+        almacen["openai_api_key_b64"] = base64.b64encode(key.encode()).decode()
+
     carpeta = os.path.dirname(os.path.abspath(ARCHIVO_CRED)) or "."
     fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=carpeta)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=4, ensure_ascii=False)
+            json.dump(almacen, f, indent=4, ensure_ascii=False)
         os.replace(tmp, ARCHIVO_CRED)
     except Exception:
         try:
@@ -56,10 +81,14 @@ def guardar(cfg):
         raise
 
 
-def aplicar_entorno(cfg):
-    """Vuelca al entorno del proceso lo que otros modulos leen de os.environ.
-    En la practica: OPENAI_API_KEY, que usa interpretacion_fenologica."""
+def aplicar_entorno(cfg, forzar=False):
+    """Vuelca OPENAI_API_KEY al entorno del proceso (lo lee interpretacion_fenologica).
+    Una variable de entorno externa TIENE PRIORIDAD: si ya esta definida y no se
+    fuerza, no se sobrescribe con la clave guardada. `forzar=True` la aplica
+    igualmente (p. ej. cuando el usuario acaba de teclear una clave nueva)."""
     cfg = cfg or {}
+    if not forzar and os.environ.get("OPENAI_API_KEY"):
+        return cfg
     key = (cfg.get("openai_api_key") or "").strip()
     if key:
         os.environ["OPENAI_API_KEY"] = key
