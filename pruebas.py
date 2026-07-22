@@ -242,6 +242,26 @@ def pruebas_persistencia():
           lambda: _load(p)["n"], lambda r: r == 1000)
     check("persistencia: fichero final es JSON valido", lambda: json.load(open(p)), lambda r: True)
 
+    # helper del arranque: _toca_sincronizar (funcion pura)
+    from datetime import datetime, timedelta
+    m = re.search(r"\ndef _toca_sincronizar\(.*?\n(?=\n\n|\ndef |\nclass |\n# )", src, re.S)
+    if not m:
+        _FALLA.append(("_toca_sincronizar", "no se localiza la funcion en el panel"))
+        return
+    ns2 = {"datetime": datetime}
+    exec(m.group(0), ns2)
+    toca = ns2["_toca_sincronizar"]
+    UN_DIA = 24 * 3600 * 1000
+    ahora = datetime(2026, 7, 21, 12, 0, 0)
+    check("arranque: sin marca -> toca sincronizar", lambda: toca(None, UN_DIA, ahora), lambda r: r is True)
+    check("arranque: marca invalida -> toca", lambda: toca("basura", UN_DIA, ahora), lambda r: r is True)
+    check("arranque: hace 2 dias -> toca (paso el intervalo)",
+          lambda: toca((ahora - timedelta(days=2)).isoformat(), UN_DIA, ahora), lambda r: r is True)
+    check("arranque: hace 3 horas -> NO toca (aun no)",
+          lambda: toca((ahora - timedelta(hours=3)).isoformat(), UN_DIA, ahora), lambda r: r is False)
+    check("arranque: intervalo 2 dias, hace 1 dia -> NO toca",
+          lambda: toca((ahora - timedelta(days=1)).isoformat(), 2 * UN_DIA, ahora), lambda r: r is False)
+
 
 # =====================================================================
 def main():

@@ -6,5 +6,6 @@ parcelas.json
 historico_reportes.json
 registro_multi_parcelas.json
 eventos_parcela.json
+estado_sync.json
 cache_mapas/
 config_credenciales.json

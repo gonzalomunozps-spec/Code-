@@ -194,6 +194,7 @@ def _colores_estado(clave):
 ARCHIVO_PARCELAS  = "parcelas.json"
 ARCHIVO_HISTORICO = "historico_reportes.json"
 ARCHIVO_MEMORIA   = "registro_multi_parcelas.json"
+ARCHIVO_ESTADO    = "estado_sync.json"        # marca del ultimo sync (para el arranque)
 DIR_MAPAS         = "cache_mapas"
 
 for _f in (ARCHIVO_PARCELAS, ARCHIVO_HISTORICO, ARCHIVO_MEMORIA):
@@ -372,6 +373,29 @@ def _actualizar(path, mutador):
         data = _load(path)
         mutador(data)
         _save(path, data)
+
+
+# --- marca de tiempo del ultimo sync (persistente, para decidir en el arranque) ---
+def _marca_sync_leer():
+    """Devuelve el ISO del ultimo sync realizado, o None si no hay."""
+    return _load(ARCHIVO_ESTADO).get("ultima_comprobacion")
+
+
+def _marca_sync_guardar():
+    _save(ARCHIVO_ESTADO, {"ultima_comprobacion": datetime.now().isoformat(timespec="seconds")})
+
+
+def _toca_sincronizar(ultima_iso, intervalo_ms, ahora=None):
+    """True si nunca se sincronizo o si ya ha pasado el intervalo desde entonces.
+    Funcion pura (sin ficheros): asi el arranque solo sincroniza cuando toca."""
+    if not ultima_iso:
+        return True
+    try:
+        ult = datetime.fromisoformat(ultima_iso)
+    except (TypeError, ValueError):
+        return True
+    ahora = ahora or datetime.now()
+    return (ahora - ult).total_seconds() * 1000.0 >= intervalo_ms
 
 
 # Cada cuanto se comprueba AUTOMATICAMENTE si hay pasadas nuevas del satelite.
@@ -561,8 +585,11 @@ class PanelGestionParcelas(ttk.Frame):
 
     # ---------------------------------------------------------- import automatico
     def _auto_sync(self):
-        """Comprueba periodicamente si el satelite ha pasado y anade datos incrementalmente."""
-        if _EE:
+        """Se ejecuta al ARRANCAR y luego de forma periodica. Solo sincroniza si
+        toca (nunca se sincronizo o ya paso el intervalo desde el ultimo sync);
+        asi, abrir la app varias veces el mismo dia no repite, pero si han pasado
+        los dias configurados, al iniciarse se pone al dia sola."""
+        if _EE and _toca_sincronizar(_marca_sync_leer(), INTERVALO_AUTOSYNC_MS):
             threading.Thread(target=self._sync_todas, daemon=True).start()
         self.after(INTERVALO_AUTOSYNC_MS, self._auto_sync)
 
@@ -571,6 +598,8 @@ class PanelGestionParcelas(ttk.Frame):
         for nombre in _load(ARCHIVO_PARCELAS):
             n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
             total += n
+        if ULTIMO_SYNC.get("estado") != "fallo":     # solo marca la hora si conecto
+            _marca_sync_guardar()
         self.after(0, self._actualizar_estado_sync)   # refleja exito/fallo del auto-sync
         if total:
             self.after(0, self._refrescar)
@@ -671,6 +700,8 @@ class PanelGestionParcelas(ttk.Frame):
             n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
             total += n
             n_par += 1
+        if ULTIMO_SYNC.get("estado") != "fallo":
+            _marca_sync_guardar()
 
         def fin():
             self.btn_sync.config(text="  ↻ Sincronizar ahora  ", state="normal")
@@ -1739,6 +1770,8 @@ class FichaParcela:
 
     def _sync(self):
         n, msg = sincronizar_parcela(self.nombre, self.campana, silencioso=True)
+        if ULTIMO_SYNC.get("estado") != "fallo":
+            _marca_sync_guardar()
         self.master.after(0, self.refrescar)
         self.master.after(0, self.panel._refrescar)
         self.master.after(0, self.panel._actualizar_estado_sync)
