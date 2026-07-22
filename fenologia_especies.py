@@ -60,7 +60,11 @@ def fase_cereal(especie, fecha_siembra, fecha_iso):
         # sin fecha de siembra no se puede afinar: rango amplio de seguridad
         return {"fase": "sin fecha de siembra", "das": None,
                 "lo": 0.15, "hi": 0.85, "caida": False, "previo": False}
-    das = _dias(fecha_siembra, fecha_iso)
+    try:
+        das = _dias(fecha_siembra, fecha_iso)
+    except (TypeError, ValueError):          # fecha de siembra o pasada mal formada
+        return {"fase": "sin fecha de siembra", "das": None,
+                "lo": 0.15, "hi": 0.85, "caida": False, "previo": False}
     if das < 0:
         return {"fase": "presiembra", "das": das, "lo": 0.05, "hi": 0.20,
                 "caida": False, "previo": True}
@@ -178,7 +182,11 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None):
     if not info:
         return {"fase": "sin especie", "lo": 0.30, "hi": 0.80, "caida": False,
                 "caduco": False, "densidad": None, "tipo": "sin marco"}
-    mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    try:
+        mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    except (TypeError, ValueError):          # fecha ausente o mal formada
+        return {"fase": "sin fecha", "lo": 0.30, "hi": 0.80, "caida": False,
+                "caduco": info["hoja"] == "caducifolio", "densidad": None, "tipo": "sin marco"}
     lo, hi, caida = info["mes"][mes]
     dens = densidad_arboles(marco_calle, marco_pie)
     nombre_tipo, factor = tipo_plantacion(especie, dens)
