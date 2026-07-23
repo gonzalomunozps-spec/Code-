@@ -1,0 +1,12 @@
+# Dependencias del Sistema de Gestion y Monitoreo de Parcelas
+# Instalar con:  pip install -r requirements.txt
+#
+# NOTA: tkinter NO se instala con pip (viene con Python en Windows/macOS; en
+# Linux es el paquete del sistema 'python3-tk'). Ver INSTALL / README.
+
+earthengine-api      # Google Earth Engine: descarga de imagenes Sentinel-2
+tkintermapview       # mapa interactivo para dibujar/buscar parcelas
+pillow               # imagenes (mapa de indices)
+matplotlib           # graficas de evolucion y leyendas de color
+requests             # peticiones HTTP (SIGPAC, descarga de tiles)
+openai               # OPCIONAL: interpretacion con ChatGPT (sin clave, va por reglas)
