@@ -438,12 +438,17 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
 
         hist = _load(ARCHIVO_HISTORICO)
         existentes = hist.get(nombre, {}).get(campana, [])
-        fechas_existentes = {r.get("fecha") for r in existentes}
+        # solo fechas presentes: un registro sin fecha metia None en el set y
+        # max() reventaba (str vs None), dejando el sync roto para siempre.
+        fechas_existentes = {r.get("fecha") for r in existentes if r.get("fecha")}
         ultima = max(fechas_existentes) if fechas_existentes else None
 
         # ventana incremental: desde el dia siguiente a la ultima fecha guardada
-        inicio = ((datetime.strptime(ultima, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-                  if ultima else ini_camp)
+        try:
+            inicio = ((datetime.strptime(ultima, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                      if ultima else ini_camp)
+        except ValueError:                    # fecha guardada mal formada: re-escanea la campana
+            inicio = ini_camp
         hoy = datetime.now().strftime("%Y-%m-%d")
         fin = min(fin_camp, hoy)
         if inicio > fin:
@@ -1457,11 +1462,19 @@ class FichaParcela:
     def _pintar_graficas(self, regs):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
-        if regs:
-            fechas = [datetime.strptime(r["fecha"], "%Y-%m-%d") for r in regs]
+        # solo registros con fecha valida (uno mal formado no debe tumbar la grafica)
+        puntos = []
+        for r in regs:
+            try:
+                puntos.append((datetime.strptime(r.get("fecha", ""), "%Y-%m-%d"), r))
+            except (TypeError, ValueError):
+                continue
+        if puntos:
+            fechas = [p[0] for p in puntos]
+            validos = [p[1] for p in puntos]
             for idx, color in [("ndvi", "#2f855a"), ("evi", "#805ad5"),
                                ("savi", "#dd6b20"), ("ndmi", "#3182ce")]:
-                ys = [r.get(idx) for r in regs]
+                ys = [r.get(idx) for r in validos]
                 if any(v is not None for v in ys):
                     ax.plot(fechas, [v if v is not None else float("nan") for v in ys],
                             marker="o", ms=3, lw=1.8, label=idx.upper(), color=color)

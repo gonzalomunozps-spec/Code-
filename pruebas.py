@@ -176,6 +176,13 @@ def pruebas_cuaderno():
         ids = [e["id"] for e in REG.eventos_de("P", "2025-2026")]
         return len(ids) == len(set(ids)) and b["id"] != c["id"]
     check("cuaderno: ids unicos tras borrar y re-anadir (misma fecha)", _ids_unicos, lambda r: r is True)
+    # regresion: eventos_cercanos no revienta con fecha de referencia vacia/mal formada
+    open(REG.ARCHIVO_EVENTOS, "w").write("{}")
+    REG.registrar_evento("Q", "2025-2026", {"fecha": "2026-04-10", "tipo": "SIEGA"})
+    check("cuaderno: eventos_cercanos con fecha_iso vacia -> [] (no crash)",
+          lambda: REG.eventos_cercanos("Q", "2025-2026", ""), lambda r: r == [])
+    check("cuaderno: eventos_cercanos con fecha_iso basura -> [] (no crash)",
+          lambda: REG.eventos_cercanos("Q", "2025-2026", "10/2026"), lambda r: r == [])
 
 
 # =====================================================================

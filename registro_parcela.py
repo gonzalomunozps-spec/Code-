@@ -104,11 +104,16 @@ def eliminar_evento(parcela, campana, evento_id):
 def eventos_cercanos(parcela, campana, fecha_iso, ventana_dias=20):
     """Eventos ocurridos en los `ventana_dias` anteriores (o el mismo dia) a fecha_iso."""
     out = []
+    if not fecha_iso:                 # sin fecha de referencia no hay nada que comparar
+        return out
     for e in eventos_de(parcela, campana):
         f = e.get("fecha")
         if not f:
             continue
-        d = _dias(f, fecha_iso)
+        try:
+            d = _dias(f, fecha_iso)
+        except (TypeError, ValueError):   # fecha del evento o de referencia mal formada
+            continue
         if 0 <= d <= ventana_dias:
             out.append((d, e))
     return sorted(out, key=lambda x: x[0])
