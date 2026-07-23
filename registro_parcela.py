@@ -19,6 +19,7 @@ Persistencia en JSON (misma carpeta que el resto de datos).
 
 import os
 import json
+import uuid
 import tempfile
 from datetime import datetime, timedelta
 
@@ -78,7 +79,9 @@ def registrar_evento(parcela, campana, evento):
     data = _load(ARCHIVO_EVENTOS)
     lista = data.setdefault(parcela, {}).setdefault(campana, [])
     evento = dict(evento)
-    evento.setdefault("id", f"{parcela}_{campana}_{len(lista)}_{evento.get('fecha','')}")
+    # id UNICO (uuid): usar len(lista) colisionaba al borrar y volver a anadir
+    # un evento con la misma fecha.
+    evento.setdefault("id", f"{parcela}_{campana}_{evento.get('fecha','')}_{uuid.uuid4().hex[:8]}")
     evento.setdefault("registrado", datetime.now().strftime("%Y-%m-%d %H:%M"))
     lista.append(evento)
     lista.sort(key=lambda e: e.get("fecha", ""))

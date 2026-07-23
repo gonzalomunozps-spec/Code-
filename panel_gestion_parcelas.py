@@ -24,6 +24,7 @@ DEPENDENCIAS
 
 import os
 import io
+import re
 import json
 import math
 import tempfile
@@ -288,6 +289,14 @@ def superficie_ha(coords):
 
 def clave_cultivo(tipo, subtipo):
     return tipo if tipo == "BARBECHO" else f"{tipo}_{subtipo}"
+
+
+def nombre_seguro(nombre):
+    """Nombre de parcela seguro para usar como clave y en rutas de fichero:
+    espacios a '_' y se descartan caracteres problematicos (/, \\, :, etc.)."""
+    n = (nombre or "").strip().replace(" ", "_")
+    n = re.sub(r"[^0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ_\-]", "", n)
+    return n or "parcela"
 
 
 def spec_de(cultivo):
@@ -764,6 +773,7 @@ class PanelGestionParcelas(ttk.Frame):
         texto = self.entry_buscar.get().lower() if hasattr(self, "entry_buscar") else ""
         orden = self.cb_orden.get() if hasattr(self, "cb_orden") else "nombre"
         parcelas = _load(ARCHIVO_PARCELAS)
+        historico = _load(ARCHIVO_HISTORICO)   # una sola lectura (antes: una por parcela)
 
         filas = []
         for nombre, ficha in parcelas.items():
@@ -776,7 +786,8 @@ class PanelGestionParcelas(ttk.Frame):
                 cc, clave, txt = "BARBECHO", "NA", "N.A."
             else:
                 cc = clave_cultivo(cult.get("tipo"), cult.get("subtipo", ""))
-                serie = sorted(self._historico(nombre), key=lambda r: r.get("fecha", ""))
+                serie = sorted(historico.get(nombre, {}).get(self.campana, []),
+                               key=lambda r: r.get("fecha", ""))
                 diag = evaluar_parcela(cult.get("tipo"), cult.get("subtipo", ""), serie,
                                        spec=spec_de(cult))
                 clave, txt = diag["clave"], diag["estado"]
@@ -1100,7 +1111,7 @@ class VentanaAltaParcela(tk.Toplevel):
             messagebox.showerror("SIGPAC", f"Error: {e}")
 
     def _guardar(self):
-        nombre = self.e_nombre.get().strip().replace(" ", "_")
+        nombre = nombre_seguro(self.e_nombre.get())
         prop = self.e_prop.get().strip()
         tipo, esp = self.cb_tipo.get(), self.cb_sub.get()
         if not nombre or not prop or not tipo:
@@ -1529,6 +1540,8 @@ class FichaParcela:
             _actualizar(ARCHIVO_HISTORICO, _set)
 
             def pintar():
+                if not self.txt.winfo_exists():   # el usuario ya navego a otra vista
+                    return
                 self.txt.delete("1.0", tk.END)
                 self.txt.insert(tk.END, cab + "\n\n" + texto)
             self.master.after(0, pintar)
@@ -1690,7 +1703,8 @@ class FichaParcela:
         idx = self.cb_idx.get()
         metros = dict(RESOLUCIONES).get(self.cb_res.get(), 10)
         # la cache distingue la resolucion: cada m/pixel es un PNG distinto
-        png = os.path.join(DIR_MAPAS, f"{self.nombre}_{idx}_{iso}_{metros}m.png")
+        # (nombre_seguro por si una parcela antigua tuviera caracteres raros)
+        png = os.path.join(DIR_MAPAS, f"{nombre_seguro(self.nombre)}_{idx}_{iso}_{metros}m.png")
         if os.path.exists(png):
             self._png = png
             self._redibujar_png()
@@ -1732,10 +1746,12 @@ class FichaParcela:
             self._info_res = f"{dim}x{dim} px  ·  {metros} m/pixel"
             self.master.after(0, self._redibujar_png)
         except Exception as e:
-            self.master.after(0, lambda: self.canvas_mapa.create_text(
+            self.master.after(0, lambda: self.canvas_mapa.winfo_exists() and self.canvas_mapa.create_text(
                 20, 20, anchor="nw", fill=TEMA["danger_fg"], text=f"Error mapa: {e}"))
 
     def _redibujar_png(self):
+        if not (hasattr(self, "canvas_mapa") and self.canvas_mapa.winfo_exists()):
+            return                                # ficha cerrada mientras se descargaba
         png = getattr(self, "_png", None)
         if not (png and os.path.exists(png) and _PIL):
             return

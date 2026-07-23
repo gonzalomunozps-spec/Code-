@@ -165,6 +165,17 @@ def pruebas_cuaderno():
           [(2, {"tipo": "SIEGA", "fecha": "2026-04-18"})], -0.3), lambda r: r[0] is True)
     check("explicacion_por_eventos: dN None", lambda: REG.explicacion_por_eventos(
           [(2, {"tipo": "SIEGA", "fecha": "2026-04-18"})], None), lambda r: r[0] is False)
+    # regresion: ids unicos aunque se borre y se re-anada un evento con la misma fecha
+    d = tempfile.mkdtemp(); REG.ARCHIVO_EVENTOS = os.path.join(d, "ev.json")
+    open(REG.ARCHIVO_EVENTOS, "w").write("{}")
+    def _ids_unicos():
+        a = REG.registrar_evento("P", "2025-2026", {"fecha": "2026-04-10", "tipo": "SIEGA"})
+        b = REG.registrar_evento("P", "2025-2026", {"fecha": "2026-04-10", "tipo": "SIEGA"})
+        REG.eliminar_evento("P", "2025-2026", a["id"])
+        c = REG.registrar_evento("P", "2025-2026", {"fecha": "2026-04-10", "tipo": "SIEGA"})
+        ids = [e["id"] for e in REG.eventos_de("P", "2025-2026")]
+        return len(ids) == len(set(ids)) and b["id"] != c["id"]
+    check("cuaderno: ids unicos tras borrar y re-anadir (misma fecha)", _ids_unicos, lambda r: r is True)
 
 
 # =====================================================================
@@ -261,6 +272,20 @@ def pruebas_persistencia():
           lambda: toca((ahora - timedelta(hours=3)).isoformat(), UN_DIA, ahora), lambda r: r is False)
     check("arranque: intervalo 2 dias, hace 1 dia -> NO toca",
           lambda: toca((ahora - timedelta(days=1)).isoformat(), 2 * UN_DIA, ahora), lambda r: r is False)
+
+    # nombre_seguro: no debe dejar pasar caracteres de ruta
+    m2 = re.search(r"\ndef nombre_seguro\(.*?\n(?=\n\n|\ndef |\nclass |\n# )", src, re.S)
+    if m2:
+        ns3 = {"re": re}
+        exec(m2.group(0), ns3)
+        seguro = ns3["nombre_seguro"]
+        check("nombre_seguro: quita separadores de ruta",
+              lambda: seguro("../a/b:c*?"), lambda r: "/" not in r and "\\" not in r and ":" not in r and ".." not in r)
+        check("nombre_seguro: espacios a _ y conserva acentos",
+              lambda: seguro("Olivar del Ñú"), lambda r: r == "Olivar_del_Ñú")
+        check("nombre_seguro: vacio -> 'parcela'", lambda: seguro("   "), lambda r: r == "parcela")
+    else:
+        _FALLA.append(("nombre_seguro", "no se localiza la funcion en el panel"))
 
 
 # =====================================================================
