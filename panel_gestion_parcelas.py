@@ -574,7 +574,7 @@ class PanelGestionParcelas(ttk.Frame):
                 dens = FEN.densidad_arboles(spec["marco_calle"], spec["marco_pie"])
                 subtipo = FEN.subtipo_canonico(spec.get("especie", "OLIVO"), dens)
             elif tipo == "EXTENSIVO":
-                subtipo = "COSECHA_GRANO"
+                subtipo = spec.get("finalidad") if spec.get("finalidad") in ("SIEGA_VERDE", "COSECHA_GRANO") else "COSECHA_GRANO"
             cultivo = {"tipo": tipo, "subtipo": subtipo}
             cultivo.update(spec)
             DB.set_cultivo(nombre, self.campana, cultivo)
@@ -837,9 +837,9 @@ class PanelGestionParcelas(ttk.Frame):
             dens = FEN.densidad_arboles(spec["marco_calle"], spec["marco_pie"])
             subtipo = FEN.subtipo_canonico(spec.get("especie", "OLIVO"), dens)
         elif tipo == "EXTENSIVO":
-            subtipo = "COSECHA_GRANO"
+            subtipo = spec.get("finalidad") if spec.get("finalidad") in ("SIEGA_VERDE", "COSECHA_GRANO") else "COSECHA_GRANO"
         cultivo = {"tipo": tipo, "subtipo": subtipo}
-        cultivo.update(spec)          # especie, fecha_siembra, marco_calle, marco_pie
+        cultivo.update(spec)          # especie, fecha_siembra, marco_calle, marco_pie, finalidad
         ficha.setdefault("cultivos_por_campana", {})[self.campana] = cultivo
         DB.guardar_ficha(nombre, ficha)
         self.cb_campana["values"] = self._campanas()
@@ -927,6 +927,12 @@ class VentanaAltaParcela(tk.Toplevel):
         # campos especificos de la especie: siembra (cereal) o marco (leñoso)
         self.frame_spec = tk.Frame(form, bg=TEMA["surface"])
         self.frame_spec.pack(fill="x", **pad)
+        # finalidad (solo extensivos): grano vs siega en verde
+        self.lbl_finalidad = tk.Label(self.frame_spec, text="Finalidad del cultivo",
+                                      bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
+        self.cb_finalidad = ttk.Combobox(self.frame_spec, state="readonly",
+                                         values=["Cosecha de grano", "Siega en verde (forraje)"])
+        self.cb_finalidad.set("Cosecha de grano")
         # siembra
         self.lbl_siembra = tk.Label(self.frame_spec, text="Fecha de siembra (AAAA-MM-DD)",
                                     bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
@@ -1026,10 +1032,12 @@ class VentanaAltaParcela(tk.Toplevel):
         esp = FEN.ESPECIES.get(grupo, [])
         self.cb_sub["values"] = esp
         self.cb_sub.set(esp[0] if esp else "")
-        for w in (self.lbl_siembra, self.e_siembra, self.lbl_marco,
-                  self.marco_wrap, self.lbl_tipo_calc):
+        for w in (self.lbl_finalidad, self.cb_finalidad, self.lbl_siembra, self.e_siembra,
+                  self.lbl_marco, self.marco_wrap, self.lbl_tipo_calc):
             w.pack_forget()
         if grupo == "EXTENSIVO":
+            self.lbl_finalidad.pack(anchor="w")
+            self.cb_finalidad.pack(fill="x", pady=(0, 4))
             self.lbl_siembra.pack(anchor="w")
             self.e_siembra.pack(fill="x")
         elif grupo == "LENOSO":
@@ -1103,6 +1111,8 @@ class VentanaAltaParcela(tk.Toplevel):
 
         spec = {"especie": esp}
         if tipo == "EXTENSIVO":
+            spec["finalidad"] = ("SIEGA_VERDE" if self.cb_finalidad.get().startswith("Siega")
+                                 else "COSECHA_GRANO")
             siembra = self.e_siembra.get().strip()
             if siembra:
                 try:
@@ -1174,6 +1184,11 @@ class DialogoRelevoCampana(tk.Toplevel):
         # campos por especie: siembra (cereal) o marco (leñoso)
         self.spec_wrap = tk.Frame(self.card, bg=TEMA["surface"])
         self.spec_wrap.pack(fill="x", padx=16)
+        self.lbl_finalidad = tk.Label(self.spec_wrap, text="Finalidad del cultivo",
+                                      bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
+        self.cb_finalidad = ttk.Combobox(self.spec_wrap, state="readonly",
+                                         values=["Cosecha de grano", "Siega en verde (forraje)"])
+        self.cb_finalidad.set("Cosecha de grano")
         self.lbl_siembra = tk.Label(self.spec_wrap, text="Fecha de siembra (AAAA-MM-DD)",
                                     bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
         self.e_siembra = ttk.Entry(self.spec_wrap)
@@ -1203,10 +1218,12 @@ class DialogoRelevoCampana(tk.Toplevel):
         esp = FEN.ESPECIES.get(grupo, [])
         self.cb_sub["values"] = esp
         self.cb_sub.set(esp[0] if esp else "")
-        for w in (self.lbl_siembra, self.e_siembra, self.lbl_marco,
-                  self.marco_wrap, self.lbl_tipo_calc):
+        for w in (self.lbl_finalidad, self.cb_finalidad, self.lbl_siembra, self.e_siembra,
+                  self.lbl_marco, self.marco_wrap, self.lbl_tipo_calc):
             w.pack_forget()
         if grupo == "EXTENSIVO":
+            self.lbl_finalidad.pack(anchor="w")
+            self.cb_finalidad.pack(fill="x", pady=(0, 4))
             self.lbl_siembra.pack(anchor="w")
             self.e_siembra.pack(fill="x")
         elif grupo == "LENOSO":
@@ -1239,6 +1256,8 @@ class DialogoRelevoCampana(tk.Toplevel):
             if prev.get("especie"):
                 self.cb_sub.set(prev["especie"])
                 self._sub()
+            if prev.get("finalidad") == "SIEGA_VERDE" or prev.get("subtipo") == "SIEGA_VERDE":
+                self.cb_finalidad.set("Siega en verde (forraje)")
             if prev.get("fecha_siembra"):
                 self.e_siembra.delete(0, tk.END)
                 self.e_siembra.insert(0, prev["fecha_siembra"])
@@ -1255,8 +1274,11 @@ class DialogoRelevoCampana(tk.Toplevel):
         if tipo != "BARBECHO" and not esp:
             return messagebox.showwarning("Cultivo", "Selecciona la especie.")
         spec = {"especie": esp} if tipo != "BARBECHO" else {}
-        if tipo == "EXTENSIVO" and self.e_siembra.get().strip():
-            spec["fecha_siembra"] = self.e_siembra.get().strip()
+        if tipo == "EXTENSIVO":
+            spec["finalidad"] = ("SIEGA_VERDE" if self.cb_finalidad.get().startswith("Siega")
+                                 else "COSECHA_GRANO")
+            if self.e_siembra.get().strip():
+                spec["fecha_siembra"] = self.e_siembra.get().strip()
         if tipo == "LENOSO":
             try:
                 spec["marco_calle"] = float(self.e_calle.get().replace(",", "."))

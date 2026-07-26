@@ -228,8 +228,13 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     fecha = fecha_iso or act.get("fecha")
 
     # --- FENOLOGIA: por especie si hay spec; si no, calendario por meses ---
+    # Excepcion: en extensivos SEGADOS EN VERDE (forraje) NO se usa la fenologia
+    # del cereal de grano (espigado/llenado/senescencia): el cultivo se corta
+    # varias veces, asi que se usa el calendario de SIEGA_VERDE, donde las caidas
+    # son NORMALES. De lo contrario, un corte saldria como caida anomala.
+    siega_verde = (tipo == "EXTENSIVO" and subtipo == "SIEGA_VERDE")
     fase_esp = None
-    if spec and spec.get("especie"):
+    if spec and spec.get("especie") and not siega_verde:
         try:
             from fenologia_especies import fase_por_especie
             fase_esp = fase_por_especie(tipo, spec.get("especie"), fecha,

@@ -88,6 +88,15 @@ def pruebas_motor():
     check("motor: evento explica caida -> OK", lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE",
           siega, "2026-04-20", eventos_cerca=ev)["clave"], lambda r: r == "OK")
 
+    # finalidad del cultivo: un corte en SIEGA_VERDE es normal (OK); en grano no
+    corte = [{"fecha": "2026-03-16", "ndvi": 0.72, "msavi": 0.62, "lai": 3.1, "ndmi": 0.30},
+             {"fecha": "2026-04-14", "ndvi": 0.34, "msavi": 0.31, "lai": 1.2, "ndmi": 0.16}]
+    spec_forr = {"especie": "AVENA", "fecha_siembra": "2025-10-05"}
+    check("motor: siega en verde -> corte = OK", lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE",
+          corte, "2026-04-14", spec=spec_forr)["clave"], lambda r: r == "OK")
+    check("motor: mismo corte en grano NO es OK", lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
+          corte, "2026-04-14", spec=spec_forr)["clave"], lambda r: r in ("Vigilar", "Revisar"))
+
     # deltas
     check("delta: previo=0 -> None", lambda: delta("NDVI", 0.5, 0), lambda r: r[1] is None)
     check("delta: previo None -> None", lambda: delta("NDVI", 0.5, None), lambda r: r[1] is None)
