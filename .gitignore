@@ -1,11 +1,17 @@
 __pycache__/
 *.pyc
 
-# datos generados en runtime
+# base de datos (SQLite) y backups de la migracion
+parcelas.db
+parcelas.db-wal
+parcelas.db-shm
+*.bak
+
+# JSON antiguos (ya migrados a SQLite) y estado/config en runtime
 parcelas.json
 historico_reportes.json
 registro_multi_parcelas.json
 eventos_parcela.json
 estado_sync.json
-cache_mapas/
 config_credenciales.json
+cache_mapas/

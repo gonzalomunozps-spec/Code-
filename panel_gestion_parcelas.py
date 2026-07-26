@@ -67,6 +67,7 @@ from interpretacion_fenologica import evaluar_parcela, texto_interpretacion
 import registro_parcela as REG
 import fenologia_especies as FEN
 import credenciales as CRED
+import almacen as DB          # capa de datos (SQLite): parcelas, historico y eventos
 
 
 # =====================================================================
@@ -192,16 +193,12 @@ def _colores_estado(clave):
 # =====================================================================
 # PERSISTENCIA
 # =====================================================================
-ARCHIVO_PARCELAS  = "parcelas.json"
-ARCHIVO_HISTORICO = "historico_reportes.json"
-ARCHIVO_MEMORIA   = "registro_multi_parcelas.json"
+# Los DATOS (parcelas, historico y eventos) viven en SQLite via el modulo
+# `almacen` (DB). Aqui solo queda como JSON la marca del ultimo sync, que es
+# estado, no datos.
 ARCHIVO_ESTADO    = "estado_sync.json"        # marca del ultimo sync (para el arranque)
 DIR_MAPAS         = "cache_mapas"
 
-for _f in (ARCHIVO_PARCELAS, ARCHIVO_HISTORICO, ARCHIVO_MEMORIA):
-    if not os.path.exists(_f):
-        with open(_f, "w") as fh:
-            json.dump({}, fh, indent=4)
 os.makedirs(DIR_MAPAS, exist_ok=True)
 
 
@@ -429,19 +426,15 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
         ULTIMO_SYNC.update(estado="fallo", msg="earthengine-api no disponible")
         return (0, "earthengine-api no disponible")
     try:
-        ficha = _load(ARCHIVO_PARCELAS).get(nombre)
+        ficha = DB.ficha(nombre)
         if not ficha or not ficha.get("coordenadas"):
             return (0, "parcela sin geometria")
 
         geom = ee.Geometry.Polygon(ficha["coordenadas"])
         ini_camp, fin_camp = rango_campana(campana)
 
-        hist = _load(ARCHIVO_HISTORICO)
-        existentes = hist.get(nombre, {}).get(campana, [])
-        # solo fechas presentes: un registro sin fecha metia None en el set y
-        # max() reventaba (str vs None), dejando el sync roto para siempre.
-        fechas_existentes = {r.get("fecha") for r in existentes if r.get("fecha")}
-        ultima = max(fechas_existentes) if fechas_existentes else None
+        ultima = DB.ultima_fecha(nombre, campana)      # MAX(fecha) via SQLite (indexado)
+        fechas_existentes = {p["fecha"] for p in DB.pasadas(nombre, campana) if p.get("fecha")}
 
         # ventana incremental: desde el dia siguiente a la ultima fecha guardada
         try:
@@ -530,17 +523,9 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
                 msg += f" ({descartadas} descartadas por nube/sombra sobre la parcela)"
             return (0, msg)
 
-        # anadir sin sobrescribir. Se relee el historico MAS RECIENTE bajo cerrojo
-        # (no el que se cargo antes de la descarga de GEE) para no pisar cambios
-        # que otro hilo haya guardado entretanto (p. ej. una interpretacion).
-        def _merge(hist_actual):
-            previos = hist_actual.get(nombre, {}).get(campana, [])
-            combinado = {r["fecha"]: r for r in previos}      # conserva lo ya guardado
-            for r in nuevos:
-                combinado.setdefault(r["fecha"], r)
-            hist_actual.setdefault(nombre, {})[campana] = [combinado[f] for f in sorted(combinado)]
-
-        _actualizar(ARCHIVO_HISTORICO, _merge)
+        # INSERT OR IGNORE: anade solo las fechas nuevas y conserva las existentes
+        # (con su interpretacion). Es atomico y no pisa lo que otro hilo guardara.
+        DB.anadir_pasadas(nombre, campana, nuevos)
         return (len(nuevos), f"anadidas {len(nuevos)} fechas nuevas")
     except Exception as e:
         ULTIMO_SYNC.update(estado="fallo", msg=f"{e}")
@@ -575,15 +560,14 @@ class PanelGestionParcelas(ttk.Frame):
     def _comprobar_relevo_campana(self):
         """Al entrar en una campana nueva, pide el cultivo de las parcelas ya existentes
         que aun no lo tengan asignado para la campana activa."""
-        parcelas = _load(ARCHIVO_PARCELAS)
+        parcelas = DB.parcelas_dict()
         pendientes = [n for n, f in parcelas.items()
                       if self.campana not in f.get("cultivos_por_campana", {})]
         if parcelas and pendientes:
             DialogoRelevoCampana(self, pendientes)
 
     def asignar_cultivo(self, nombre, tipo, spec):
-        parcelas = _load(ARCHIVO_PARCELAS)
-        if nombre in parcelas:
+        if DB.existe(nombre):
             spec = dict(spec or {})
             subtipo = ""
             if tipo == "LENOSO" and spec.get("marco_calle"):
@@ -593,8 +577,7 @@ class PanelGestionParcelas(ttk.Frame):
                 subtipo = "COSECHA_GRANO"
             cultivo = {"tipo": tipo, "subtipo": subtipo}
             cultivo.update(spec)
-            parcelas[nombre].setdefault("cultivos_por_campana", {})[self.campana] = cultivo
-            _save(ARCHIVO_PARCELAS, parcelas)
+            DB.set_cultivo(nombre, self.campana, cultivo)
         self._refrescar()
 
     # ---------------------------------------------------------- import automatico
@@ -609,7 +592,7 @@ class PanelGestionParcelas(ttk.Frame):
 
     def _sync_todas(self):
         total = 0
-        for nombre in _load(ARCHIVO_PARCELAS):
+        for nombre in DB.nombres():
             n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
             total += n
         if ULTIMO_SYNC.get("estado") != "fallo":     # solo marca la hora si conecto
@@ -710,7 +693,7 @@ class PanelGestionParcelas(ttk.Frame):
 
     def _sync_todas_notificando(self):
         total, n_par = 0, 0
-        for nombre in _load(ARCHIVO_PARCELAS):
+        for nombre in DB.nombres():
             n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
             total += n
             n_par += 1
@@ -734,10 +717,7 @@ class PanelGestionParcelas(ttk.Frame):
 
     def _campanas(self):
         c = {campana_actual()}
-        for _, camps in _load(ARCHIVO_HISTORICO).items():
-            c.update(camps.keys())
-        for _, ficha in _load(ARCHIVO_PARCELAS).items():
-            c.update(ficha.get("cultivos_por_campana", {}).keys())
+        c |= DB.campanas()
         return sorted(c, reverse=True)
 
     def _build_lista(self):
@@ -777,8 +757,8 @@ class PanelGestionParcelas(ttk.Frame):
             self.tree.delete(i)
         texto = self.entry_buscar.get().lower() if hasattr(self, "entry_buscar") else ""
         orden = self.cb_orden.get() if hasattr(self, "cb_orden") else "nombre"
-        parcelas = _load(ARCHIVO_PARCELAS)
-        historico = _load(ARCHIVO_HISTORICO)   # una sola lectura (antes: una por parcela)
+        parcelas = DB.parcelas_dict()
+        historico = DB.pasadas_de_campana(self.campana)   # {nombre: [pasadas]} en una consulta
 
         filas = []
         for nombre, ficha in parcelas.items():
@@ -791,7 +771,7 @@ class PanelGestionParcelas(ttk.Frame):
                 cc, clave, txt = "BARBECHO", "NA", "N.A."
             else:
                 cc = clave_cultivo(cult.get("tipo"), cult.get("subtipo", ""))
-                serie = sorted(historico.get(nombre, {}).get(self.campana, []),
+                serie = sorted(historico.get(nombre, []),
                                key=lambda r: r.get("fecha", ""))
                 diag = evaluar_parcela(cult.get("tipo"), cult.get("subtipo", ""), serie,
                                        spec=spec_de(cult))
@@ -837,19 +817,15 @@ class PanelGestionParcelas(ttk.Frame):
         nombre = self.tree.item(sel[0], "values")[0].replace(" ", "_")
         if not messagebox.askyesno("Eliminar", f"Eliminar la parcela '{nombre}' y su historico?"):
             return
-        for path in (ARCHIVO_PARCELAS, ARCHIVO_HISTORICO):
-            d = _load(path)
-            d.pop(nombre, None)
-            _save(path, d)
+        DB.eliminar_parcela(nombre)   # borra en cascada: parcela + cultivos + pasadas + eventos
         self._refrescar()
 
     def abrir_alta_parcela(self):
         VentanaAltaParcela(self)
 
     def guardar_parcela(self, nombre, propietario, tipo, spec, coords):
-        parcelas = _load(ARCHIVO_PARCELAS)
         cerrado = coords + [coords[0]] if coords and coords[0] != coords[-1] else coords
-        ficha = parcelas.get(nombre, {})
+        ficha = DB.ficha(nombre) or {}
         ficha.update({"propietario": propietario, "coordenadas": cerrado,
                       "superficie_ha": superficie_ha(cerrado),
                       "anio_inicio_monitoreo": ficha.get("anio_inicio_monitoreo", self.campana)})
@@ -865,8 +841,7 @@ class PanelGestionParcelas(ttk.Frame):
         cultivo = {"tipo": tipo, "subtipo": subtipo}
         cultivo.update(spec)          # especie, fecha_siembra, marco_calle, marco_pie
         ficha.setdefault("cultivos_por_campana", {})[self.campana] = cultivo
-        parcelas[nombre] = ficha
-        _save(ARCHIVO_PARCELAS, parcelas)
+        DB.guardar_ficha(nombre, ficha)
         self.cb_campana["values"] = self._campanas()
         self._refrescar()
 
@@ -883,7 +858,7 @@ class PanelGestionParcelas(ttk.Frame):
         FichaParcela(self.vista_ficha, self, nombre, self.campana)
 
     def _historico(self, nombre):
-        return _load(ARCHIVO_HISTORICO).get(nombre, {}).get(self.campana, [])
+        return DB.pasadas(nombre, self.campana)
 
     def _ultimo_valido(self, nombre, clave):
         regs = sorted(self._historico(nombre), key=lambda r: r.get("fecha", ""))
@@ -1254,7 +1229,7 @@ class DialogoRelevoCampana(tk.Toplevel):
         nombre = self.pendientes[self.idx]
         self.lbl_parc.config(text=nombre.replace("_", " "))
         self.lbl_prog.config(text=f"Parcela {self.idx + 1} de {len(self.pendientes)}")
-        ficha = _load(ARCHIVO_PARCELAS).get(nombre, {})
+        ficha = DB.ficha(nombre) or {}
         campos = ficha.get("cultivos_por_campana", {})
         prev = campos.get(sorted(campos)[-1]) if campos else None
         self.cb_tipo.set(prev.get("tipo") if prev else "LENOSO")
@@ -1516,8 +1491,7 @@ class FichaParcela:
             self.txt.insert(tk.END, "Sin datos. Pulsa 'Sincronizar Copernicus'.")
             return
         actual = regs[-1]
-        cult = _load(ARCHIVO_PARCELAS).get(self.nombre, {}) \
-            .get("cultivos_por_campana", {}).get(self.campana, {})
+        cult = (DB.ficha(self.nombre) or {}).get("cultivos_por_campana", {}).get(self.campana, {})
         tipo, sub = cult.get("tipo", "BARBECHO"), cult.get("subtipo", "")
         spec = spec_de(cult)
 
@@ -1545,12 +1519,7 @@ class FichaParcela:
         def worker():
             texto, _d = texto_interpretacion(tipo, sub, regs, actual.get("fecha"),
                                              eventos_cerca=eventos_cerca, spec=spec)
-
-            def _set(hist):
-                for r in hist.get(self.nombre, {}).get(self.campana, []):
-                    if r.get("fecha") == actual.get("fecha"):
-                        r["interpretacion"] = texto
-            _actualizar(ARCHIVO_HISTORICO, _set)
+            DB.set_interpretacion(self.nombre, self.campana, actual.get("fecha"), texto)
 
             def pintar():
                 if not self.txt.winfo_exists():   # el usuario ya navego a otra vista
@@ -1734,7 +1703,7 @@ class FichaParcela:
 
     def _descargar(self, iso, idx, png, metros):
         try:
-            ficha = _load(ARCHIVO_PARCELAS)[self.nombre]
+            ficha = DB.ficha(self.nombre)
             coords = ficha["coordenadas"]
             geom = ee.Geometry.Polygon(coords)
             region = geom.bounds()
@@ -2014,6 +1983,7 @@ class PanelCredenciales(ttk.Frame):
 # DEMO
 # =====================================================================
 if __name__ == "__main__":
+    DB.conectar()                    # abre SQLite y migra los JSON antiguos si existen
     _cfg = CRED.cargar()
     CRED.aplicar_entorno(_cfg)
     if _EE:

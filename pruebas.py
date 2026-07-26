@@ -154,6 +154,8 @@ def pruebas_contraste():
 # =====================================================================
 def pruebas_cuaderno():
     import registro_parcela as REG
+    import almacen as DB
+    DB.conectar(os.path.join(tempfile.mkdtemp(), "cuaderno.db"))   # BD temporal aislada
     serie = [{"fecha": "2026-04-01", "ndvi": 0.7, "ndmi": 0.25}, {"fecha": "2026-04-20", "ndvi": 0.35, "ndmi": 0.15}]
     check("efecto_producto: normal", lambda: REG.efecto_producto(serie,
           {"fecha": "2026-04-05", "tipo": "PRODUCTO", "objetivo": "fungicida"}))
@@ -166,8 +168,6 @@ def pruebas_cuaderno():
     check("explicacion_por_eventos: dN None", lambda: REG.explicacion_por_eventos(
           [(2, {"tipo": "SIEGA", "fecha": "2026-04-18"})], None), lambda r: r[0] is False)
     # regresion: ids unicos aunque se borre y se re-anada un evento con la misma fecha
-    d = tempfile.mkdtemp(); REG.ARCHIVO_EVENTOS = os.path.join(d, "ev.json")
-    open(REG.ARCHIVO_EVENTOS, "w").write("{}")
     def _ids_unicos():
         a = REG.registrar_evento("P", "2025-2026", {"fecha": "2026-04-10", "tipo": "SIEGA"})
         b = REG.registrar_evento("P", "2025-2026", {"fecha": "2026-04-10", "tipo": "SIEGA"})
@@ -177,7 +177,6 @@ def pruebas_cuaderno():
         return len(ids) == len(set(ids)) and b["id"] != c["id"]
     check("cuaderno: ids unicos tras borrar y re-anadir (misma fecha)", _ids_unicos, lambda r: r is True)
     # regresion: eventos_cercanos no revienta con fecha de referencia vacia/mal formada
-    open(REG.ARCHIVO_EVENTOS, "w").write("{}")
     REG.registrar_evento("Q", "2025-2026", {"fecha": "2026-04-10", "tipo": "SIEGA"})
     check("cuaderno: eventos_cercanos con fecha_iso vacia -> [] (no crash)",
           lambda: REG.eventos_cercanos("Q", "2025-2026", ""), lambda r: r == [])
@@ -296,9 +295,56 @@ def pruebas_persistencia():
 
 
 # =====================================================================
+# 7. ALMACEN (SQLite): roundtrip, dedup, cascada y migracion desde JSON
+# =====================================================================
+def pruebas_almacen():
+    import json as _json
+    import almacen as DB
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "a.db"))
+    ficha = {"propietario": "Coop", "coordenadas": [[-4, 37], [-4, 38], [-3, 38]],
+             "superficie_ha": 12.3, "anio_inicio_monitoreo": "2025-2026",
+             "cultivos_por_campana": {"2025-2026": {"tipo": "LENOSO", "especie": "OLIVO"}}}
+    DB.guardar_ficha("Olivar", ficha)
+    check("almacen: roundtrip ficha + cultivo",
+          lambda: DB.ficha("Olivar")["cultivos_por_campana"]["2025-2026"]["especie"], lambda r: r == "OLIVO")
+    DB.anadir_pasadas("Olivar", "2025-2026",
+                      [{"fecha": "2026-01-10", "ndvi": 0.5, "ndvi_std": 0.05, "interpretacion": "viejo"},
+                       {"fecha": "2026-02-10", "ndvi": 0.6}])
+    check("almacen: ultima_fecha (MAX indexado)", lambda: DB.ultima_fecha("Olivar", "2025-2026"),
+          lambda r: r == "2026-02-10")
+    DB.anadir_pasadas("Olivar", "2025-2026", [{"fecha": "2026-01-10", "ndvi": 0.99}])  # ya existe
+    check("almacen: anadir_pasadas no sobrescribe (conserva interpretacion)",
+          lambda: DB.pasadas("Olivar", "2025-2026")[0], lambda r: r["ndvi"] == 0.5 and r["interpretacion"] == "viejo")
+    DB.set_interpretacion("Olivar", "2025-2026", "2026-02-10", "nuevo")
+    check("almacen: set_interpretacion", lambda: DB.pasadas("Olivar", "2025-2026")[1].get("interpretacion"),
+          lambda r: r == "nuevo")
+    check("almacen: pasadas_de_campana", lambda: len(DB.pasadas_de_campana("2025-2026")["Olivar"]), lambda r: r == 2)
+    DB.eliminar_parcela("Olivar")
+    check("almacen: borrado en cascada", lambda: (DB.nombres(), DB.pasadas("Olivar", "2025-2026")),
+          lambda r: r == ([], []))
+    # migracion desde JSON antiguos
+    d2 = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(d2)
+    try:
+        _json.dump({"P": {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 1.0,
+                          "cultivos_por_campana": {"2025-2026": {"tipo": "BARBECHO"}}}},
+                   open("parcelas.json", "w"))
+        _json.dump({"P": {"2025-2026": [{"fecha": "2026-03-01", "ndvi": 0.2}]}}, open("historico_reportes.json", "w"))
+        _json.dump({"P": {"2025-2026": [{"id": "e1", "fecha": "2026-03-02", "tipo": "SIEGA"}]}}, open("eventos_parcela.json", "w"))
+        DB.conectar(os.path.join(d2, "mig.db"))
+        check("almacen: migracion JSON->SQLite", lambda: (DB.nombres(), DB.ultima_fecha("P", "2025-2026"),
+                                                          DB.eventos_de("P", "2025-2026")[0]["id"]),
+              lambda r: r == (["P"], "2026-03-01", "e1"))
+        check("almacen: migracion renombra a .bak",
+              lambda: os.path.exists("parcelas.json.bak") and not os.path.exists("parcelas.json"), lambda r: r is True)
+    finally:
+        os.chdir(cwd)
+
+
+# =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
-              pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia):
+              pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen):
         try:
             f()
         except Exception as e:

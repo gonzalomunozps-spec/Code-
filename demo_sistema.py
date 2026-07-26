@@ -29,10 +29,7 @@ from datetime import datetime
 from interpretacion_fenologica import evaluar_parcela, texto_interpretacion
 import registro_parcela as REG
 import fenologia_especies as FEN
-
-# --- mismos nombres de fichero que usa el panel ---
-ARCHIVO_PARCELAS = "parcelas.json"
-ARCHIVO_HISTORICO = "historico_reportes.json"
+import almacen as DB       # los datos van ahora a SQLite (parcelas.db)
 
 
 # ---------------------------------------------------------------------------
@@ -216,13 +213,9 @@ def escenarios():
 # ---------------------------------------------------------------------------
 # SIEMBRA DE LOS JSON DEL PANEL
 # ---------------------------------------------------------------------------
-def sembrar_json(escen):
-    # partir de un cuaderno de eventos limpio para que reejecutar la demo no
-    # acumule eventos duplicados
-    with open(REG.ARCHIVO_EVENTOS, "w") as f:
-        json.dump({}, f, indent=4)
-
-    parcelas, historico = {}, {}
+def sembrar(escen):
+    """Siembra las parcelas de la demo en la base de datos SQLite (parcelas.db)."""
+    DB.conectar()
     for e in escen:
         nombre, cultivo = e["parcela"], dict(e["cultivo"])
         # subtipo canonico (igual que hace el panel al dar de alta)
@@ -238,16 +231,12 @@ def sembrar_json(escen):
         ficha["superficie_ha"] = superficie_ha(ficha["coordenadas"])
         ficha["anio_inicio_monitoreo"] = CAMPANA
         ficha["cultivos_por_campana"] = {CAMPANA: cultivo}
-        parcelas[nombre] = ficha
-        historico[nombre] = {CAMPANA: e["serie"]}
 
+        DB.eliminar_parcela(nombre)          # limpio, para que reejecutar no duplique
+        DB.guardar_ficha(nombre, ficha)
+        DB.anadir_pasadas(nombre, CAMPANA, e["serie"])
         for ev in e["eventos"]:
             REG.registrar_evento(nombre, CAMPANA, ev)
-
-    with open(ARCHIVO_PARCELAS, "w") as f:
-        json.dump(parcelas, f, indent=4, ensure_ascii=False)
-    with open(ARCHIVO_HISTORICO, "w") as f:
-        json.dump(historico, f, indent=4, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -322,13 +311,13 @@ def main():
     escen = escenarios()
     informe(escen)
     if "--no-seed" not in sys.argv:
-        sembrar_json(escen)
-        print(f"Sembrados {ARCHIVO_PARCELAS} e {ARCHIVO_HISTORICO} "
-              f"(y eventos_parcela.json). Abre el panel con:")
+        sembrar(escen)
+        print("Sembradas las parcelas de la demo en la base de datos (parcelas.db).")
+        print("Abre el panel con:")
         print("    python panel_gestion_parcelas.py")
         print("y las parcelas de la demo apareceran ya cargadas.")
     else:
-        print("(--no-seed) No se han escrito los JSON.")
+        print("(--no-seed) No se ha tocado la base de datos.")
 
 
 if __name__ == "__main__":

@@ -17,43 +17,9 @@ Dos funcionalidades que se apoyan en el diagnostico existente:
 Persistencia en JSON (misma carpeta que el resto de datos).
 """
 
-import os
-import json
-import uuid
-import tempfile
 from datetime import datetime, timedelta
 
-ARCHIVO_EVENTOS = "eventos_parcela.json"
-
-for _f in (ARCHIVO_EVENTOS,):
-    if not os.path.exists(_f):
-        with open(_f, "w") as fh:
-            json.dump({}, fh, indent=4)
-
-
-def _load(path):
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save(path, data):
-    """Escritura atomica: temporal + os.replace, para no dejar el JSON del
-    cuaderno corrupto si el proceso se corta a mitad."""
-    carpeta = os.path.dirname(os.path.abspath(path)) or "."
-    fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=carpeta)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+import almacen as DB     # el almacen (SQLite) guarda ahora los eventos
 
 
 def _dias(f1, f2):
@@ -76,29 +42,15 @@ EVENTOS_QUE_BAJAN_NDVI = {"SIEGA", "COSECHA"}
 
 def registrar_evento(parcela, campana, evento):
     """evento = dict con al menos {fecha, tipo}. Devuelve el evento guardado (con id)."""
-    data = _load(ARCHIVO_EVENTOS)
-    lista = data.setdefault(parcela, {}).setdefault(campana, [])
-    evento = dict(evento)
-    # id UNICO (uuid): usar len(lista) colisionaba al borrar y volver a anadir
-    # un evento con la misma fecha.
-    evento.setdefault("id", f"{parcela}_{campana}_{evento.get('fecha','')}_{uuid.uuid4().hex[:8]}")
-    evento.setdefault("registrado", datetime.now().strftime("%Y-%m-%d %H:%M"))
-    lista.append(evento)
-    lista.sort(key=lambda e: e.get("fecha", ""))
-    _save(ARCHIVO_EVENTOS, data)
-    return evento
+    return DB.registrar_evento(parcela, campana, evento)
 
 
 def eventos_de(parcela, campana):
-    return sorted(_load(ARCHIVO_EVENTOS).get(parcela, {}).get(campana, []),
-                  key=lambda e: e.get("fecha", ""))
+    return DB.eventos_de(parcela, campana)
 
 
 def eliminar_evento(parcela, campana, evento_id):
-    data = _load(ARCHIVO_EVENTOS)
-    lista = data.get(parcela, {}).get(campana, [])
-    data.setdefault(parcela, {})[campana] = [e for e in lista if e.get("id") != evento_id]
-    _save(ARCHIVO_EVENTOS, data)
+    DB.eliminar_evento(parcela, campana, evento_id)
 
 
 def eventos_cercanos(parcela, campana, fecha_iso, ventana_dias=20):
