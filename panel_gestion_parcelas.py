@@ -880,6 +880,11 @@ class VentanaAltaParcela(tk.Toplevel):
         self.configure(bg=TEMA["page"])
         self.coords = []
         self.poligono = None
+        # que la ventana se mantenga SIEMPRE por encima de la principal (no se
+        # cuele detras al aparecer un aviso de error).
+        self.transient(panel.winfo_toplevel())
+        self.lift()
+        self.after(80, self.focus_force)
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
@@ -1023,9 +1028,9 @@ class VentanaAltaParcela(tk.Toplevel):
             return
         try:
             if not self.mapa.set_address(texto):     # geocodifica y centra el mapa
-                messagebox.showinfo("Localidad", "No se encontro la localidad.")
+                messagebox.showinfo("Localidad", "No se encontro la localidad.", parent=self)
         except Exception as e:
-            messagebox.showerror("Localidad", f"Error en la busqueda: {e}")
+            messagebox.showerror("Localidad", f"Error en la busqueda: {e}", parent=self)
 
     def _sub(self, _=None):
         grupo = self.cb_tipo.get()
@@ -1084,7 +1089,7 @@ class VentanaAltaParcela(tk.Toplevel):
     def _sigpac(self):
         v = {k: e.get() for k, e in self.sig.items()}
         if not all(v.values()):
-            return messagebox.showwarning("SIGPAC", "Rellena Prov/Mun/Pol/Par/Rec.")
+            return messagebox.showwarning("SIGPAC", "Rellena Prov/Mun/Pol/Par/Rec.", parent=self)
         url = ("https://sigpac.mapa.gob.es/fega/serviciosrest/v1/recintos/geojson/"
                f"{v['Prov']}/{v['Mun']}/{v['Pol']}/{v['Par']}/{v['Rec']}")
         try:
@@ -1094,20 +1099,20 @@ class VentanaAltaParcela(tk.Toplevel):
             if _MAPVIEW:
                 self._redibujar()
                 self.mapa.set_position(self.coords[0][1], self.coords[0][0], zoom=16)
-            messagebox.showinfo("SIGPAC", "Recinto capturado.")
+            messagebox.showinfo("SIGPAC", "Recinto capturado.", parent=self)
         except Exception as e:
-            messagebox.showerror("SIGPAC", f"Error: {e}")
+            messagebox.showerror("SIGPAC", f"Error: {e}", parent=self)
 
     def _guardar(self):
         nombre = nombre_seguro(self.e_nombre.get())
         prop = self.e_prop.get().strip()
         tipo, esp = self.cb_tipo.get(), self.cb_sub.get()
         if not nombre or not prop or not tipo:
-            return messagebox.showwarning("Datos", "Nombre, propietario y tipo son obligatorios.")
+            return messagebox.showwarning("Datos", "Nombre, propietario y tipo son obligatorios.", parent=self)
         if tipo != "BARBECHO" and not esp:
-            return messagebox.showwarning("Datos", "Selecciona la especie.")
+            return messagebox.showwarning("Datos", "Selecciona la especie.", parent=self)
         if len(self.coords) < 3:
-            return messagebox.showwarning("Geometria", "Define al menos 3 vertices (SIGPAC o mapa).")
+            return messagebox.showwarning("Geometria", "Define al menos 3 vertices (SIGPAC o mapa).", parent=self)
 
         spec = {"especie": esp}
         if tipo == "EXTENSIVO":
@@ -1119,16 +1124,16 @@ class VentanaAltaParcela(tk.Toplevel):
                     datetime.strptime(siembra, "%Y-%m-%d")
                     spec["fecha_siembra"] = siembra
                 except ValueError:
-                    return messagebox.showwarning("Siembra", "Fecha de siembra: formato AAAA-MM-DD.")
+                    return messagebox.showwarning("Siembra", "Fecha de siembra: formato AAAA-MM-DD.", parent=self)
         elif tipo == "LENOSO":
             try:
                 spec["marco_calle"] = float(self.e_calle.get().replace(",", "."))
                 spec["marco_pie"] = float(self.e_pie.get().replace(",", "."))
             except ValueError:
-                return messagebox.showwarning("Marco", "Indica el marco de plantacion (calle y pie en metros).")
+                return messagebox.showwarning("Marco", "Indica el marco de plantacion (calle y pie en metros).", parent=self)
 
         self.panel.guardar_parcela(nombre, prop, tipo, spec, self.coords)
-        messagebox.showinfo("OK", f"Parcela '{nombre}' guardada.")
+        messagebox.showinfo("OK", f"Parcela '{nombre}' guardada.", parent=self)
         self.destroy()
 
 
@@ -1147,7 +1152,10 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.title("Nueva campana - Asignacion de cultivos")
         self.geometry("440x300")
         self.configure(bg=TEMA["page"])
+        self.transient(panel.winfo_toplevel())   # siempre por encima de la principal
         self.grab_set()          # modal
+        self.lift()
+        self.after(80, self.focus_force)
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
@@ -1270,9 +1278,9 @@ class DialogoRelevoCampana(tk.Toplevel):
         tipo = self.cb_tipo.get()
         esp = self.cb_sub.get()
         if not tipo:
-            return messagebox.showwarning("Cultivo", "Selecciona el tipo de cultivo.")
+            return messagebox.showwarning("Cultivo", "Selecciona el tipo de cultivo.", parent=self)
         if tipo != "BARBECHO" and not esp:
-            return messagebox.showwarning("Cultivo", "Selecciona la especie.")
+            return messagebox.showwarning("Cultivo", "Selecciona la especie.", parent=self)
         spec = {"especie": esp} if tipo != "BARBECHO" else {}
         if tipo == "EXTENSIVO":
             spec["finalidad"] = ("SIEGA_VERDE" if self.cb_finalidad.get().startswith("Siega")
@@ -1284,7 +1292,7 @@ class DialogoRelevoCampana(tk.Toplevel):
                 spec["marco_calle"] = float(self.e_calle.get().replace(",", "."))
                 spec["marco_pie"] = float(self.e_pie.get().replace(",", "."))
             except ValueError:
-                return messagebox.showwarning("Marco", "Indica el marco (calle y pie en metros).")
+                return messagebox.showwarning("Marco", "Indica el marco (calle y pie en metros).", parent=self)
         self.panel.asignar_cultivo(self.pendientes[self.idx], tipo, spec)
         self.idx += 1
         if self.idx < len(self.pendientes):
@@ -1292,7 +1300,8 @@ class DialogoRelevoCampana(tk.Toplevel):
         else:
             self.destroy()
             if messagebox.askyesno("Nueva campana",
-                                   "Cultivos asignados. Deseas anadir alguna parcela mas?"):
+                                   "Cultivos asignados. Deseas anadir alguna parcela mas?",
+                                   parent=self.panel.winfo_toplevel()):
                 self.panel.abrir_alta_parcela()
 
 
