@@ -97,6 +97,32 @@ def pruebas_motor():
     check("motor: mismo corte en grano NO es OK", lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
           corte, "2026-04-14", spec=spec_forr)["clave"], lambda r: r in ("Vigilar", "Revisar"))
 
+    # --- SIEGA EN VERDE: desplome en abril-mayo -> estado "Segado" ---
+    seg = [{"fecha": "2026-04-20", "ndvi": 0.80, "ndmi": 0.30},
+           {"fecha": "2026-05-05", "ndvi": 0.33, "ndmi": 0.20}]
+    check("motor: siega verde, desplome en mayo -> Segado",
+          lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE", seg, "2026-05-05")["estado"],
+          lambda r: r == "Segado")
+    seg_est = [{"fecha": "2026-04-20", "ndvi": 0.72}, {"fecha": "2026-05-05", "ndvi": 0.70}]
+    check("motor: siega verde estable en mayo -> NO Segado",
+          lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE", seg_est, "2026-05-05")["estado"],
+          lambda r: r != "Segado")
+    seg_ago = [{"fecha": "2026-07-20", "ndvi": 0.70}, {"fecha": "2026-08-05", "ndvi": 0.30}]
+    check("motor: desplome en agosto NO se marca 'Segado' (fuera de abr-may)",
+          lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE", seg_ago, "2026-08-05")["estado"],
+          lambda r: r != "Segado")
+
+    # --- APRENDIZAJE: las validaciones pasadas se resumen para la IA ---
+    from interpretacion_fenologica import contexto_aprendizaje
+    apr = [{"fase": "rebrote / cortes", "cultivo": "EXTENSIVO/SIEGA_VERDE", "estado_sistema": "Revisar",
+            "veredicto": "incorrecto", "estado_real": "Segado", "nota": "se sego el 3 de mayo"}]
+    check("aprendizaje: resume correccion incorrecta",
+          lambda: contexto_aprendizaje(apr),
+          lambda r: r and "Segado" in r and "3 de mayo" in r)
+    check("aprendizaje: lista vacia -> None", lambda: contexto_aprendizaje([]), lambda r: r is None)
+    check("aprendizaje: sin veredicto util -> None",
+          lambda: contexto_aprendizaje([{"veredicto": "", "fase": "x"}]), lambda r: r is None)
+
     # deltas
     check("delta: previo=0 -> None", lambda: delta("NDVI", 0.5, 0), lambda r: r[1] is None)
     check("delta: previo None -> None", lambda: delta("NDVI", 0.5, None), lambda r: r[1] is None)
@@ -361,6 +387,21 @@ def pruebas_almacen():
     check("almacen: set_interpretacion", lambda: DB.pasadas("Olivar", "2025-2026")[1].get("interpretacion"),
           lambda r: r == "nuevo")
     check("almacen: pasadas_de_campana", lambda: len(DB.pasadas_de_campana("2025-2026")["Olivar"]), lambda r: r == 2)
+    # validaciones del diagnostico (aprendizaje)
+    DB.guardar_validacion("Olivar", "2025-2026", "2026-02-10", "floracion", "LENOSO/INTENSIVO",
+                          "Revisar", "incorrecto", estado_real="OK", nota="estaba sano")
+    check("almacen: validacion_de roundtrip",
+          lambda: DB.validacion_de("Olivar", "2025-2026", "2026-02-10"),
+          lambda r: r and r["veredicto"] == "incorrecto" and r["estado_real"] == "OK")
+    DB.guardar_validacion("Olivar", "2025-2026", "2026-02-10", "floracion", "LENOSO/INTENSIVO",
+                          "Revisar", "correcto")     # upsert sobre la misma pasada
+    check("almacen: validacion upsert (una por pasada)",
+          lambda: (DB.validacion_de("Olivar", "2025-2026", "2026-02-10")["veredicto"],
+                   len(DB.validaciones_recientes(50))),
+          lambda r: r == ("correcto", 1))
+    check("almacen: validaciones_recientes prioriza el mismo cultivo",
+          lambda: DB.validaciones_recientes(5, cultivo="LENOSO/INTENSIVO"),
+          lambda r: len(r) == 1 and r[0]["cultivo"] == "LENOSO/INTENSIVO")
     DB.eliminar_parcela("Olivar")
     check("almacen: borrado en cascada", lambda: (DB.nombres(), DB.pasadas("Olivar", "2025-2026")),
           lambda r: r == ([], []))
@@ -447,10 +488,35 @@ def pruebas_sigpac():
 
 
 # =====================================================================
+# 9. TOOLTIP DE LA GRAFICA (valores del dia + fiabilidad) - helper del panel
+# =====================================================================
+def pruebas_panel_helpers():
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel_gestion_parcelas.py")
+    src = open(ruta, encoding="utf-8").read()
+    m = re.search(r"\ndef tooltip_pasada\(.*?\n(?=\ndef _colores_estado)", src, re.S)
+    if not m:
+        _FALLA.append(("panel", "no se localiza tooltip_pasada en el panel"))
+        return
+    ns = {"INDICES_ORDEN": ["NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"]}
+    exec(m.group(0), ns)
+    tip = ns["tooltip_pasada"]
+    reg = {"fecha": "2026-05-05", "ndvi": 0.812, "ndmi": 0.21, "cobertura_valida": 0.97}
+    check("tooltip: incluye fecha, NDVI y fiabilidad alta",
+          lambda: tip(reg),
+          lambda r: "2026-05-05" in r and "NDVI: 0.812" in r and "Fiabilidad: 97%" in r and "alta" in r)
+    check("tooltip: fiabilidad baja se etiqueta",
+          lambda: tip({"fecha": "2026-05-05", "ndvi": 0.5, "cobertura_valida": 0.82}),
+          lambda r: "baja" in r)
+    check("tooltip: sin cobertura no revienta",
+          lambda: tip({"fecha": "2026-05-05", "ndvi": 0.5}), lambda r: "Fiabilidad" not in r)
+    check("tooltip: registro vacio -> cadena vacia", lambda: tip({}), lambda r: r == "" or "None" not in r)
+
+
+# =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
-              pruebas_sigpac):
+              pruebas_sigpac, pruebas_panel_helpers):
         try:
             f()
         except Exception as e:

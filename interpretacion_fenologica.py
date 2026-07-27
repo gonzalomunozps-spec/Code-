@@ -277,10 +277,34 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
             if prev and prev.get("msavi") is not None:
                 d_ndvi = msavi - prev["msavi"]
 
+    # --- SIEGA EN VERDE: una caida drastica del NDVI en primavera = SEGADO ---
+    # En forraje segado en verde, cuando en abril-mayo (plena primavera) los indices
+    # se desploman de golpe, no es un problema sanitario: el cultivo se ha CORTADO.
+    # Se marca como "Segado" para que quede claro y no salte como anomalia; el rebrote
+    # volvera a subir los indices.
+    segado = False
+    if siega_verde and ndvi is not None:
+        try:
+            mes_act = datetime.strptime(fecha, "%Y-%m-%d").month
+        except (TypeError, ValueError):
+            mes_act = None
+        prev_ndvi = prev.get("ndvi") if prev else None
+        caida_drastica = ((d_ndvi is not None and d_ndvi < -0.15) or
+                          (prev_ndvi and ndvi < 0.60 * prev_ndvi))
+        if mes_act in (4, 5) and caida_drastica:
+            segado = True
+
     # --- juicio unico ---
     esperado = False
     if ndvi is None:
         clave, estado, motivo = "Sin", "Sin dato", "Sin NDVI valido (nubosidad)."
+    elif segado:
+        clave, estado = "OK", "Segado"
+        _mes_txt = {4: "abril", 5: "mayo"}.get(mes_act, "primavera")
+        motivo = (f"Caida drastica del NDVI ({d_ndvi:+.3f}) en {_mes_txt}: el cultivo se ha "
+                  "SEGADO en verde (corte de forraje). Es lo esperado en esta modalidad; "
+                  "el rebrote volvera a elevar los indices en las proximas pasadas.")
+        esperado = True
     elif caida_ok and d_ndvi is not None and d_ndvi < -0.10:
         # caida fuerte PERO propia de la fase: senescencia, siega, cosecha
         evento = ("senescencia y maduracion" if "senescencia" in fase or "madur" in fase else
@@ -355,13 +379,13 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     hetero = heterogeneidad(serie)
 
     # si hay deterioro LOCALIZADO, se advierte de posible foco (biotico)
-    if evento_explica:
-        pass   # el evento registrado ya explica lo observado; no se solapan avisos
+    if evento_explica or segado:
+        pass   # el evento (o el corte de forraje) ya explica lo observado; no se solapan avisos
     elif hetero and hetero.get("patron") == "deterioro LOCALIZADO":
         motivo += (" [ATENCION: deterioro LOCALIZADO. La dispersion interna crece "
                    f"(std {hetero['d_std']:+.3f}) mientras la media cae: posible FOCO en la "
                    "parcela (hongo, plaga o rodal). Revisar el mapa para localizar la mancha.]")
-        if clave == "OK":
+        if clave == "OK" and not esperado:
             clave, estado = "Vigilar", "Vigilar"
     elif hetero and hetero.get("patron") == "deterioro GENERALIZADO":
         motivo += (" [Deterioro GENERALIZADO y homogeneo: apunta a causa general "
@@ -398,9 +422,43 @@ Reglas que debes respetar:
 """
 
 
+def contexto_aprendizaje(aprendizaje):
+    """Resume las validaciones del agricultor como texto para guiar a ChatGPT.
+
+    `aprendizaje` es una lista de dicts (de almacen.validaciones_recientes):
+    fase, cultivo, estado_sistema, veredicto, estado_real, nota. Devuelve None si
+    no hay nada aprovechable."""
+    if not aprendizaje:
+        return None
+    lineas = []
+    for v in aprendizaje:
+        if not isinstance(v, dict):
+            continue
+        if v.get("veredicto") == "incorrecto" and v.get("estado_real"):
+            linea = (f"- En fase '{v.get('fase','?')}' ({v.get('cultivo','')}) el sistema dijo "
+                     f"'{v.get('estado_sistema','?')}' pero lo correcto era "
+                     f"'{v.get('estado_real')}'.")
+        elif v.get("veredicto") == "correcto":
+            linea = (f"- En fase '{v.get('fase','?')}' ({v.get('cultivo','')}) el diagnostico "
+                     f"'{v.get('estado_sistema','?')}' fue CONFIRMADO correcto.")
+        else:
+            continue
+        if v.get("nota"):
+            linea += f" Observacion del agricultor: {v['nota']}"
+        lineas.append(linea)
+    if not lineas:
+        return None
+    return ("Historial de validaciones del agricultor en esta explotacion (aprende de estas "
+            "correcciones para afinar el diagnostico actual, sin contradecir los datos):\n"
+            + "\n".join(lineas[:8]))
+
+
 def texto_interpretacion(tipo, subtipo, serie, fecha_iso=None, modelo="gpt-4o-mini",
-                         eventos_cerca=None, spec=None):
-    """Genera el texto. Usa ChatGPT si hay OPENAI_API_KEY; si no, respaldo por reglas."""
+                         eventos_cerca=None, spec=None, aprendizaje=None):
+    """Genera el texto. Usa ChatGPT si hay OPENAI_API_KEY; si no, respaldo por reglas.
+
+    `aprendizaje`: validaciones pasadas del agricultor (almacen.validaciones_recientes)
+    que se reinyectan como contexto para que la IA acierte mejor en el futuro."""
     diag = evaluar_parcela(tipo, subtipo, serie, fecha_iso, eventos_cerca=eventos_cerca, spec=spec)
 
     if diag["clave"] in ("NA", "Sin"):
@@ -421,12 +479,14 @@ def texto_interpretacion(tipo, subtipo, serie, fecha_iso=None, modelo="gpt-4o-mi
                 "desmezclado_copa": diag.get("copa"),
                 "heterogeneidad_intraparcela": diag.get("heterogeneidad"),
             }
+            mensajes = [{"role": "system", "content": SYSTEM_PROMPT}]
+            ctx = contexto_aprendizaje(aprendizaje)
+            if ctx:
+                mensajes.append({"role": "system", "content": ctx})
+            mensajes.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
             client = OpenAI()
             r = client.chat.completions.create(
-                model=modelo,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT},
-                          {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-                temperature=0.3, max_tokens=420)
+                model=modelo, messages=mensajes, temperature=0.3, max_tokens=420)
             return r.choices[0].message.content.strip(), diag
         except Exception as e:
             return _texto_reglas(diag) + f"  (IA no disponible: {e})", diag

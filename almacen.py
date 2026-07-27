@@ -92,10 +92,21 @@ def _crear_tablas():
             id TEXT PRIMARY KEY,
             nombre TEXT, campana TEXT, fecha TEXT,
             datos TEXT);               -- JSON del evento (tipo, producto, notas...)
+        CREATE TABLE IF NOT EXISTS validaciones(
+            nombre TEXT, campana TEXT, fecha TEXT,
+            fase TEXT,                 -- fase fenologica que calculo el sistema
+            cultivo TEXT,              -- tipo/subtipo/especie (para aprender por cultivo)
+            estado_sistema TEXT,       -- diagnostico automatico (OK/Vigilar/Revisar/Segado)
+            veredicto TEXT,            -- 'correcto' | 'incorrecto'
+            estado_real TEXT,          -- lo que el usuario dice que era (si incorrecto)
+            nota TEXT,                 -- observacion libre del agricultor
+            ts TEXT,                   -- momento de la validacion
+            PRIMARY KEY(nombre, campana, fecha));
         CREATE INDEX IF NOT EXISTS ix_pasadas_np ON pasadas(nombre, campana);
         CREATE INDEX IF NOT EXISTS ix_pasadas_c  ON pasadas(campana);
         CREATE INDEX IF NOT EXISTS ix_cultivos_c ON cultivos(campana);
         CREATE INDEX IF NOT EXISTS ix_eventos_np ON eventos(nombre, campana);
+        CREATE INDEX IF NOT EXISTS ix_valida_ts  ON validaciones(ts);
     """)
     _CONN.commit()
 
@@ -335,3 +346,50 @@ def eliminar_evento(parcela, campana, evento_id):
     with _LOCK:
         c.execute("DELETE FROM eventos WHERE id=?", (evento_id,))
         c.commit()
+
+
+# ---------------------------------------------------------------------------
+# VALIDACIONES DEL DIAGNOSTICO (aprendizaje supervisado por el agricultor)
+# ---------------------------------------------------------------------------
+# El usuario confirma o corrige el diagnostico de una pasada. Esas validaciones
+# se reinyectan como ejemplos al pedir la interpretacion a ChatGPT, para que
+# acierte mejor en pasadas futuras del mismo tipo de cultivo.
+def guardar_validacion(nombre, campana, fecha, fase, cultivo,
+                       estado_sistema, veredicto, estado_real=None, nota=""):
+    """Guarda (o actualiza) la validacion del diagnostico de una pasada."""
+    c = _c()
+    with _LOCK:
+        c.execute(
+            "INSERT INTO validaciones(nombre,campana,fecha,fase,cultivo,estado_sistema,"
+            "veredicto,estado_real,nota,ts) VALUES(?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(nombre,campana,fecha) DO UPDATE SET "
+            "fase=excluded.fase, cultivo=excluded.cultivo, estado_sistema=excluded.estado_sistema, "
+            "veredicto=excluded.veredicto, estado_real=excluded.estado_real, nota=excluded.nota, "
+            "ts=excluded.ts",
+            (nombre, campana, fecha, fase or "", cultivo or "", estado_sistema or "",
+             veredicto or "", estado_real, nota or "", datetime.now().strftime("%Y-%m-%d %H:%M")))
+        c.commit()
+
+
+def validacion_de(nombre, campana, fecha):
+    """Devuelve la validacion de una pasada concreta (o None)."""
+    c = _c()
+    with _LOCK:
+        r = c.execute("SELECT * FROM validaciones WHERE nombre=? AND campana=? AND fecha=?",
+                      (nombre, campana, fecha)).fetchone()
+        return dict(r) if r else None
+
+
+def validaciones_recientes(limite=8, cultivo=None):
+    """Ultimas validaciones (para reinyectar como aprendizaje). Si se pasa `cultivo`,
+    prioriza las del mismo tipo de cultivo."""
+    c = _c()
+    with _LOCK:
+        if cultivo:
+            filas = c.execute(
+                "SELECT * FROM validaciones ORDER BY (cultivo=?) DESC, ts DESC LIMIT ?",
+                (cultivo, limite)).fetchall()
+        else:
+            filas = c.execute("SELECT * FROM validaciones ORDER BY ts DESC LIMIT ?",
+                              (limite,)).fetchall()
+        return [dict(r) for r in filas]

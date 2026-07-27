@@ -58,6 +58,7 @@ import matplotlib as mpl
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.colors as mcolors
+import matplotlib.dates as mdates
 
 # La interpretacion (y la llamada opcional a ChatGPT) viven en
 # interpretacion_fenologica; el panel no habla con OpenAI directamente.
@@ -181,6 +182,77 @@ def aplicar_tema(root):
 def tarjeta(parent, **kw):
     return tk.Frame(parent, bg=TEMA["surface"], highlightbackground=TEMA["border"],
                     highlightcolor=TEMA["border"], highlightthickness=1, bd=0, **kw)
+
+
+def marco_scroll(parent, bg=None, rueda_global=False):
+    """Crea un contenedor con scroll vertical y devuelve (contenedor, interior).
+
+    El contenido se mete en `interior`. La barra lateral siempre funciona.
+    `rueda_global=True` captura la rueda sobre TODO el marco mientras el puntero
+    esta dentro (ideal para formularios de solo campos). Con `False` la rueda se
+    enlaza solo al lienzo, para no chocar con hijos que ya usan la rueda (el mapa
+    de la ficha hace zoom con la rueda)."""
+    bg = bg or TEMA["page"]
+    cont = tk.Frame(parent, bg=bg)
+    canvas = tk.Canvas(cont, bg=bg, highlightthickness=0, bd=0)
+    sb = ttk.Scrollbar(cont, orient="vertical", command=canvas.yview)
+    interior = tk.Frame(canvas, bg=bg)
+    ventana = canvas.create_window((0, 0), window=interior, anchor="nw")
+    canvas.configure(yscrollcommand=sb.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    sb.pack(side="right", fill="y")
+
+    def _region(_=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+    interior.bind("<Configure>", _region)
+    canvas.bind("<Configure>", lambda e: canvas.itemconfigure(ventana, width=e.width))
+
+    def _rueda(e):
+        caja = canvas.bbox("all")
+        if caja and canvas.winfo_height() >= caja[3]:
+            return                                   # todo cabe: no hace falta scroll
+        paso = -1 if (getattr(e, "delta", 0) > 0 or getattr(e, "num", 0) == 4) else 1
+        canvas.yview_scroll(paso, "units")
+
+    if rueda_global:
+        # bind_all mientras el puntero esta dentro; se retira al salir para no
+        # interferir con otras zonas scrolleables de la aplicacion.
+        def _entrar(_=None):
+            canvas.bind_all("<MouseWheel>", _rueda)
+            canvas.bind_all("<Button-4>", _rueda)
+            canvas.bind_all("<Button-5>", _rueda)
+        def _salir(_=None):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+        cont.bind("<Enter>", _entrar)
+        cont.bind("<Leave>", _salir)
+        cont.bind("<Destroy>", _salir)
+    else:
+        for w in (canvas, interior):
+            w.bind("<MouseWheel>", _rueda)           # Windows / macOS
+            w.bind("<Button-4>", _rueda)             # Linux
+            w.bind("<Button-5>", _rueda)
+    return cont, interior
+
+
+# --- texto emergente de la grafica: valores de los indices y fiabilidad del dia ---
+def tooltip_pasada(reg):
+    """Texto multilinea con los indices de una pasada y su fiabilidad (cobertura
+    valida de pixeles tras enmascarar nubes/sombra)."""
+    if not reg:
+        return ""
+    lineas = [reg.get("fecha", "")]
+    for K in INDICES_ORDEN:
+        v = reg.get(K.lower())
+        if v is not None:
+            lineas.append(f"{K}: {v:.3f}")
+    cob = reg.get("cobertura_valida")
+    if cob is not None:
+        pct = cob * 100 if cob <= 1 else cob
+        etiqueta = "alta" if pct >= 95 else "media" if pct >= 85 else "baja"
+        lineas.append(f"Fiabilidad: {pct:.0f}% ({etiqueta})")
+    return "\n".join(lineas)
 
 
 def _colores_estado(clave):
@@ -918,7 +990,7 @@ class PanelGestionParcelas(ttk.Frame):
                           "propietario": ficha.get("propietario", ""),
                           "estado": txt, "_clave": clave})
 
-        sev = {"Revisar": 0, "Vigilar": 1, "OK": 2, "Sin dato": 3, "N.A.": 4, "Sin asignar": 5}
+        sev = {"Revisar": 0, "Vigilar": 1, "OK": 2, "Segado": 2, "Sin dato": 3, "N.A.": 4, "Sin asignar": 5}
         keys = {"superficie": lambda r: -r["_sup"],
                 "propietario": lambda r: r["propietario"].lower(),
                 "estado": lambda r: sev.get(r["estado"], 9),
@@ -1028,9 +1100,11 @@ class VentanaAltaParcela(tk.Toplevel):
         cuerpo = tk.Frame(self, bg=TEMA["page"])
         cuerpo.pack(fill="both", expand=True, padx=14, pady=14)
 
-        form = tarjeta(cuerpo, width=360)
-        form.pack(side="left", fill="y")
-        form.pack_propagate(False)
+        form_card = tarjeta(cuerpo, width=360)
+        form_card.pack(side="left", fill="y")
+        form_card.pack_propagate(False)
+        cont_form, form = marco_scroll(form_card, bg=TEMA["surface"], rueda_global=True)
+        cont_form.pack(fill="both", expand=True)
         pad = {"padx": 16}
 
         def etiqueta(t):
@@ -1447,6 +1521,46 @@ class DialogoRelevoCampana(tk.Toplevel):
                 self.panel.abrir_alta_parcela()
 
 
+class DialogoCorreccion(tk.Toplevel):
+    """Pide el estado real y una nota para corregir un diagnostico (aprendizaje)."""
+    def __init__(self, master, ficha, ctx):
+        super().__init__(master)
+        self.ficha = ficha
+        self.title("Corregir diagnostico")
+        self.configure(bg=TEMA["surface"])
+        self.resizable(False, False)
+        self.transient(master.winfo_toplevel())
+        self.lift()
+        self.after(60, self.focus_force)
+        self.grab_set()
+
+        tk.Label(self, text="El sistema diagnostico:", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(14, 0))
+        tk.Label(self, text=f"[{ctx.get('estado','?')}]  ·  Fase: {ctx.get('fase','?')}",
+                 bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["body"]).pack(anchor="w", padx=16)
+        tk.Label(self, text="¿Cual era el estado correcto?", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(10, 0))
+        self.cb = ttk.Combobox(self, state="readonly", values=FichaParcela.ESTADOS_VALIDABLES, width=18)
+        self.cb.set(ctx.get("estado", "OK"))
+        self.cb.pack(anchor="w", padx=16, pady=(2, 0))
+        tk.Label(self, text="Observacion (opcional):", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(10, 0))
+        self.txt = tk.Text(self, width=44, height=4, bd=1, relief="solid",
+                           font=FUENTES["body"], highlightthickness=0)
+        self.txt.pack(padx=16, pady=(2, 0))
+        bar = tk.Frame(self, bg=TEMA["surface"])
+        bar.pack(fill="x", padx=16, pady=14)
+        ttk.Button(bar, text="Cancelar", style="Ghost.TButton", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="Guardar correccion", style="Accent.TButton",
+                   command=self._guardar).pack(side="right", padx=(0, 8))
+
+    def _guardar(self):
+        estado_real = self.cb.get()
+        nota = self.txt.get("1.0", tk.END).strip()
+        self.ficha._validar("incorrecto", estado_real=estado_real, nota=nota)
+        self.destroy()
+
+
 # =====================================================================
 # FICHA DE PARCELA
 # =====================================================================
@@ -1466,7 +1580,9 @@ class FichaParcela:
         ttk.Button(cab, text="  \u21BB Sincronizar Copernicus  ", style="Ghost.TButton",
                    command=self.sincronizar).pack(side="right", padx=12, pady=10)
 
-        cuerpo = tk.Frame(master, bg=TEMA["page"])
+        cont, scroll = marco_scroll(master, bg=TEMA["page"])
+        cont.pack(fill="both", expand=True)
+        cuerpo = tk.Frame(scroll, bg=TEMA["page"])
         cuerpo.pack(fill="both", expand=True, padx=14, pady=14)
 
         sup = tk.Frame(cuerpo, bg=TEMA["page"])
@@ -1580,7 +1696,22 @@ class FichaParcela:
         self.txt = tk.Text(card, wrap="word", height=8, bd=0, relief="flat",
                            bg="#f2f8ff", fg=TEMA["text"], font=FUENTES["body"],
                            padx=12, pady=10, highlightthickness=0)
-        self.txt.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.txt.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+
+        # --- validacion del diagnostico (aprendizaje para futuras pasadas) ---
+        val = tk.Frame(card, bg=TEMA["surface"])
+        val.pack(fill="x", padx=12, pady=(0, 10))
+        self.lbl_val = tk.Label(val, text="¿El diagnostico es correcto?", bg=TEMA["surface"],
+                                fg=TEMA["text_sec"], font=FUENTES["small"])
+        self.lbl_val.pack(anchor="w")
+        botones = tk.Frame(val, bg=TEMA["surface"])
+        botones.pack(fill="x", pady=(2, 0))
+        self.btn_val_ok = ttk.Button(botones, text="  ✓ Correcto  ", style="Ghost.TButton",
+                                     command=lambda: self._validar("correcto"))
+        self.btn_val_ok.pack(side="left")
+        self.btn_val_no = ttk.Button(botones, text="  ✗ Corregir…  ", style="Ghost.TButton",
+                                     command=self._abrir_correccion)
+        self.btn_val_no.pack(side="left", padx=(6, 0))
 
     def refrescar(self):
         regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
@@ -1610,6 +1741,8 @@ class FichaParcela:
     def _pintar_graficas(self, regs):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
+        self._hover_ax = ax
+        self._hover_datos = []          # [(x_num, registro), ...] para el puntero
         # solo registros con fecha valida (uno mal formado no debe tumbar la grafica)
         puntos = []
         for r in regs:
@@ -1620,6 +1753,7 @@ class FichaParcela:
         if puntos:
             fechas = [p[0] for p in puntos]
             validos = [p[1] for p in puntos]
+            self._hover_datos = [(mdates.date2num(f), r) for f, r in zip(fechas, validos)]
             for idx, color in [("ndvi", "#2f855a"), ("evi", "#805ad5"),
                                ("savi", "#dd6b20"), ("ndmi", "#3182ce")]:
                 ys = [r.get(idx) for r in validos]
@@ -1643,8 +1777,40 @@ class FichaParcela:
                 ax.axvline(fx, color=col, ls="--", lw=1.0, alpha=0.7, label=lbl)
             ax.legend(fontsize=7, ncol=4, loc="upper center", bbox_to_anchor=(0.5, 1.16))
             self.fig.autofmt_xdate()
+            # --- puntero interactivo: linea vertical + caja con los valores del dia ---
+            self._hover_linea = ax.axvline(fechas[0], color="#94a3b8", lw=0.8,
+                                           alpha=0.0, zorder=1)
+            self._hover_caja = ax.annotate(
+                "", xy=(0, 0), xytext=(12, 12), textcoords="offset points",
+                fontsize=7.5, ha="left", va="bottom", visible=False, zorder=6,
+                bbox=dict(boxstyle="round,pad=0.4", fc="#111827", ec="#111827", alpha=0.92),
+                color="#f8fafc")
+            if getattr(self, "_hover_cid", None) is not None:
+                try:
+                    self.cv.mpl_disconnect(self._hover_cid)
+                except Exception:
+                    pass
+            self._hover_cid = self.cv.mpl_connect("motion_notify_event", self._on_hover)
         self.fig.tight_layout()
         self.cv.draw()
+
+    def _on_hover(self, event):
+        """Muestra los valores de los indices y la fiabilidad del dia mas cercano."""
+        caja = getattr(self, "_hover_caja", None)
+        if caja is None or not self._hover_datos or event.inaxes is not getattr(self, "_hover_ax", None):
+            if caja is not None and caja.get_visible():
+                caja.set_visible(False)
+                self._hover_linea.set_alpha(0.0)
+                self.cv.draw_idle()
+            return
+        x = event.xdata
+        xn, reg = min(self._hover_datos, key=lambda t: abs(t[0] - x))
+        self._hover_linea.set_xdata([xn, xn])
+        self._hover_linea.set_alpha(0.6)
+        caja.xy = (xn, event.ydata)
+        caja.set_text(tooltip_pasada(reg))
+        caja.set_visible(True)
+        self.cv.draw_idle()
 
     def _pintar_leyenda(self):
         self.fig_ley.clear()
@@ -1675,15 +1841,22 @@ class FichaParcela:
         # diagnostico fenologico (rapido, local): fase, estado, cubierta y eventos
         diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec)
         self._estado_actual = diag["estado"]
+        # contexto que se guarda al validar (para aprender)
+        self._val_ctx = {"fecha": actual.get("fecha"), "fase": diag.get("fase"),
+                         "estado": diag.get("estado"),
+                         "cultivo": f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")}
         cab = f"[{diag['estado']}]  Fase: {diag['fase']}"
         c = diag.get("cubierta")
         if c and c["señales"] >= 2:
             cab += f"  ·  Cubierta: {c['hipotesis_preliminar']} ({c['señales']}/4)"
         self.txt.insert(tk.END, cab + "\n\n")
+        self._refrescar_validacion()
 
         if tipo == "BARBECHO":
             self.txt.insert(tk.END, diag["motivo"])
             return
+        # validaciones pasadas del agricultor -> aprendizaje para la IA
+        aprendizaje = DB.validaciones_recientes(limite=8, cultivo=self._val_ctx["cultivo"])
         if actual.get("interpretacion"):          # cacheado
             self.txt.insert(tk.END, actual["interpretacion"])
             return
@@ -1691,7 +1864,8 @@ class FichaParcela:
 
         def worker():
             texto, _d = texto_interpretacion(tipo, sub, regs, actual.get("fecha"),
-                                             eventos_cerca=eventos_cerca, spec=spec)
+                                             eventos_cerca=eventos_cerca, spec=spec,
+                                             aprendizaje=aprendizaje)
             DB.set_interpretacion(self.nombre, self.campana, actual.get("fecha"), texto)
 
             def pintar():
@@ -1701,6 +1875,40 @@ class FichaParcela:
                 self.txt.insert(tk.END, cab + "\n\n" + texto)
             self.master.after(0, pintar)
         threading.Thread(target=worker, daemon=True).start()
+
+    # ---- validacion del diagnostico ----
+    ESTADOS_VALIDABLES = ["OK", "Vigilar", "Revisar", "Segado", "N.A."]
+
+    def _refrescar_validacion(self):
+        """Muestra si la pasada actual ya fue validada y con que veredicto."""
+        if not hasattr(self, "lbl_val") or not self.lbl_val.winfo_exists():
+            return
+        ctx = getattr(self, "_val_ctx", None)
+        if not ctx or not ctx.get("fecha"):
+            self.lbl_val.config(text="Sin pasada que validar.")
+            return
+        v = DB.validacion_de(self.nombre, self.campana, ctx["fecha"])
+        if not v:
+            self.lbl_val.config(text="¿El diagnostico es correcto?", fg=TEMA["text_sec"])
+        elif v.get("veredicto") == "correcto":
+            self.lbl_val.config(text="✓ Validado como correcto.", fg=TEMA["ok_fg"])
+        else:
+            self.lbl_val.config(text=f"✗ Corregido a: {v.get('estado_real','?')}.", fg=TEMA["danger_fg"])
+
+    def _validar(self, veredicto, estado_real=None, nota=""):
+        ctx = getattr(self, "_val_ctx", None)
+        if not ctx or not ctx.get("fecha"):
+            return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.", parent=self.master)
+        DB.guardar_validacion(self.nombre, self.campana, ctx["fecha"], ctx.get("fase"),
+                              ctx.get("cultivo"), ctx.get("estado"), veredicto,
+                              estado_real=estado_real, nota=nota)
+        self._refrescar_validacion()
+
+    def _abrir_correccion(self):
+        ctx = getattr(self, "_val_ctx", None)
+        if not ctx or not ctx.get("fecha"):
+            return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.", parent=self.master)
+        DialogoCorreccion(self.master, self, ctx)
 
     # ================= CUADERNO DE CAMPO =================
     def _build_cuaderno(self, parent):
