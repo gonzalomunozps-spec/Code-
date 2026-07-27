@@ -214,6 +214,7 @@ def marco_scroll(parent, bg=None, rueda_global=False):
         paso = -1 if (getattr(e, "delta", 0) > 0 or getattr(e, "num", 0) == 4) else 1
         canvas.yview_scroll(paso, "units")
 
+    interior.rueda = _rueda          # se expone para enlazar la rueda a mas hijos
     if rueda_global:
         # bind_all mientras el puntero esta dentro; se retira al salir para no
         # interferir con otras zonas scrolleables de la aplicacion.
@@ -234,6 +235,32 @@ def marco_scroll(parent, bg=None, rueda_global=False):
             w.bind("<Button-4>", _rueda)             # Linux
             w.bind("<Button-5>", _rueda)
     return cont, interior
+
+
+# Widgets que gestionan la rueda por su cuenta (no se les enlaza el scroll del
+# marco para no pisar su comportamiento): mapa/grafica (Canvas), tablas (Treeview),
+# texto e desplegables.
+_RUEDA_SALTAR = {"Canvas", "Treeview", "Text", "TCombobox", "Combobox",
+                 "Listbox", "Scrollbar", "TScrollbar"}
+
+
+def enlazar_rueda(widget, handler):
+    """Enlaza la rueda del raton a `widget` y a sus hijos 'seguros', para que el
+    scroll del marco funcione sobre casi toda la superficie (marcos, etiquetas,
+    botones) sin interferir con el zoom del mapa ni el scroll de las tablas."""
+    try:
+        if widget.winfo_class() not in _RUEDA_SALTAR:
+            widget.bind("<MouseWheel>", handler, add="+")
+            widget.bind("<Button-4>", handler, add="+")
+            widget.bind("<Button-5>", handler, add="+")
+    except Exception:
+        pass
+    try:
+        hijos = widget.winfo_children()
+    except Exception:
+        hijos = []
+    for ch in hijos:
+        enlazar_rueda(ch, handler)
 
 
 # --- texto emergente de la grafica: valores de los indices y fiabilidad del dia ---
@@ -1585,19 +1612,29 @@ class FichaParcela:
         cuerpo = tk.Frame(scroll, bg=TEMA["page"])
         cuerpo.pack(fill="both", expand=True, padx=14, pady=14)
 
-        sup = tk.Frame(cuerpo, bg=TEMA["page"])
-        sup.pack(fill="both", expand=True)
+        # Alturas fijas por fila: dentro de un marco con scroll el contenido debe
+        # tener una altura REAL (si se deja expand=True, el mapa y la grafica se
+        # estiran hasta la ventana y no queda nada que desplazar -> no se ve abajo).
+        sup = tk.Frame(cuerpo, bg=TEMA["page"], height=380)
+        sup.pack(fill="x")
+        sup.pack_propagate(False)
         self._build_tabla(sup)
         self._build_mapa(sup)
 
-        inf = tk.Frame(cuerpo, bg=TEMA["page"])
-        inf.pack(fill="both", expand=True, pady=(14, 0))
+        inf = tk.Frame(cuerpo, bg=TEMA["page"], height=320)
+        inf.pack(fill="x", pady=(14, 0))
+        inf.pack_propagate(False)
         self._build_graficas(inf)
         self._build_interp(inf)
 
-        inf2 = tk.Frame(cuerpo, bg=TEMA["page"])
-        inf2.pack(fill="both", expand=True, pady=(14, 0))
+        inf2 = tk.Frame(cuerpo, bg=TEMA["page"], height=280)
+        inf2.pack(fill="x", pady=(14, 0))
+        inf2.pack_propagate(False)
         self._build_cuaderno(inf2)
+
+        # la rueda del raton desplaza la ficha sobre marcos, etiquetas y botones
+        # (el mapa conserva su zoom y las tablas su propio scroll)
+        enlazar_rueda(cuerpo, scroll.rueda)
 
         self.refrescar()
 
