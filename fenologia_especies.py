@@ -31,51 +31,140 @@ def _dias(f1, f2):
 
 
 # =====================================================================
-# CEREALES DE INVIERNO
+# CULTIVOS EXTENSIVOS
 # =====================================================================
-# Fase por dias desde siembra (referencia: trigo).
-# (das_min, das_max, nombre, ndvi_min, ndvi_max, caida_esperada)
-CEREAL_FASES = [
-    (0,   30,  "nascencia",              0.12, 0.35, False),
-    (30,  95,  "ahijado",                0.30, 0.65, False),
-    (95,  140, "encanado",               0.55, 0.85, False),
-    (140, 170, "espigado / floracion",   0.60, 0.92, False),
-    (170, 200, "llenado de grano",       0.50, 0.88, False),
-    (200, 235, "maduracion / senescencia", 0.20, 0.62, True),
-    (235, 400, "rastrojo / cosecha",     0.05, 0.30, True),
-]
-
-# ciclo <1 -> madura antes;  techo -> multiplica el NDVI maximo esperado
-CEREAL_ESPECIES = {
-    "TRIGO":  {"ciclo": 1.00, "techo": 1.00, "nota": "ciclo de referencia"},
-    "CEBADA": {"ciclo": 0.88, "techo": 0.96, "nota": "madura ~2 semanas antes que el trigo"},
-    "AVENA":  {"ciclo": 1.08, "techo": 1.04, "nota": "ciclo mas largo y mas biomasa"},
+# Cada especie tiene su PROPIO calendario fenologico por DIAS DESDE LA SIEMBRA
+# (no un unico patron escalado). Cada fase:
+#   (das_min, das_max, nombre, ndvi_min, ndvi_max, caida_esperada)
+# caida_esperada=True -> una bajada fuerte del NDVI en esa fase es NORMAL
+# (senescencia, maduracion, cosecha), no una alarma.
+EXTENSIVO_ESPECIES = {
+    # ---------------- cereales de invierno (siembra en otono) ----------------
+    "TRIGO": {"grupo": "cereal de invierno", "siembra": "otono", "fases": [
+        (0, 30, "nascencia", 0.12, 0.35, False),
+        (30, 95, "ahijado", 0.30, 0.65, False),
+        (95, 140, "encanado", 0.55, 0.85, False),
+        (140, 170, "espigado / floracion", 0.60, 0.92, False),
+        (170, 205, "llenado de grano", 0.50, 0.88, False),
+        (205, 240, "maduracion / senescencia", 0.20, 0.62, True),
+        (240, 400, "rastrojo / cosecha", 0.05, 0.30, True)]},
+    "CEBADA": {"grupo": "cereal de invierno", "siembra": "otono", "fases": [
+        (0, 25, "nascencia", 0.12, 0.35, False),
+        (25, 80, "ahijado", 0.30, 0.62, False),
+        (80, 120, "encanado", 0.52, 0.82, False),
+        (120, 150, "espigado / floracion", 0.58, 0.90, False),
+        (150, 182, "llenado de grano", 0.45, 0.85, False),
+        (182, 212, "maduracion / senescencia", 0.18, 0.58, True),
+        (212, 400, "rastrojo / cosecha", 0.05, 0.30, True)]},
+    "AVENA": {"grupo": "cereal de invierno", "siembra": "otono", "fases": [
+        (0, 30, "nascencia", 0.12, 0.38, False),
+        (30, 100, "ahijado", 0.32, 0.68, False),
+        (100, 148, "encanado", 0.55, 0.88, False),
+        (148, 180, "espigado / floracion", 0.60, 0.92, False),
+        (180, 215, "llenado de grano", 0.50, 0.88, False),
+        (215, 250, "maduracion / senescencia", 0.20, 0.64, True),
+        (250, 400, "rastrojo / cosecha", 0.05, 0.30, True)]},
+    "CENTENO": {"grupo": "cereal de invierno", "siembra": "otono", "fases": [
+        (0, 28, "nascencia", 0.12, 0.35, False),
+        (28, 90, "ahijado", 0.30, 0.66, False),
+        (90, 130, "encanado", 0.55, 0.86, False),
+        (130, 158, "espigado / floracion", 0.60, 0.90, False),
+        (158, 195, "llenado de grano", 0.48, 0.86, False),
+        (195, 228, "maduracion / senescencia", 0.20, 0.60, True),
+        (228, 400, "rastrojo / cosecha", 0.05, 0.30, True)]},
+    "TRITICALE": {"grupo": "cereal de invierno", "siembra": "otono", "fases": [
+        (0, 30, "nascencia", 0.12, 0.36, False),
+        (30, 98, "ahijado", 0.32, 0.66, False),
+        (98, 145, "encanado", 0.56, 0.87, False),
+        (145, 175, "espigado / floracion", 0.60, 0.92, False),
+        (175, 210, "llenado de grano", 0.50, 0.88, False),
+        (210, 245, "maduracion / senescencia", 0.20, 0.62, True),
+        (245, 400, "rastrojo / cosecha", 0.05, 0.30, True)]},
+    # ---------------- primavera / verano ----------------
+    "MAIZ": {"grupo": "cereal de primavera", "siembra": "primavera", "fases": [
+        (0, 15, "nascencia", 0.10, 0.30, False),
+        (15, 55, "desarrollo vegetativo", 0.30, 0.78, False),
+        (55, 80, "floracion (panoja/sedas)", 0.75, 0.92, False),
+        (80, 120, "llenado de grano", 0.68, 0.90, False),
+        (120, 150, "maduracion (dentado)", 0.35, 0.75, True),
+        (150, 400, "seco / cosecha", 0.15, 0.45, True)]},
+    "SORGO": {"grupo": "cereal de primavera", "siembra": "primavera", "fases": [
+        (0, 15, "nascencia", 0.10, 0.30, False),
+        (15, 55, "desarrollo vegetativo", 0.30, 0.75, False),
+        (55, 80, "floracion", 0.68, 0.90, False),
+        (80, 115, "llenado de grano", 0.60, 0.88, False),
+        (115, 145, "maduracion", 0.30, 0.70, True),
+        (145, 400, "seco / cosecha", 0.15, 0.45, True)]},
+    "GIRASOL": {"grupo": "oleaginosa de primavera", "siembra": "primavera", "fases": [
+        (0, 15, "emergencia", 0.10, 0.28, False),
+        (15, 50, "desarrollo", 0.28, 0.72, False),
+        (50, 70, "boton floral", 0.62, 0.85, False),
+        (70, 92, "floracion", 0.68, 0.88, False),
+        (92, 120, "llenado / madurez", 0.40, 0.80, True),
+        (120, 400, "seco / cosecha", 0.12, 0.45, True)]},
+    "COLZA": {"grupo": "oleaginosa de invierno", "siembra": "otono", "fases": [
+        (0, 30, "emergencia", 0.15, 0.40, False),
+        (30, 120, "roseta (invierno)", 0.35, 0.70, False),
+        (120, 160, "encanado", 0.55, 0.82, False),
+        (160, 188, "floracion (flor amarilla)", 0.45, 0.78, False),
+        (188, 230, "formacion de silicuas", 0.55, 0.85, False),
+        (230, 262, "maduracion", 0.25, 0.60, True),
+        (262, 400, "cosecha", 0.10, 0.35, True)]},
+    "GUISANTE": {"grupo": "leguminosa", "siembra": "otono/invierno", "fases": [
+        (0, 20, "nascencia", 0.12, 0.35, False),
+        (20, 70, "desarrollo", 0.30, 0.72, False),
+        (70, 98, "floracion", 0.60, 0.85, False),
+        (98, 132, "llenado de vaina", 0.50, 0.82, False),
+        (132, 162, "maduracion", 0.20, 0.55, True),
+        (162, 400, "cosecha", 0.05, 0.30, True)]},
+    "VEZA": {"grupo": "leguminosa", "siembra": "otono", "fases": [
+        (0, 25, "nascencia", 0.12, 0.35, False),
+        (25, 90, "desarrollo", 0.30, 0.75, False),
+        (90, 125, "floracion", 0.55, 0.85, False),
+        (125, 160, "llenado de vaina", 0.45, 0.80, False),
+        (160, 195, "maduracion", 0.20, 0.55, True),
+        (195, 400, "cosecha", 0.05, 0.30, True)]},
+    "REMOLACHA": {"grupo": "raiz de primavera", "siembra": "primavera", "fases": [
+        (0, 25, "nascencia", 0.10, 0.35, False),
+        (25, 70, "desarrollo foliar", 0.35, 0.78, False),
+        (70, 110, "cierre de calle", 0.72, 0.92, False),
+        (110, 185, "engorde de raiz", 0.70, 0.92, False),
+        (185, 215, "madurez", 0.55, 0.85, False),
+        (215, 400, "recoleccion", 0.25, 0.70, True)]},
 }
 
+# alias por compatibilidad (el nombre antiguo apuntaba solo a cereales)
+CEREAL_ESPECIES = EXTENSIVO_ESPECIES
 
-def fase_cereal(especie, fecha_siembra, fecha_iso):
-    """Devuelve dict con fase, dias desde siembra y rango de NDVI esperado."""
-    e = CEREAL_ESPECIES.get(especie, CEREAL_ESPECIES["TRIGO"])
+
+def fase_extensivo(especie, fecha_siembra, fecha_iso):
+    """Fase, dias desde siembra y rango de NDVI esperado, usando el calendario
+    PROPIO de cada cultivo extensivo."""
+    info = EXTENSIVO_ESPECIES.get(especie) or EXTENSIVO_ESPECIES["TRIGO"]
+    fases = info["fases"]
     if not fecha_siembra:
         # sin fecha de siembra no se puede afinar: rango amplio de seguridad
         return {"fase": "sin fecha de siembra", "das": None,
-                "lo": 0.15, "hi": 0.85, "caida": False, "previo": False}
+                "lo": 0.15, "hi": 0.90, "caida": False, "previo": False}
     try:
         das = _dias(fecha_siembra, fecha_iso)
     except (TypeError, ValueError):          # fecha de siembra o pasada mal formada
         return {"fase": "sin fecha de siembra", "das": None,
-                "lo": 0.15, "hi": 0.85, "caida": False, "previo": False}
+                "lo": 0.15, "hi": 0.90, "caida": False, "previo": False}
     if das < 0:
         return {"fase": "presiembra", "das": das, "lo": 0.05, "hi": 0.20,
                 "caida": False, "previo": True}
-    eff = das / e["ciclo"]
-    for d0, d1, nombre, lo, hi, caida in CEREAL_FASES:
-        if d0 <= eff < d1:
-            return {"fase": nombre, "das": das, "das_equiv": round(eff),
-                    "lo": round(lo, 2), "hi": round(min(0.95, hi * e["techo"]), 2),
+    for d0, d1, nombre, lo, hi, caida in fases:
+        if d0 <= das < d1:
+            return {"fase": nombre, "das": das, "lo": lo, "hi": hi,
                     "caida": caida, "previo": False}
-    return {"fase": "rastrojo / cosecha", "das": das, "lo": 0.05, "hi": 0.30,
-            "caida": True, "previo": False}
+    ult = fases[-1]
+    return {"fase": ult[2], "das": das, "lo": ult[3], "hi": ult[4],
+            "caida": ult[5], "previo": False}
+
+
+# nombre antiguo, se mantiene por compatibilidad
+fase_cereal = fase_extensivo
 
 
 # =====================================================================

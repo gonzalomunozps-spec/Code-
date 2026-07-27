@@ -139,6 +139,38 @@ def pruebas_fenologia():
           marco_calle=5, marco_pie=4), lambda r: r.get("grupo") == "LENOSO")
     check("fase_por_especie: barbecho", lambda: fase_por_especie("BARBECHO", "", "2026-06-01"),
           lambda r: r.get("barbecho") is True)
+    # --- calendario propio por cultivo extensivo (12 cultivos diferenciados) ---
+    from fenologia_especies import EXTENSIVO_ESPECIES, ESPECIES, fase_extensivo
+    check("extensivo: la UI lista los 12 cultivos",
+          lambda: ESPECIES["EXTENSIVO"], lambda r: len(r) == 12 and "MAIZ" in r and "GIRASOL" in r)
+    check("maiz: das~65 -> floracion, NDVI alto, sin caida",
+          lambda: fase_extensivo("MAIZ", "2026-04-15", "2026-06-19"),
+          lambda r: "floracion" in r["fase"] and r["lo"] >= 0.7 and r["caida"] is False)
+    check("maiz: das~135 -> maduracion (dentado) con caida",
+          lambda: fase_extensivo("MAIZ", "2026-04-15", "2026-08-28"),
+          lambda r: "maduracion" in r["fase"] and r["caida"] is True)
+    check("girasol: das~56 -> boton floral",
+          lambda: fase_extensivo("GIRASOL", "2026-04-20", "2026-06-15"),
+          lambda r: r["fase"] == "boton floral")
+    check("cebada mas precoz que trigo (misma siembra, misma fecha)",
+          lambda: (fase_extensivo("CEBADA", "2025-11-01", "2026-05-20")["das"],
+                   fase_extensivo("CEBADA", "2025-11-01", "2026-05-20")["fase"],
+                   fase_extensivo("TRIGO",  "2025-11-01", "2026-05-20")["fase"]),
+          lambda r: r[1] != r[2])
+    check("remolacha: engorde de raiz sin caida",
+          lambda: fase_extensivo("REMOLACHA", "2026-03-15", "2026-07-15"),
+          lambda r: "raiz" in r["fase"] and r["caida"] is False)
+    check("colza: silicuas",
+          lambda: fase_extensivo("COLZA", "2025-10-01", "2026-04-15"),
+          lambda r: "silicua" in r["fase"])
+    check("extensivo: cultivo desconocido no revienta (fallback)",
+          lambda: fase_extensivo("QUINOA", "2026-04-15", "2026-06-15"), lambda r: "fase" in r)
+    check("extensivo: sin fecha de siembra -> rango amplio",
+          lambda: fase_extensivo("MAIZ", None, "2026-06-15"),
+          lambda r: r["fase"] == "sin fecha de siembra" and r["lo"] == 0.15 and r["hi"] == 0.90)
+    check("extensivo: presiembra (fecha anterior a siembra)",
+          lambda: fase_extensivo("MAIZ", "2026-05-01", "2026-04-15"),
+          lambda r: r["fase"] == "presiembra" and r["previo"] is True)
 
 
 # =====================================================================
