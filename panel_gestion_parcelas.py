@@ -367,6 +367,19 @@ def rango_campana(campana):
     return f"{a0}-09-01", f"{a1}-08-31"
 
 
+def campanas_entre(inicio, fin):
+    """Lista de campanas 'A-B' desde `inicio` hasta `fin` (inclusive), mas reciente
+    primero. Tolera entradas mal formadas devolviendo al menos `fin`."""
+    try:
+        a0 = int(str(inicio).split("-")[0])
+        a1 = int(str(fin).split("-")[0])
+    except (ValueError, TypeError, AttributeError):
+        return [fin]
+    if a0 > a1:
+        a0, a1 = a1, a0
+    return [f"{y}-{y + 1}" for y in range(a1, a0 - 1, -1)]
+
+
 def superficie_ha(coords):
     if not coords or len(coords) < 3:
         return 0.0
@@ -1056,12 +1069,13 @@ class PanelGestionParcelas(ttk.Frame):
     def abrir_alta_parcela(self):
         VentanaAltaParcela(self)
 
-    def guardar_parcela(self, nombre, propietario, tipo, spec, coords):
+    def guardar_parcela(self, nombre, propietario, tipo, spec, coords, campana=None):
+        camp = campana or self.campana
         cerrado = coords + [coords[0]] if coords and coords[0] != coords[-1] else coords
         ficha = DB.ficha(nombre) or {}
         ficha.update({"propietario": propietario, "coordenadas": cerrado,
                       "superficie_ha": superficie_ha(cerrado),
-                      "anio_inicio_monitoreo": ficha.get("anio_inicio_monitoreo", self.campana)})
+                      "anio_inicio_monitoreo": ficha.get("anio_inicio_monitoreo", camp)})
         # subtipo derivado (compatibilidad y visualizacion):
         #   leñoso -> tipo de plantacion segun el marco; cereal -> COSECHA_GRANO
         spec = dict(spec or {})
@@ -1073,10 +1087,14 @@ class PanelGestionParcelas(ttk.Frame):
             subtipo = spec.get("finalidad") if spec.get("finalidad") in ("SIEGA_VERDE", "COSECHA_GRANO") else "COSECHA_GRANO"
         cultivo = {"tipo": tipo, "subtipo": subtipo}
         cultivo.update(spec)          # especie, fecha_siembra, marco_calle, marco_pie, finalidad
-        ficha.setdefault("cultivos_por_campana", {})[self.campana] = cultivo
+        ficha.setdefault("cultivos_por_campana", {})[camp] = cultivo
         DB.guardar_ficha(nombre, ficha)
         self.cb_campana["values"] = self._campanas()
         self._refrescar()
+
+    def editar_parcela(self, nombre, campana):
+        """Abre la ventana de alta en modo edicion (prellena la parcela)."""
+        VentanaAltaParcela(self, editar=nombre, campana=campana)
 
     def _abrir_ficha_sel(self, _):
         sel = self.tree.selection()
@@ -1105,10 +1123,12 @@ class PanelGestionParcelas(ttk.Frame):
 # VENTANA DE ALTA
 # =====================================================================
 class VentanaAltaParcela(tk.Toplevel):
-    def __init__(self, panel):
+    def __init__(self, panel, editar=None, campana=None):
         super().__init__(panel)
         self.panel = panel
-        self.title("Nueva parcela")
+        self.editar = editar                       # nombre de la parcela a editar (o None = alta)
+        self.campana_edit = campana or panel.campana
+        self.title("Editar parcela" if editar else "Nueva parcela")
         self.geometry("1000x600")
         self.configure(bg=TEMA["page"])
         self.coords = []
@@ -1121,7 +1141,8 @@ class VentanaAltaParcela(tk.Toplevel):
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
-        tk.Label(cab, text="Nueva parcela", bg=TEMA["header_bg"], fg="#fff",
+        _tit = f"Editar parcela · {editar.replace('_', ' ')}" if editar else "Nueva parcela"
+        tk.Label(cab, text=_tit, bg=TEMA["header_bg"], fg="#fff",
                  font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=10)
 
         cuerpo = tk.Frame(self, bg=TEMA["page"])
@@ -1223,7 +1244,8 @@ class VentanaAltaParcela(tk.Toplevel):
         ttk.Button(botones, text="Deshacer punto", command=self._deshacer).pack(
             side="left", expand=True, fill="x", padx=(0, 4))
         ttk.Button(botones, text="Limpiar", command=self._limpiar).pack(side="left", expand=True, fill="x")
-        ttk.Button(form, text="Guardar parcela", style="Accent.TButton",
+        ttk.Button(form, text="Guardar cambios" if editar else "Guardar parcela",
+                   style="Accent.TButton",
                    command=self._guardar).pack(fill="x", padx=16, pady=14)
 
         mapwrap = tarjeta(cuerpo)
@@ -1252,6 +1274,43 @@ class VentanaAltaParcela(tk.Toplevel):
         else:
             tk.Label(mapwrap, text="tkintermapview no disponible.\nUsa la geometria por SIGPAC.",
                      bg=TEMA["surface"], fg=TEMA["danger_fg"]).pack(expand=True)
+
+        if editar:
+            self.after(120, self._prellenar)
+
+    def _prellenar(self):
+        """Carga en el formulario los datos de la parcela a editar."""
+        ficha = DB.ficha(self.editar) or {}
+        self.e_nombre.insert(0, self.editar.replace("_", " "))
+        self.e_nombre.config(state="readonly")     # el nombre identifica la parcela: no se cambia aqui
+        self.e_prop.insert(0, ficha.get("propietario", ""))
+        cult = (ficha.get("cultivos_por_campana", {}) or {}).get(self.campana_edit, {})
+        tipo = cult.get("tipo", "")
+        if tipo:
+            self.cb_tipo.set(tipo)
+            self._sub()                            # rellena especies y muestra los campos del tipo
+            if cult.get("especie"):
+                self.cb_sub.set(cult["especie"])
+            if tipo == "EXTENSIVO":
+                self.cb_finalidad.set("Siega en verde (forraje)"
+                                      if cult.get("subtipo") == "SIEGA_VERDE" or cult.get("finalidad") == "SIEGA_VERDE"
+                                      else "Cosecha de grano")
+                if cult.get("fecha_siembra"):
+                    self.e_siembra.insert(0, cult["fecha_siembra"])
+            elif tipo == "LENOSO":
+                if cult.get("marco_calle") is not None:
+                    self.e_calle.insert(0, str(cult["marco_calle"]))
+                if cult.get("marco_pie") is not None:
+                    self.e_pie.insert(0, str(cult["marco_pie"]))
+                self._calc_marco()
+        # geometria: cargar los vertices y dibujarlos (sin el punto de cierre duplicado)
+        coords = ficha.get("coordenadas") or []
+        if len(coords) >= 2 and coords[0] == coords[-1]:
+            coords = coords[:-1]
+        self.coords = [list(c) for c in coords]
+        if _MAPVIEW and self.coords:
+            self._redibujar()
+            self.mapa.set_position(self.coords[0][1], self.coords[0][0], zoom=15)
 
     def _cambiar_capa(self):
         capa = self.cb_capa.get() if hasattr(self, "cb_capa") else "Satelite"
@@ -1347,7 +1406,8 @@ class VentanaAltaParcela(tk.Toplevel):
         messagebox.showinfo("SIGPAC", f"Recinto capturado ({len(coords)} vertices).", parent=self)
 
     def _guardar(self):
-        nombre = nombre_seguro(self.e_nombre.get())
+        # en edicion el nombre identifica la parcela y no se cambia (campo readonly)
+        nombre = self.editar or nombre_seguro(self.e_nombre.get())
         prop = self.e_prop.get().strip()
         tipo, esp = self.cb_tipo.get(), self.cb_sub.get()
         if not nombre or not prop or not tipo:
@@ -1375,9 +1435,14 @@ class VentanaAltaParcela(tk.Toplevel):
             except ValueError:
                 return messagebox.showwarning("Marco", "Indica el marco de plantacion (calle y pie en metros).", parent=self)
 
-        self.panel.guardar_parcela(nombre, prop, tipo, spec, self.coords)
-        messagebox.showinfo("OK", f"Parcela '{nombre}' guardada.", parent=self)
-        self.destroy()
+        self.panel.guardar_parcela(nombre, prop, tipo, spec, self.coords, campana=self.campana_edit)
+        if self.editar:
+            messagebox.showinfo("OK", f"Cambios guardados en '{nombre.replace('_', ' ')}'.", parent=self)
+            self.destroy()
+            self.panel.mostrar_ficha(nombre)       # recarga la ficha con los datos nuevos
+        else:
+            messagebox.showinfo("OK", f"Parcela '{nombre}' guardada.", parent=self)
+            self.destroy()
 
 
 # =====================================================================
@@ -1588,6 +1653,93 @@ class DialogoCorreccion(tk.Toplevel):
         self.destroy()
 
 
+class DialogoSincronizarCampanas(tk.Toplevel):
+    """Descarga Copernicus para una o varias campanas (anos anteriores) de la parcela."""
+    def __init__(self, master, panel, nombre, campana_ficha):
+        super().__init__(master)
+        self.panel, self.nombre = panel, nombre
+        self.title("Sincronizar campanas anteriores")
+        self.configure(bg=TEMA["surface"])
+        self.resizable(False, False)
+        self.transient(master.winfo_toplevel())
+        self.lift()
+        self.after(60, self.focus_force)
+        self.grab_set()
+
+        ficha = DB.ficha(nombre) or {}
+        actual = campana_actual()
+        a0 = int(actual.split("-")[0])
+        inicio = ficha.get("anio_inicio_monitoreo") or f"{a0 - 5}-{a0 - 4}"
+        camps = campanas_entre(inicio, actual)     # mas reciente primero
+
+        tk.Label(self, text=f"Parcela: {nombre.replace('_', ' ')}", bg=TEMA["surface"],
+                 fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(self, text="Marca las campanas que quieras descargar del satelite. La descarga\n"
+                            "es incremental (no repite lo ya guardado). Para VER una campana,\n"
+                            "seleccionala luego en el desplegable de campana del panel.",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"],
+                 justify="left").pack(anchor="w", padx=16)
+
+        cont, interior = marco_scroll(self, bg=TEMA["surface"], rueda_global=True)
+        cont.configure(height=180, width=280)
+        cont.pack(fill="x", padx=16, pady=8)
+        cont.pack_propagate(False)
+        self.vars = {}
+        for c in camps:
+            v = tk.BooleanVar(value=(c == campana_ficha))
+            self.vars[c] = v
+            etq = c + ("   (actual)" if c == actual else "")
+            ttk.Checkbutton(interior, text=etq, variable=v).pack(anchor="w", pady=1)
+
+        self.lbl_prog = tk.Label(self, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                 font=FUENTES["small"])
+        self.lbl_prog.pack(anchor="w", padx=16)
+        bar = tk.Frame(self, bg=TEMA["surface"])
+        bar.pack(fill="x", padx=16, pady=14)
+        ttk.Button(bar, text="Cerrar", style="Ghost.TButton", command=self.destroy).pack(side="right")
+        self.btn = ttk.Button(bar, text="Sincronizar seleccionadas", style="Accent.TButton",
+                              command=self._sync)
+        self.btn.pack(side="right", padx=(0, 8))
+
+    def _sync(self):
+        if not _EE:
+            return messagebox.showwarning("GEE", "earthengine-api no disponible.", parent=self)
+        sel = [c for c, v in self.vars.items() if v.get()]
+        if not sel:
+            return messagebox.showinfo("Sincronizar", "No has marcado ninguna campana.", parent=self)
+        self.btn.config(state="disabled")
+        threading.Thread(target=self._worker, args=(sel,), daemon=True).start()
+
+    def _worker(self, sel):
+        total, lineas = 0, []
+        orden = sorted(sel)
+        for i, camp in enumerate(orden, 1):
+            self.after(0, lambda c=camp, k=i: self._prog(f"Sincronizando {c}  ({k}/{len(orden)})…"))
+            try:
+                n, msg = sincronizar_parcela(self.nombre, camp, silencioso=True)
+            except Exception as e:
+                n, msg = 0, f"error: {e}"
+            total += n
+            lineas.append(f"{camp}: {msg}")
+        if ULTIMO_SYNC.get("estado") != "fallo":
+            _marca_sync_guardar()
+
+        def fin():
+            if not self.btn.winfo_exists():
+                return
+            self._prog(f"Hecho. {total} pasada(s) nueva(s) en total.")
+            self.btn.config(state="normal")
+            self.panel.cb_campana["values"] = self.panel._campanas()
+            self.panel._actualizar_estado_sync()
+            self.panel._refrescar()
+            messagebox.showinfo("Sincronizacion de campanas", "\n".join(lineas), parent=self)
+        self.after(0, fin)
+
+    def _prog(self, texto):
+        if self.lbl_prog.winfo_exists():
+            self.lbl_prog.config(text=texto)
+
+
 # =====================================================================
 # FICHA DE PARCELA
 # =====================================================================
@@ -1605,7 +1757,11 @@ class FichaParcela:
         tk.Label(cab, text=f"{nombre.replace('_',' ')}   ·   Campana {campana}",
                  bg=TEMA["header_bg"], fg="#fff", font=FUENTES["h2"]).pack(side="left")
         ttk.Button(cab, text="  \u21BB Sincronizar Copernicus  ", style="Ghost.TButton",
-                   command=self.sincronizar).pack(side="right", padx=12, pady=10)
+                   command=self.sincronizar).pack(side="right", padx=(0, 12), pady=10)
+        ttk.Button(cab, text="  \u23F2 Campanas anteriores  ", style="Ghost.TButton",
+                   command=self._sincronizar_anteriores).pack(side="right", padx=(0, 4), pady=10)
+        ttk.Button(cab, text="  \u270E Editar parcela  ", style="Ghost.TButton",
+                   command=self._editar).pack(side="right", padx=(0, 4), pady=10)
 
         cont, scroll = marco_scroll(master, bg=TEMA["page"])
         cont.pack(fill="both", expand=True)
@@ -2178,6 +2334,12 @@ class FichaParcela:
         if hasattr(self, "lbl_res"):
             z = "ajuste" if self.zoom is None else f"{self.zoom:.2f}x"
             self.lbl_res.config(text=f"{getattr(self, '_info_res', f'{orig_w}x{orig_h} px')}  ·  zoom {z}")
+
+    def _editar(self):
+        self.panel.editar_parcela(self.nombre, self.campana)
+
+    def _sincronizar_anteriores(self):
+        DialogoSincronizarCampanas(self.master, self.panel, self.nombre, self.campana)
 
     def sincronizar(self):
         if not _EE:

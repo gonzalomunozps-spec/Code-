@@ -511,6 +511,24 @@ def pruebas_panel_helpers():
           lambda: tip({"fecha": "2026-05-05", "ndvi": 0.5}), lambda r: "Fiabilidad" not in r)
     check("tooltip: registro vacio -> cadena vacia", lambda: tip({}), lambda r: r == "" or "None" not in r)
 
+    # campanas_entre (para sincronizar anos anteriores)
+    m2 = re.search(r"\ndef campanas_entre\(.*?\n(?=\ndef superficie_ha)", src, re.S)
+    if not m2:
+        _FALLA.append(("panel", "no se localiza campanas_entre en el panel"))
+        return
+    ns2 = {}
+    exec(m2.group(0), ns2)
+    ce = ns2["campanas_entre"]
+    check("campanas_entre: rango descendente inclusive",
+          lambda: ce("2022-2023", "2025-2026"),
+          lambda r: r == ["2025-2026", "2024-2025", "2023-2024", "2022-2023"])
+    check("campanas_entre: una sola campana",
+          lambda: ce("2025-2026", "2025-2026"), lambda r: r == ["2025-2026"])
+    check("campanas_entre: orden invertido se corrige",
+          lambda: ce("2025-2026", "2023-2024"), lambda r: r[0] == "2025-2026" and len(r) == 3)
+    check("campanas_entre: entrada mal formada no revienta",
+          lambda: ce(None, "2025-2026"), lambda r: r == ["2025-2026"])
+
 
 # =====================================================================
 def main():
