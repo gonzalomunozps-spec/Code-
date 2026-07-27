@@ -296,6 +296,55 @@ def nombre_seguro(nombre):
     return n or "parcela"
 
 
+# ---------------------------------------------------------------------------
+# SIGPAC: parseo robusto de la respuesta GeoJSON
+# ---------------------------------------------------------------------------
+def sigpac_geometria(data):
+    """Extrae la geometria de una respuesta SIGPAC sea Feature, FeatureCollection
+    o geometria suelta. Devuelve el dict de geometria o None."""
+    if not isinstance(data, dict):
+        return None
+    t = data.get("type")
+    if t == "FeatureCollection":
+        feats = data.get("features") or []
+        return feats[0].get("geometry") if feats else None
+    if t == "Feature":
+        return data.get("geometry")
+    if t in ("Polygon", "MultiPolygon"):
+        return data
+    return data.get("geometry")
+
+
+def sigpac_anillo(geom):
+    """Anillo exterior [[x,y],...] de un Polygon o MultiPolygon."""
+    if not geom:
+        return None
+    t, c = geom.get("type"), geom.get("coordinates") or []
+    if t == "Polygon" and c:
+        return c[0]
+    if t == "MultiPolygon" and c and c[0]:
+        return c[0][0]
+    return None
+
+
+def sigpac_a_lonlat(coords):
+    """Devuelve las coordenadas como [lon,lat]. Si vienen en UTM (EPSG:25830,
+    valores grandes) intenta convertirlas; si no puede, lanza un error claro en
+    vez de colocar la parcela en un sitio equivocado en silencio."""
+    if not coords:
+        return coords
+    x0, y0 = coords[0][0], coords[0][1]
+    if abs(x0) <= 180 and abs(y0) <= 90:
+        return [[float(p[0]), float(p[1])] for p in coords]      # ya es lon/lat
+    try:
+        from pyproj import Transformer
+        tr = Transformer.from_crs("EPSG:25830", "EPSG:4326", always_xy=True)
+        return [list(tr.transform(float(p[0]), float(p[1]))) for p in coords]
+    except ImportError:
+        raise ValueError("El recinto viene en coordenadas UTM y falta 'pyproj' para "
+                         "convertirlas (pip install pyproj).")
+
+
 def spec_de(cultivo):
     """Extrae el modelo por especie del registro de cultivo (o None si es antiguo)."""
     if not cultivo or not cultivo.get("especie"):
@@ -962,19 +1011,24 @@ class VentanaAltaParcela(tk.Toplevel):
 
         box = tarjeta(form)
         box.pack(fill="x", padx=16, pady=12)
-        tk.Label(box, text="Geometria por SIGPAC", bg=TEMA["surface"], fg=TEMA["text"],
+        tk.Label(box, text="Geometria por SIGPAC  (Agr y Zona: 0 si no aplica)",
+                 bg=TEMA["surface"], fg=TEMA["text"],
                  font=FUENTES["small"]).grid(row=0, column=0, columnspan=6, sticky="w",
                                              padx=8, pady=(8, 4))
         self.sig = {}
-        for i, kk in enumerate(["Prov", "Mun", "Pol", "Par", "Rec"]):
+        campos = ["Prov", "Mun", "Agr", "Zona", "Pol", "Par", "Rec"]
+        for i, kk in enumerate(campos):
             tk.Label(box, text=kk, bg=TEMA["surface"], fg=TEMA["text_muted"],
                      font=FUENTES["small"]).grid(row=1 + i // 3, column=(i % 3) * 2,
                                                  sticky="w", padx=(8, 2))
             e = ttk.Entry(box, width=6)
             e.grid(row=1 + i // 3, column=(i % 3) * 2 + 1, padx=2, pady=2)
+            if kk in ("Agr", "Zona"):
+                e.insert(0, "0")
             self.sig[kk] = e
+        fila_btn = 1 + (len(campos) + 2) // 3
         ttk.Button(box, text="Capturar recinto SIGPAC", command=self._sigpac).grid(
-            row=3, column=0, columnspan=6, sticky="ew", padx=8, pady=(6, 8))
+            row=fila_btn, column=0, columnspan=6, sticky="ew", padx=8, pady=(6, 8))
 
         tk.Label(form, text="...o dibuja los bordes en el mapa (clic izquierdo).",
                  bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(anchor="w", **pad)
@@ -1087,21 +1141,38 @@ class VentanaAltaParcela(tk.Toplevel):
         self._redibujar()
 
     def _sigpac(self):
-        v = {k: e.get() for k, e in self.sig.items()}
-        if not all(v.values()):
-            return messagebox.showwarning("SIGPAC", "Rellena Prov/Mun/Pol/Par/Rec.", parent=self)
+        v = {k: e.get().strip() for k, e in self.sig.items()}
+        # obligatorios; Agr/Zona valen 0 si se dejan vacios (recintos sin agregado/zona)
+        if not all(v.get(k) for k in ("Prov", "Mun", "Pol", "Par", "Rec")):
+            return messagebox.showwarning("SIGPAC", "Rellena al menos Prov, Mun, Pol, Par y Rec.", parent=self)
+        agr = v.get("Agr") or "0"
+        zona = v.get("Zona") or "0"
+        # Un recinto SIGPAC se identifica por 7 codigos: prov/mun/agregado/zona/pol/par/rec.
         url = ("https://sigpac.mapa.gob.es/fega/serviciosrest/v1/recintos/geojson/"
-               f"{v['Prov']}/{v['Mun']}/{v['Pol']}/{v['Par']}/{v['Rec']}")
+               f"{v['Prov']}/{v['Mun']}/{agr}/{zona}/{v['Pol']}/{v['Par']}/{v['Rec']}")
+        r = None
         try:
-            geo = requests.get(url, timeout=10).json()["geometry"]
-            c = geo["coordinates"][0] if geo["type"] == "Polygon" else geo["coordinates"][0][0]
-            self.coords = [[p[0], p[1]] for p in c]
+            r = requests.get(url, timeout=15)
+            r.raise_for_status()
+            geom = sigpac_geometria(r.json())
+            anillo = sigpac_anillo(geom)
+            if not anillo or len(anillo) < 3:
+                return messagebox.showwarning(
+                    "SIGPAC", "El servicio no devolvio un recinto valido. Revisa los codigos "
+                    "(prov/mun/agregado/zona/poligono/parcela/recinto).", parent=self)
+            coords = sigpac_a_lonlat(anillo)
+            self.coords = coords
             if _MAPVIEW:
                 self._redibujar()
-                self.mapa.set_position(self.coords[0][1], self.coords[0][0], zoom=16)
-            messagebox.showinfo("SIGPAC", "Recinto capturado.", parent=self)
+                self.mapa.set_position(coords[0][1], coords[0][0], zoom=16)
+            messagebox.showinfo("SIGPAC", f"Recinto capturado ({len(coords)} vertices).", parent=self)
+        except requests.HTTPError:
+            messagebox.showerror("SIGPAC", f"El servidor respondio {r.status_code if r else '?'}. "
+                                 "Revisa los codigos o si el servicio SIGPAC esta disponible.", parent=self)
+        except requests.RequestException as e:
+            messagebox.showerror("SIGPAC", f"No se pudo conectar con SIGPAC: {e}", parent=self)
         except Exception as e:
-            messagebox.showerror("SIGPAC", f"Error: {e}", parent=self)
+            messagebox.showerror("SIGPAC", f"No se pudo capturar el recinto: {e}", parent=self)
 
     def _guardar(self):
         nombre = nombre_seguro(self.e_nombre.get())

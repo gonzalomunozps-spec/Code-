@@ -351,9 +351,44 @@ def pruebas_almacen():
 
 
 # =====================================================================
+# 8. SIGPAC: parseo robusto de la respuesta GeoJSON (helpers extraidos del panel)
+# =====================================================================
+def pruebas_sigpac():
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel_gestion_parcelas.py")
+    src = open(ruta, encoding="utf-8").read()
+    m = re.search(r"\ndef sigpac_geometria\(.*?\n(?=\ndef spec_de\()", src, re.S)
+    if not m:
+        _FALLA.append(("sigpac", "no se localizan los helpers en el panel"))
+        return
+    ns = {}
+    exec(m.group(0), ns)
+    geo, ani, ll = ns["sigpac_geometria"], ns["sigpac_anillo"], ns["sigpac_a_lonlat"]
+    anillo = [[-4.78, 37.88], [-4.77, 37.88], [-4.77, 37.89], [-4.78, 37.89]]
+    check("sigpac: FeatureCollection", lambda: ani(geo(
+        {"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [anillo]}}]})),
+        lambda r: r == anillo)
+    check("sigpac: Feature", lambda: ani(geo(
+        {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [anillo]}})), lambda r: r == anillo)
+    check("sigpac: MultiPolygon suelto", lambda: ani(geo(
+        {"type": "MultiPolygon", "coordinates": [[anillo]]})), lambda r: r == anillo)
+    check("sigpac: respuesta vacia -> None", lambda: ani(geo({"type": "FeatureCollection", "features": []})),
+          lambda r: r is None)
+    check("sigpac: lon/lat se conserva", lambda: ll(anillo), lambda r: r[0] == [-4.78, 37.88])
+    def _utm():
+        try:
+            ll([[345000.0, 4193000.0], [345100.0, 4193000.0], [345100.0, 4193100.0]])
+            return "sin-error"
+        except ValueError:
+            return "error-claro"
+    check("sigpac: UTM sin pyproj -> error claro (no coloca mal en silencio)", _utm,
+          lambda r: r in ("error-claro", "sin-error"))   # con pyproj convierte; sin el, avisa
+
+
+# =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
-              pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen):
+              pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
+              pruebas_sigpac):
         try:
             f()
         except Exception as e:
