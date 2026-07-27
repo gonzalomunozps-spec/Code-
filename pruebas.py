@@ -414,6 +414,36 @@ def pruebas_sigpac():
             return "error-claro"
     check("sigpac: UTM sin pyproj -> error claro (no coloca mal en silencio)", _utm,
           lambda r: r in ("error-claro", "sin-error"))   # con pyproj convierte; sin el, avisa
+    # --- consulta con varios endpoints y mensajes de error claros ---
+    consultar = ns["sigpac_consultar"]; urls = ns["sigpac_urls"]; SigErr = ns["SigpacError"]
+    V = {"Prov": "14", "Mun": "21", "Agr": "0", "Zona": "0", "Pol": "5", "Par": "12", "Rec": "1"}
+    poly = {"type": "FeatureCollection",
+            "features": [{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [anillo]}}]}
+    class _Resp:
+        def __init__(self, code, payload=None): self.status_code = code; self._p = payload; self.text = ""
+        def json(self):
+            if self._p is None: raise ValueError("sin json")
+            return self._p
+    check("sigpac: urls -> 2 endpoints con los 7 codigos",
+          lambda: urls(V), lambda r: len(r) == 2 and r[0].endswith("14/21/0/0/5/12/1.geojson"))
+    check("sigpac: consulta OK devuelve el anillo",
+          lambda: consultar(V, lambda u: _Resp(200, poly)), lambda r: r == anillo)
+    def _fallback(u): return _Resp(200, poly) if "mapa.gob.es" in u else _Resp(404)
+    check("sigpac: usa el 2o endpoint si el 1o da 404",
+          lambda: consultar(V, _fallback), lambda r: r == anillo)
+    def _cae(get):
+        try: consultar(V, get); return "sin-error"
+        except SigErr as e: return str(e)
+    check("sigpac: 404 en todos -> mensaje claro (codigos / suelo urbano)",
+          lambda: _cae(lambda u: _Resp(404)), lambda r: "404" in r and "urban" in r.lower())
+    check("sigpac: 503 -> servicio no disponible",
+          lambda: _cae(lambda u: _Resp(503)), lambda r: "disponible" in r.lower())
+    def _boom(u): raise RuntimeError("timeout")
+    check("sigpac: fallo de red -> mensaje de conexion",
+          lambda: _cae(_boom), lambda r: "conectar" in r.lower())
+    check("sigpac: respuesta 200 sin recinto -> mensaje 'revisa codigos'",
+          lambda: _cae(lambda u: _Resp(200, {"type": "FeatureCollection", "features": []})),
+          lambda r: "recinto" in r.lower())
 
 
 # =====================================================================

@@ -345,6 +345,91 @@ def sigpac_a_lonlat(coords):
                          "convertirlas (pip install pyproj).")
 
 
+class SigpacError(Exception):
+    """Error de consulta SIGPAC con un mensaje ya listo para mostrar al usuario."""
+
+
+# Endpoints de consulta de recintos. Se prueban en orden hasta que uno responda
+# con una geometria valida; asi la app resiste que uno de los servicios cambie o
+# se caiga. {prov}/{mun}/{agr}/{zona}/{pol}/{par}/{rec}.
+SIGPAC_ENDPOINTS = [
+    "https://sigpac-hubcloud.es/servicioconsultassigpac/query/recinfo/"
+    "{prov}/{mun}/{agr}/{zona}/{pol}/{par}/{rec}.geojson",
+    "https://sigpac.mapa.gob.es/fega/serviciosrest/v1/recintos/geojson/"
+    "{prov}/{mun}/{agr}/{zona}/{pol}/{par}/{rec}",
+]
+
+
+def sigpac_urls(v):
+    """Lista de URLs candidatas para los codigos dados (Agr/Zona -> 0 si faltan)."""
+    d = {"prov": v["Prov"], "mun": v["Mun"], "agr": v.get("Agr") or "0",
+         "zona": v.get("Zona") or "0", "pol": v["Pol"], "par": v["Par"], "rec": v["Rec"]}
+    return [u.format(**d) for u in SIGPAC_ENDPOINTS]
+
+
+def _sigpac_mensaje(ultimo):
+    """Traduce el ultimo fallo (clase, url, detalle) a un mensaje claro."""
+    if not ultimo:
+        return "No se pudo consultar SIGPAC."
+    clase, _url, det = ultimo
+    if clase == "http":
+        if det == 404:
+            return ("SIGPAC no encontro ningun recinto con esos codigos (404).\n\n"
+                    "Revisa los 7 codigos (provincia / municipio / agregado / zona / "
+                    "poligono / parcela / recinto). Recuerda que SIGPAC solo cubre suelo "
+                    "rustico o agricola: en suelo urbano no hay recintos.")
+        if det in (429, 500, 502, 503, 504):
+            return (f"El servicio SIGPAC no esta disponible ahora mismo (HTTP {det}). "
+                    "Vuelve a intentarlo en unos minutos.")
+        return (f"SIGPAC respondio con el codigo HTTP {det}. Revisa los codigos o si el "
+                "servicio esta disponible.")
+    if clase == "con":
+        return f"No se pudo conectar con SIGPAC: {det}"
+    if clase == "json":
+        return ("SIGPAC no devolvio datos de un recinto (respuesta vacia o no valida). "
+                "Revisa los codigos.")
+    if clase == "vacio":
+        return ("SIGPAC no devolvio un recinto valido. Revisa los codigos "
+                "(provincia / municipio / agregado / zona / poligono / parcela / recinto).")
+    return "No se pudo consultar SIGPAC."
+
+
+def sigpac_consultar(v, get):
+    """Consulta SIGPAC probando los endpoints conocidos.
+
+    `get(url)` debe devolver un objeto tipo respuesta (con `.status_code`,
+    `.json()` y `.text`). Devuelve la lista de coordenadas [lon,lat] del anillo
+    exterior. Si ninguno responde con un recinto valido, lanza `SigpacError` con
+    un mensaje ya redactado para el usuario.
+    """
+    ultimo = None
+    for url in sigpac_urls(v):
+        try:
+            r = get(url)
+        except Exception as e:                       # fallo de red / DNS / timeout
+            ultimo = ("con", url, str(e)); continue
+        code = getattr(r, "status_code", None)
+        if code is not None and code >= 400:
+            ultimo = ("http", url, code); continue
+        try:
+            data = r.json()
+        except Exception:
+            ultimo = ("json", url, None); continue
+        anillo = sigpac_anillo(sigpac_geometria(data))
+        if not anillo or len(anillo) < 3:
+            ultimo = ("vacio", url, None); continue
+        coords = sigpac_a_lonlat(anillo)             # puede lanzar ValueError (UTM sin pyproj)
+        if coords and len(coords) >= 3:
+            return coords
+        ultimo = ("vacio", url, None)
+    raise SigpacError(_sigpac_mensaje(ultimo))
+
+
+def _sigpac_get(url):
+    """Getter real basado en requests (separado para poder testear sin red)."""
+    return requests.get(url, timeout=15, headers={"User-Agent": "GestorParcelas/1.0"})
+
+
 def spec_de(cultivo):
     """Extrae el modelo por especie del registro de cultivo (o None si es antiguo)."""
     if not cultivo or not cultivo.get("especie"):
@@ -1145,34 +1230,20 @@ class VentanaAltaParcela(tk.Toplevel):
         # obligatorios; Agr/Zona valen 0 si se dejan vacios (recintos sin agregado/zona)
         if not all(v.get(k) for k in ("Prov", "Mun", "Pol", "Par", "Rec")):
             return messagebox.showwarning("SIGPAC", "Rellena al menos Prov, Mun, Pol, Par y Rec.", parent=self)
-        agr = v.get("Agr") or "0"
-        zona = v.get("Zona") or "0"
         # Un recinto SIGPAC se identifica por 7 codigos: prov/mun/agregado/zona/pol/par/rec.
-        url = ("https://sigpac.mapa.gob.es/fega/serviciosrest/v1/recintos/geojson/"
-               f"{v['Prov']}/{v['Mun']}/{agr}/{zona}/{v['Pol']}/{v['Par']}/{v['Rec']}")
-        r = None
         try:
-            r = requests.get(url, timeout=15)
-            r.raise_for_status()
-            geom = sigpac_geometria(r.json())
-            anillo = sigpac_anillo(geom)
-            if not anillo or len(anillo) < 3:
-                return messagebox.showwarning(
-                    "SIGPAC", "El servicio no devolvio un recinto valido. Revisa los codigos "
-                    "(prov/mun/agregado/zona/poligono/parcela/recinto).", parent=self)
-            coords = sigpac_a_lonlat(anillo)
-            self.coords = coords
-            if _MAPVIEW:
-                self._redibujar()
-                self.mapa.set_position(coords[0][1], coords[0][0], zoom=16)
-            messagebox.showinfo("SIGPAC", f"Recinto capturado ({len(coords)} vertices).", parent=self)
-        except requests.HTTPError:
-            messagebox.showerror("SIGPAC", f"El servidor respondio {r.status_code if r else '?'}. "
-                                 "Revisa los codigos o si el servicio SIGPAC esta disponible.", parent=self)
-        except requests.RequestException as e:
-            messagebox.showerror("SIGPAC", f"No se pudo conectar con SIGPAC: {e}", parent=self)
+            coords = sigpac_consultar(v, _sigpac_get)
+        except SigpacError as e:
+            return messagebox.showerror("SIGPAC", str(e), parent=self)
+        except ValueError as e:            # recinto en UTM y sin pyproj para convertir
+            return messagebox.showerror("SIGPAC", str(e), parent=self)
         except Exception as e:
-            messagebox.showerror("SIGPAC", f"No se pudo capturar el recinto: {e}", parent=self)
+            return messagebox.showerror("SIGPAC", f"No se pudo capturar el recinto: {e}", parent=self)
+        self.coords = coords
+        if _MAPVIEW:
+            self._redibujar()
+            self.mapa.set_position(coords[0][1], coords[0][0], zoom=16)
+        messagebox.showinfo("SIGPAC", f"Recinto capturado ({len(coords)} vertices).", parent=self)
 
     def _guardar(self):
         nombre = nombre_seguro(self.e_nombre.get())
