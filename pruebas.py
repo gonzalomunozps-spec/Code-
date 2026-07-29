@@ -230,6 +230,23 @@ def pruebas_cuaderno():
           {"fecha": "XXX", "tipo": "PRODUCTO"}))
     check("efecto_producto: sin fecha -> None", lambda: REG.efecto_producto(serie, {"tipo": "PRODUCTO"}),
           lambda r: r is None)
+    # elegir el dia del informe (varias pasadas posteriores)
+    serie_d = [{"fecha": "2026-04-01", "ndvi": 0.40, "ndmi": 0.10},
+               {"fecha": "2026-04-12", "ndvi": 0.46}, {"fecha": "2026-04-26", "ndvi": 0.56},
+               {"fecha": "2026-05-12", "ndvi": 0.63}]
+    ev_d = {"fecha": "2026-04-05", "tipo": "PRODUCTO", "objetivo": "fungicida"}
+    check("efecto: dia informe por objetivo (pasada mas cercana)",
+          lambda: REG.efecto_producto(serie_d, ev_d, fecha_objetivo="2026-04-26"),
+          lambda r: r["disponible"] and r["dia_informe"] == "2026-04-26")
+    check("efecto: dia informe guardado en el evento (fecha_informe)",
+          lambda: REG.efecto_producto(serie_d, dict(ev_d, fecha_informe="2026-04-12")),
+          lambda r: r["dia_informe"] == "2026-04-12")
+    check("efecto: fecha_objetivo tiene prioridad sobre fecha_informe",
+          lambda: REG.efecto_producto(serie_d, dict(ev_d, fecha_informe="2026-04-12"),
+                                      fecha_objetivo="2026-05-12"),
+          lambda r: r["dia_informe"] == "2026-05-12")
+    check("efecto: sin objetivo usa el automatico (pasada mas tardia dentro de ventana)",
+          lambda: REG.efecto_producto(serie_d, ev_d), lambda r: r["dia_informe"] == "2026-05-12")
     check("explicacion_por_eventos: siega explica caida", lambda: REG.explicacion_por_eventos(
           [(2, {"tipo": "SIEGA", "fecha": "2026-04-18"})], -0.3), lambda r: r[0] is True)
     check("explicacion_por_eventos: dN None", lambda: REG.explicacion_por_eventos(

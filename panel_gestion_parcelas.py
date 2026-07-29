@@ -1903,6 +1903,99 @@ class VentanaComparaMapas(tk.Toplevel):
                                       dia_ini=(n - 2 if n >= 2 else n - 1) if n else None)
 
 
+class DialogoEfectoProducto(tk.Toplevel):
+    """Muestra el efecto de un producto y deja ELEGIR el dia del informe (la pasada
+    posterior a la aplicacion contra la que se mide). Se puede guardar como dia
+    del informe de esa intervencion."""
+    def __init__(self, master, ficha, evento, serie):
+        super().__init__(master)
+        self.ficha, self.evento = ficha, evento
+        self.serie = sorted(serie or [], key=lambda r: r.get("fecha", ""))
+        self.title("Efecto del producto")
+        self.configure(bg=TEMA["surface"])
+        self.resizable(False, False)
+        self.transient(master.winfo_toplevel())
+        self.lift()
+        self.after(60, self.focus_force)
+        self.grab_set()
+
+        f_ap = evento.get("fecha")
+        tk.Label(self, text=f"{evento.get('producto', '')}   ·   {evento.get('objetivo', '')}",
+                 bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(self, text=f"Aplicado: {f_ap}", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=16)
+
+        # pasadas validas posteriores a la aplicacion -> opciones de dia del informe
+        self.post = [r for r in self.serie
+                     if r.get("fecha") and r["fecha"] > f_ap and r.get("ndvi") is not None]
+        self.lbl2fecha = {self._etq(r): r["fecha"] for r in self.post}
+
+        fila = tk.Frame(self, bg=TEMA["surface"])
+        fila.pack(fill="x", padx=16, pady=(10, 2))
+        tk.Label(fila, text="Dia del informe", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left")
+        self.cb = ttk.Combobox(fila, state="readonly", width=22,
+                               values=["(automatico)"] + list(self.lbl2fecha.keys()))
+        self.cb.pack(side="left", padx=6)
+        self.cb.bind("<<ComboboxSelected>>", lambda e: self._actualizar())
+        # seleccion inicial: el dia guardado (el mas cercano), o automatico
+        sel = "(automatico)"
+        obj = evento.get("fecha_informe")
+        if obj and self.post:
+            cercana = min(self.post, key=lambda r: abs(self._dias(obj, r["fecha"])))
+            sel = self._etq(cercana)
+        self.cb.set(sel)
+
+        self.txt = tk.Text(self, width=52, height=9, bd=0, relief="flat", bg="#f2f8ff",
+                           fg=TEMA["text"], font=FUENTES["body"], padx=12, pady=10, highlightthickness=0)
+        self.txt.pack(fill="both", expand=True, padx=16, pady=(8, 0))
+
+        bar = tk.Frame(self, bg=TEMA["surface"])
+        bar.pack(fill="x", padx=16, pady=12)
+        ttk.Button(bar, text="Cerrar", style="Ghost.TButton", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="Guardar como dia del informe", style="Accent.TButton",
+                   command=self._guardar).pack(side="right", padx=(0, 8))
+        self._actualizar()
+
+    @staticmethod
+    def _dias(a, b):
+        return (datetime.strptime(b, "%Y-%m-%d") - datetime.strptime(a, "%Y-%m-%d")).days
+
+    def _etq(self, r):
+        return f"{r['fecha']}   (+{self._dias(self.evento.get('fecha'), r['fecha'])} d)"
+
+    def _fecha_sel(self):
+        return self.lbl2fecha.get(self.cb.get())     # None si es "(automatico)"
+
+    def _actualizar(self):
+        ef = REG.efecto_producto(self.serie, self.evento, fecha_objetivo=self._fecha_sel())
+        self.txt.config(state="normal")
+        self.txt.delete("1.0", tk.END)
+        if not ef or not ef.get("disponible"):
+            self.txt.insert(tk.END, ef["nota"] if ef else "Sin datos suficientes.")
+        else:
+            msg = (f"Dia del informe: {ef['dia_informe']}  ({ef['dias_despues']} dias despues)\n\n"
+                   f"NDVI: {ef['ndvi_antes']} -> {ef['ndvi_despues']}   ({ef['d_ndvi']:+.3f})\n")
+            if ef.get("d_ndmi") is not None:
+                msg += f"NDMI: {ef['ndmi_antes']} -> {ef['ndmi_despues']}   ({ef['d_ndmi']:+.3f})\n"
+            msg += f"\nLectura: {ef['verdicto']}.\n\n{ef['aviso']}"
+            self.txt.insert(tk.END, msg)
+        self.txt.config(state="disabled")
+
+    def _guardar(self):
+        fecha = self._fecha_sel()
+        if fecha:
+            self.evento["fecha_informe"] = fecha
+        else:
+            self.evento.pop("fecha_informe", None)   # volver al automatico
+        REG.registrar_evento(self.ficha.nombre, self.ficha.campana, self.evento)
+        self.ficha._refrescar_eventos()
+        messagebox.showinfo("Dia del informe",
+                            f"Guardado: el efecto se medira en {fecha}." if fecha else
+                            "Guardado: dia del informe automatico.", parent=self)
+        self.destroy()
+
+
 # =====================================================================
 # FICHA DE PARCELA
 # =====================================================================
@@ -2304,6 +2397,10 @@ class FichaParcela:
                  font=FUENTES["small"]).grid(row=0, column=4, sticky="w", padx=(0, 4))
         self.ev_dosis = ttk.Entry(self.frame_prod, width=10)
         self.ev_dosis.grid(row=0, column=5)
+        tk.Label(self.frame_prod, text="Dia informe (opc.)", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).grid(row=0, column=6, sticky="w", padx=(8, 4))
+        self.ev_informe = ttk.Entry(self.frame_prod, width=12)
+        self.ev_informe.grid(row=0, column=7)
 
         tk.Label(form, text="Notas", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=5, sticky="w")
@@ -2344,11 +2441,21 @@ class FichaParcela:
                 return messagebox.showwarning("Producto", "Indica el nombre del producto.")
             ev.update({"producto": self.ev_prod.get().strip(),
                        "objetivo": self.ev_obj.get(), "dosis": self.ev_dosis.get().strip()})
+            # dia del informe opcional: fecha en la que se quiere medir el efecto
+            informe = self.ev_informe.get().strip()
+            if informe:
+                try:
+                    datetime.strptime(informe, "%Y-%m-%d")
+                    ev["fecha_informe"] = informe
+                except ValueError:
+                    return messagebox.showwarning("Dia informe", "Dia del informe: formato AAAA-MM-DD "
+                                                  "(o dejalo vacio para el automatico).")
         REG.registrar_evento(self.nombre, self.campana, ev)
         self.ev_notas.delete(0, tk.END)
         if hasattr(self, "ev_prod"):
             self.ev_prod.delete(0, tk.END)
             self.ev_dosis.delete(0, tk.END)
+            self.ev_informe.delete(0, tk.END)
         self._refrescar_eventos()
         self._pintar_graficas(sorted(self.panel._historico(self.nombre),
                                      key=lambda r: r.get("fecha", "")))
@@ -2402,17 +2509,7 @@ class FichaParcela:
         if not ev or ev.get("tipo") != "PRODUCTO":
             return messagebox.showinfo("Efecto", "Solo los productos tienen efecto medible.")
         regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
-        ef = REG.efecto_producto(regs, ev)
-        if not ef or not ef.get("disponible"):
-            return messagebox.showinfo("Efecto", ef["nota"] if ef else "Sin datos.")
-        msg = (f"Producto: {ef['producto']} ({ef['objetivo']})\n"
-               f"Aplicado: {ef['fecha_aplicacion']}\n\n"
-               f"NDVI: {ef['ndvi_antes']} -> {ef['ndvi_despues']}  ({ef['d_ndvi']:+.3f})\n")
-        if ef.get("d_ndmi") is not None:
-            msg += f"NDMI: {ef['ndmi_antes']} -> {ef['ndmi_despues']}  ({ef['d_ndmi']:+.3f})\n"
-        msg += (f"Medido {ef['dias_despues']} dias despues.\n\n"
-                f"Lectura: {ef['verdicto']}.\n\n{ef['aviso']}")
-        messagebox.showinfo("Efecto del producto", msg)
+        DialogoEfectoProducto(self.master, self, ev, regs)
 
     def _pintar_mapa(self):
         self._pintar_leyenda()

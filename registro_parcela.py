@@ -88,11 +88,18 @@ def explicacion_por_eventos(eventos_cerca, dN):
     return (False, None)
 
 
-def efecto_producto(serie, evento, ventana_dias=30):
+def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
     """
     Mide la RESPUESTA de los indices tras aplicar un producto.
     Compara el estado en la fecha de aplicacion (o la pasada valida mas cercana previa)
-    con el estado ~`ventana_dias` despues.
+    con el estado en el dia del informe.
+
+    El dia del informe se elige, por orden de prioridad:
+      1. `fecha_objetivo` (pasado por el usuario al pedir el informe), o
+      2. `evento["fecha_informe"]` (guardado al registrar la intervencion), o
+      3. automatico: la primera pasada a partir de ~`ventana_dias/2` dias despues.
+    En 1 y 2 se toma la pasada valida MAS CERCANA a esa fecha (posterior a la
+    aplicacion).
 
     IMPORTANTE: es correlacion, no causa. El clima y la fenologia tambien influyen.
     """
@@ -106,17 +113,27 @@ def efecto_producto(serie, evento, ventana_dias=30):
     for r in serie:
         if r.get("fecha") and r["fecha"] <= f_ap and r.get("ndvi") is not None:
             base = r
-    # respuesta: primera pasada al menos `ventana_dias/2` despues, la mas cercana a la ventana
+
+    # pasadas validas posteriores a la aplicacion (candidatas a "dia del informe")
+    posteriores = [r for r in serie
+                   if r.get("fecha") and r["fecha"] > f_ap and r.get("ndvi") is not None]
+
+    objetivo = fecha_objetivo or evento.get("fecha_informe")
     resp = None
-    for r in serie:
-        f = r.get("fecha")
-        if not f or r.get("ndvi") is None or f <= f_ap:
-            continue
-        d = _dias(f_ap, f)
-        if d >= max(7, ventana_dias // 2):
-            resp = r
-            if d >= ventana_dias:
-                break
+    if objetivo and posteriores:
+        # la pasada mas cercana a la fecha pedida (aunque no llegue a la ventana)
+        try:
+            resp = min(posteriores, key=lambda r: abs(_dias(objetivo, r["fecha"])))
+        except (TypeError, ValueError):
+            resp = None
+    if resp is None:
+        # automatico: primera pasada al menos `ventana_dias/2` despues, la mas cercana a la ventana
+        for r in posteriores:
+            d = _dias(f_ap, r["fecha"])
+            if d >= max(7, ventana_dias // 2):
+                resp = r
+                if d >= ventana_dias:
+                    break
     if not base or not resp:
         return {"disponible": False,
                 "nota": "Aun no hay pasadas suficientes despues de la aplicacion para medir el efecto."}
@@ -136,6 +153,7 @@ def efecto_producto(serie, evento, ventana_dias=30):
     return {
         "disponible": True,
         "fecha_aplicacion": f_ap,
+        "dia_informe": resp["fecha"],
         "objetivo": evento.get("objetivo", ""),
         "producto": evento.get("producto", ""),
         "ndvi_antes": base["ndvi"], "ndvi_despues": resp["ndvi"], "d_ndvi": d_ndvi,
