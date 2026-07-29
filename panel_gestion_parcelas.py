@@ -575,6 +575,33 @@ def construir_indice(img, indice):
     return img.normalizedDifference(["B8", "B4"]).rename("IDX")
 
 
+def descargar_mapa_indice(coords, iso, idx, metros, png_destino):
+    """Descarga de GEE el mapa de un indice para un dia y lo guarda como PNG
+    (fondo RGB natural + capa de color del indice). Devuelve el lado en pixeles.
+    Reutilizable por la ficha y por la ventana de comparacion."""
+    geom = ee.Geometry.Polygon(coords)
+    region = geom.bounds()
+    dim = dimensiones_para(coords, metros)
+    d1 = (datetime.strptime(iso, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    img = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+           .filterBounds(geom).filterDate(iso, d1).first())
+    fondo = img.visualize(bands=["B4", "B3", "B2"], min=0, max=3000).getThumbURL(
+        {"region": region, "dimensions": dim, "format": "png"})
+    fondo = Image.open(io.BytesIO(requests.get(fondo, timeout=90).content)).convert("RGBA")
+    rng = INDICES[idx]["rango"]
+    ov = construir_indice(img, idx).clip(geom).visualize(
+        min=rng[0], max=rng[1], palette=INDICES[idx]["paleta"]).getThumbURL(
+        {"region": region, "dimensions": dim, "format": "png"})
+    ov = Image.open(io.BytesIO(requests.get(ov, timeout=90).content)).convert("RGBA")
+    Image.alpha_composite(fondo, ov).save(png_destino)
+    return dim
+
+
+def ruta_cache_mapa(nombre, idx, iso, metros):
+    """Ruta del PNG cacheado para (parcela, indice, dia, resolucion)."""
+    return os.path.join(DIR_MAPAS, f"{nombre_seguro(nombre)}_{idx}_{iso}_{metros}m.png")
+
+
 # =====================================================================
 # PERSISTENCIA JSON (atomica y tolerante)
 # =====================================================================
@@ -1740,6 +1767,142 @@ class DialogoSincronizarCampanas(tk.Toplevel):
             self.lbl_prog.config(text=texto)
 
 
+class PanelMapaComparado:
+    """Visor de mapa autonomo (dia + indice + resolucion + leyenda) para la
+    ventana de comparacion. Cada panel usa/gener a su propio PNG cacheado, asi
+    que comparte cache con la ficha."""
+    def __init__(self, parent, nombre, coords, fechas_map, idx_ini, res_ini, dia_ini=None):
+        self.nombre, self.coords = nombre, coords
+        self.fechas_map = fechas_map          # {etiqueta: iso}
+        self.png = None
+        self.img_tk = None
+
+        card = tarjeta(parent)
+        card.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        top = tk.Frame(card, bg=TEMA["surface"])
+        top.pack(fill="x", padx=8, pady=(8, 4))
+        tk.Label(top, text="Dia", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left")
+        self.cb_dia = ttk.Combobox(top, state="readonly", width=20, values=list(fechas_map.keys()))
+        self.cb_dia.pack(side="left", padx=4)
+        self.cb_dia.bind("<<ComboboxSelected>>", lambda e: self.cargar())
+        tk.Label(top, text="Indice", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left", padx=(6, 0))
+        self.cb_idx = ttk.Combobox(top, state="readonly", width=7, values=INDICES_ORDEN)
+        self.cb_idx.set(idx_ini if idx_ini in INDICES_ORDEN else "NDVI")
+        self.cb_idx.pack(side="left", padx=4)
+        self.cb_idx.bind("<<ComboboxSelected>>", lambda e: self.cargar())
+
+        top2 = tk.Frame(card, bg=TEMA["surface"])
+        top2.pack(fill="x", padx=8, pady=(0, 4))
+        tk.Label(top2, text="Resolucion", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left")
+        self.cb_res = ttk.Combobox(top2, state="readonly", width=20,
+                                   values=[e[0] for e in RESOLUCIONES])
+        self.cb_res.set(res_ini if res_ini in [e[0] for e in RESOLUCIONES] else RESOLUCIONES[1][0])
+        self.cb_res.pack(side="left", padx=4)
+        self.cb_res.bind("<<ComboboxSelected>>", lambda e: self.cargar())
+
+        cont = tk.Frame(card, bg=TEMA["surface"])
+        cont.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.canvas = tk.Canvas(cont, bg="#d7ddd9", highlightthickness=0)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.bind("<Configure>", lambda e: self._redibujar())
+        self.fig_ley = Figure(figsize=(0.9, 3.0), dpi=90)
+        self.cv_ley = FigureCanvasTkAgg(self.fig_ley, master=cont)
+        self.cv_ley.get_tk_widget().pack(side="right", fill="y")
+
+        claves = list(fechas_map.keys())
+        if claves:
+            self.cb_dia.current(dia_ini if dia_ini is not None and 0 <= dia_ini < len(claves)
+                                else len(claves) - 1)
+        self.cargar()
+
+    def cargar(self):
+        self._leyenda()
+        iso = self.fechas_map.get(self.cb_dia.get())
+        if not iso:
+            return
+        idx = self.cb_idx.get()
+        metros = dict(RESOLUCIONES).get(self.cb_res.get(), 10)
+        png = ruta_cache_mapa(self.nombre, idx, iso, metros)
+        if os.path.exists(png):
+            self.png = png
+            self._redibujar()
+        elif _EE and _PIL:
+            self.canvas.delete("all")
+            self.canvas.create_text(20, 20, anchor="nw", fill=TEMA["text_muted"],
+                                    text=f"Descargando a {metros} m/pixel...")
+            threading.Thread(target=self._descargar, args=(iso, idx, png, metros), daemon=True).start()
+        else:
+            self.canvas.delete("all")
+            self.canvas.create_text(20, 20, anchor="nw", fill=TEMA["text_muted"],
+                                    text="(mapa no disponible sin GEE/PIL)")
+
+    def _descargar(self, iso, idx, png, metros):
+        try:
+            descargar_mapa_indice(self.coords, iso, idx, metros, png)
+            self.png = png
+            self.canvas.after(0, self._redibujar)
+        except Exception as e:
+            self.canvas.after(0, lambda: self.canvas.winfo_exists() and self.canvas.create_text(
+                20, 20, anchor="nw", fill=TEMA["danger_fg"], text=f"Error mapa: {e}"))
+
+    def _redibujar(self):
+        if not (self.canvas.winfo_exists() and self.png and os.path.exists(self.png) and _PIL):
+            return
+        cw = max(self.canvas.winfo_width(), 50)
+        ch = max(self.canvas.winfo_height(), 50)
+        im = Image.open(self.png)
+        im.thumbnail((cw, ch), Image.LANCZOS)
+        self.img_tk = ImageTk.PhotoImage(im)
+        self.canvas.delete("all")
+        self.canvas.create_image(cw // 2, ch // 2, image=self.img_tk)
+
+    def _leyenda(self):
+        self.fig_ley.clear()
+        idx = self.cb_idx.get()
+        ax = self.fig_ley.add_axes([0.1, 0.05, 0.32, 0.9])
+        cmap = mcolors.LinearSegmentedColormap.from_list("x", ["#" + c for c in INDICES[idx]["paleta"]])
+        cb = matplotlib.colorbar.ColorbarBase(ax, cmap=cmap,
+                                              norm=mcolors.Normalize(*INDICES[idx]["rango"]),
+                                              orientation="vertical")
+        cb.ax.tick_params(labelsize=7)
+        cb.set_label(idx, fontsize=8)
+        self.cv_ley.draw()
+
+
+class VentanaComparaMapas(tk.Toplevel):
+    """Ventana con dos visores de mapa lado a lado: dos dias distintos, o el
+    mismo dia con distinto indice."""
+    def __init__(self, master, nombre, campana, fechas_map, idx_ini, res_ini):
+        super().__init__(master)
+        self.title(f"Comparar mapas · {nombre.replace('_', ' ')} · {campana}")
+        self.geometry("1150x620")
+        self.configure(bg=TEMA["page"])
+        self.transient(master.winfo_toplevel())
+        self.lift()
+        self.after(80, self.focus_force)
+
+        coords = (DB.ficha(nombre) or {}).get("coordenadas") or []
+        cab = tk.Frame(self, bg=TEMA["header_bg"])
+        cab.pack(fill="x")
+        tk.Label(cab, text="Comparar mapas de indices", bg=TEMA["header_bg"], fg="#fff",
+                 font=FUENTES["h2"]).pack(side="left", padx=16, pady=10)
+        tk.Label(cab, text="Elige dia e indice en cada panel: dos dias distintos, "
+                           "o el mismo dia con distinto indice.",
+                 bg=TEMA["header_bg"], fg="#cbd5e1", font=FUENTES["small"]).pack(side="left", padx=6)
+
+        cuerpo = tk.Frame(self, bg=TEMA["page"])
+        cuerpo.pack(fill="both", expand=True, padx=8, pady=8)
+        n = len(fechas_map)
+        # por defecto: izquierda el ultimo dia, derecha el penultimo (comparativa temporal)
+        self.izq = PanelMapaComparado(cuerpo, nombre, coords, fechas_map, idx_ini, res_ini,
+                                      dia_ini=n - 1 if n else None)
+        self.der = PanelMapaComparado(cuerpo, nombre, coords, fechas_map, idx_ini, res_ini,
+                                      dia_ini=(n - 2 if n >= 2 else n - 1) if n else None)
+
+
 # =====================================================================
 # FICHA DE PARCELA
 # =====================================================================
@@ -1846,6 +2009,7 @@ class FichaParcela:
         ttk.Button(top2, text="+", width=3,
                    command=lambda: self._zoom(1.25)).pack(side="left", padx=1)
         ttk.Button(top2, text="Ajustar", command=lambda: self._zoom(None)).pack(side="left", padx=4)
+        ttk.Button(top2, text="⧉ Comparar", command=self._comparar_mapas).pack(side="left", padx=(6, 4))
         self.lbl_res = tk.Label(top2, text="", bg=TEMA["surface"], fg=TEMA["text_muted"],
                                 font=FUENTES["small"])
         self.lbl_res.pack(side="left", padx=8)
@@ -2259,8 +2423,7 @@ class FichaParcela:
         idx = self.cb_idx.get()
         metros = dict(RESOLUCIONES).get(self.cb_res.get(), 10)
         # la cache distingue la resolucion: cada m/pixel es un PNG distinto
-        # (nombre_seguro por si una parcela antigua tuviera caracteres raros)
-        png = os.path.join(DIR_MAPAS, f"{nombre_seguro(self.nombre)}_{idx}_{iso}_{metros}m.png")
+        png = ruta_cache_mapa(self.nombre, idx, iso, metros)
         if os.path.exists(png):
             self._png = png
             self._redibujar_png()
@@ -2277,27 +2440,8 @@ class FichaParcela:
 
     def _descargar(self, iso, idx, png, metros):
         try:
-            ficha = DB.ficha(self.nombre)
-            coords = ficha["coordenadas"]
-            geom = ee.Geometry.Polygon(coords)
-            region = geom.bounds()
-            dim = dimensiones_para(coords, metros)     # pixeles del lado mayor
-
-            d1 = (datetime.strptime(iso, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-            img = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                   .filterBounds(geom).filterDate(iso, d1).first())
-
-            fondo = img.visualize(bands=["B4", "B3", "B2"], min=0, max=3000).getThumbURL(
-                {"region": region, "dimensions": dim, "format": "png"})
-            fondo = Image.open(io.BytesIO(requests.get(fondo, timeout=90).content)).convert("RGBA")
-
-            rng = INDICES[idx]["rango"]
-            ov = construir_indice(img, idx).clip(geom).visualize(
-                min=rng[0], max=rng[1], palette=INDICES[idx]["paleta"]).getThumbURL(
-                {"region": region, "dimensions": dim, "format": "png"})
-            ov = Image.open(io.BytesIO(requests.get(ov, timeout=90).content)).convert("RGBA")
-
-            Image.alpha_composite(fondo, ov).save(png)
+            coords = DB.ficha(self.nombre)["coordenadas"]
+            dim = descargar_mapa_indice(coords, iso, idx, metros, png)
             self._png = png
             self._info_res = f"{dim}x{dim} px  ·  {metros} m/pixel"
             self.master.after(0, self._redibujar_png)
@@ -2334,6 +2478,13 @@ class FichaParcela:
         if hasattr(self, "lbl_res"):
             z = "ajuste" if self.zoom is None else f"{self.zoom:.2f}x"
             self.lbl_res.config(text=f"{getattr(self, '_info_res', f'{orig_w}x{orig_h} px')}  ·  zoom {z}")
+
+    def _comparar_mapas(self):
+        if not self._map_fechas:
+            return messagebox.showinfo("Comparar", "No hay dias disponibles todavia. "
+                                       "Sincroniza primero.", parent=self.master)
+        VentanaComparaMapas(self.master, self.nombre, self.campana,
+                            dict(self._map_fechas), self.cb_idx.get(), self.cb_res.get())
 
     def _editar(self):
         self.panel.editar_parcela(self.nombre, self.campana)

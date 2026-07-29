@@ -529,6 +529,22 @@ def pruebas_panel_helpers():
     check("campanas_entre: entrada mal formada no revienta",
           lambda: ce(None, "2025-2026"), lambda r: r == ["2025-2026"])
 
+    # ruta_cache_mapa: ficha y comparador deben usar la MISMA ruta de cache
+    m3 = re.search(r"\ndef ruta_cache_mapa\(.*?\n(?=\n)", src, re.S)
+    if not m3:
+        _FALLA.append(("panel", "no se localiza ruta_cache_mapa en el panel"))
+        return
+    ns3 = {"DIR_MAPAS": "cache_mapas", "nombre_seguro": lambda s: s,
+           "os": __import__("os")}
+    exec(m3.group(0), ns3)
+    rc = ns3["ruta_cache_mapa"]
+    check("ruta_cache_mapa: formato parcela_indice_dia_resolucion",
+          lambda: rc("Olivar", "NDVI", "2026-05-05", 10),
+          lambda r: r.endswith(os.path.join("cache_mapas", "Olivar_NDVI_2026-05-05_10m.png")))
+    check("ruta_cache_mapa: distinto indice -> distinta ruta (no colisiona)",
+          lambda: rc("Olivar", "NDVI", "2026-05-05", 10) != rc("Olivar", "NDMI", "2026-05-05", 10),
+          lambda r: r is True)
+
 
 # =====================================================================
 def main():
