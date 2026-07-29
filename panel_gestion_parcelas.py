@@ -277,6 +277,8 @@ class LienzoMapa:
         self.zoom = None                       # None = ajustar al lienzo
         self.offset = [0, 0]                   # desplazamiento (px) respecto al centro
         self._drag = None
+        self._im = None                        # imagen PIL cacheada (no reabrir en cada arrastre)
+        self._im_path = None
         c = self.canvas
         c.bind("<Configure>", lambda e: self.redibujar())
         c.bind("<MouseWheel>", lambda e: self.zoom_rel(1.25 if e.delta > 0 else 1 / 1.25))
@@ -325,17 +327,23 @@ class LienzoMapa:
         c = self.canvas
         if not (c.winfo_exists() and self.png and os.path.exists(self.png) and _PIL):
             return
+        if self._im_path != self.png:          # abrir del disco solo al cambiar de imagen
+            try:
+                self._im = Image.open(self.png).convert("RGBA")
+            except Exception:
+                return
+            self._im_path = self.png
+        base = self._im
+        ow, oh = base.size
         cw = max(c.winfo_width(), 50)
         ch = max(c.winfo_height(), 50)
-        im = Image.open(self.png)
-        ow, oh = im.size
-        if self.zoom is None:                  # ajustar: imagen entera, centrada
-            im.thumbnail((cw, ch), Image.LANCZOS)
+        escala = min(cw / ow, ch / oh)         # ajuste base al lienzo
+        if self.zoom is None:
             self.offset = [0, 0]
-        else:                                  # zoom manual (NEAREST conserva el pixel)
-            escala = min(cw / ow, ch / oh) * self.zoom
-            nw, nh = max(1, int(ow * escala)), max(1, int(oh * escala))
-            im = im.resize((nw, nh), Image.NEAREST if escala > 1 else Image.LANCZOS)
+        else:
+            escala *= self.zoom
+        nw, nh = max(1, int(ow * escala)), max(1, int(oh * escala))
+        im = base.resize((nw, nh), Image.NEAREST if escala > 1 else Image.LANCZOS)
         self.img_tk = ImageTk.PhotoImage(im)
         c.delete("all")
         c.create_image(cw // 2 + self.offset[0], ch // 2 + self.offset[1], image=self.img_tk)
@@ -2235,7 +2243,10 @@ class DialogoEfectoProducto(tk.Toplevel):
         return self.lbl2fecha.get(self.cb.get())     # None si es "(automatico)"
 
     def _actualizar(self):
-        ef = REG.efecto_producto(self.serie, self.evento, fecha_objetivo=self._fecha_sel())
+        # se calcula sobre una copia SIN fecha_informe: asi "(automatico)" es de
+        # verdad automatico aunque la intervencion ya tenga un dia guardado.
+        ev = {k: v for k, v in self.evento.items() if k != "fecha_informe"}
+        ef = REG.efecto_producto(self.serie, ev, fecha_objetivo=self._fecha_sel())
         self.txt.config(state="normal")
         self.txt.delete("1.0", tk.END)
         if not ef or not ef.get("disponible"):
