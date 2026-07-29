@@ -345,14 +345,47 @@ class LienzoMapa:
             self.on_info((f"{self.info}  ·  " if self.info else "") + f"zoom {z}  ·  arrastra para mover")
 
 
+# --- conversion de fechas: el programa usa ISO (aaaa-mm-dd); el usuario ve dd-mm-aaaa ---
+def iso_a_ddmmaaaa(iso):
+    """'2026-05-04' -> '04-05-2026' (o '' si no es una fecha valida)."""
+    try:
+        return datetime.strptime(iso, "%Y-%m-%d").strftime("%d-%m-%Y")
+    except (ValueError, TypeError):
+        return ""
+
+
+def ddmmaaaa_a_iso(texto):
+    """'04-05-2026' (o '04052026') -> '2026-05-04'. '' si esta incompleta o no existe."""
+    digs = re.sub(r"\D", "", texto or "")[:8]
+    if len(digs) != 8:
+        return ""
+    d, m, y = digs[:2], digs[2:4], digs[4:8]
+    try:
+        datetime.strptime(f"{y}-{m}-{d}", "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return f"{y}-{m}-{d}"
+
+
+def enmascarar_fecha(texto):
+    """Formatea los digitos tecleados como dd-mm-aaaa (los guiones salen solos)."""
+    digs = re.sub(r"\D", "", texto or "")[:8]
+    out = digs[:2]
+    if len(digs) > 2:
+        out += "-" + digs[2:4]
+    if len(digs) > 4:
+        out += "-" + digs[4:8]
+    return out
+
+
 class PopupCalendario(tk.Toplevel):
-    """Mini calendario para elegir una fecha y escribirla en un Entry (AAAA-MM-DD)."""
+    """Mini calendario. Al elegir un dia llama on_pick(iso) con la fecha ISO."""
     MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
              "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
-    def __init__(self, parent, entry):
+    def __init__(self, parent, on_pick, iso_ini=None, anchor=None):
         super().__init__(parent)
-        self.entry = entry
+        self.on_pick = on_pick
         self.title("Elegir fecha")
         self.configure(bg=TEMA["surface"])
         self.resizable(False, False)
@@ -360,16 +393,16 @@ class PopupCalendario(tk.Toplevel):
         self.lift()
         self.after(40, self.focus_force)
         try:
-            base = datetime.strptime(entry.get().strip(), "%Y-%m-%d")
-        except (ValueError, AttributeError):
+            base = datetime.strptime(iso_ini, "%Y-%m-%d")
+        except (ValueError, TypeError):
             base = datetime.now()
         self.anio, self.mes = base.year, base.month
         self._grid = None
         self._build()
-        # colocar cerca del entry
+        anchor = anchor or parent
         try:
             self.update_idletasks()
-            self.geometry(f"+{entry.winfo_rootx()}+{entry.winfo_rooty() + entry.winfo_height() + 2}")
+            self.geometry(f"+{anchor.winfo_rootx()}+{anchor.winfo_rooty() + anchor.winfo_height() + 2}")
         except Exception:
             pass
         self.after(60, self._grab)
@@ -415,9 +448,75 @@ class PopupCalendario(tk.Toplevel):
         self._build()
 
     def _elegir(self, dia):
-        self.entry.delete(0, tk.END)
-        self.entry.insert(0, f"{self.anio:04d}-{self.mes:02d}-{dia:02d}")
+        self.on_pick(f"{self.anio:04d}-{self.mes:02d}-{dia:02d}")
         self.destroy()
+
+
+class CampoFecha(tk.Frame):
+    """Campo de fecha reutilizable: entrada con mascara dd-mm-aaaa (los guiones
+    salen solos al teclear) + boton de calendario. El programa trabaja en ISO:
+    usa get_iso() / set_iso()."""
+    PH = "dd-mm-aaaa"
+
+    def __init__(self, parent, iso=None, width=11, **kw):
+        super().__init__(parent, bg=TEMA["surface"], **kw)
+        self.var = tk.StringVar()
+        self.entry = tk.Entry(self, textvariable=self.var, width=width, justify="center",
+                              bd=1, relief="solid", bg="#ffffff", fg=TEMA["text"],
+                              insertbackground=TEMA["text"], highlightthickness=0)
+        self.entry.pack(side="left", ipady=1)
+        ttk.Button(self, text="📅", width=3, command=self._abrir_cal).pack(side="left", padx=(2, 0))
+        self.entry.bind("<KeyRelease>", self._al_teclear)
+        self.entry.bind("<FocusIn>", self._foco_in)
+        self.entry.bind("<FocusOut>", self._foco_out)
+        if iso:
+            self.set_iso(iso)
+        else:
+            self._poner_ph()
+
+    def _poner_ph(self):
+        self.var.set(self.PH)
+        self.entry.config(fg=TEMA["text_muted"])
+
+    def _es_ph(self):
+        return self.var.get() == self.PH
+
+    def _foco_in(self, _=None):
+        if self._es_ph():
+            self.var.set("")
+            self.entry.config(fg=TEMA["text"])
+
+    def _foco_out(self, _=None):
+        if not re.sub(r"\D", "", self.var.get()):
+            self._poner_ph()
+
+    def _al_teclear(self, event=None):
+        if event and event.keysym in ("Tab", "Left", "Right", "Up", "Down"):
+            return
+        self.entry.config(fg=TEMA["text"])
+        self.var.set(enmascarar_fecha(self.var.get()))
+        self.entry.icursor(tk.END)
+
+    def _abrir_cal(self):
+        PopupCalendario(self, self._desde_cal, iso_ini=self.get_iso(), anchor=self.entry)
+
+    def _desde_cal(self, iso):
+        self.set_iso(iso)
+
+    def get_iso(self):
+        """Fecha en ISO (aaaa-mm-dd) o '' si esta vacia/incompleta/invalida."""
+        return "" if self._es_ph() else ddmmaaaa_a_iso(self.var.get())
+
+    def set_iso(self, iso):
+        txt = iso_a_ddmmaaaa(iso)
+        if txt:
+            self.var.set(txt)
+            self.entry.config(fg=TEMA["text"])
+        else:
+            self._poner_ph()
+
+    def esta_vacio(self):
+        return self._es_ph() or not re.sub(r"\D", "", self.var.get())
 
 
 # --- texto emergente de la grafica: valores de los indices y fiabilidad del dia ---
@@ -1379,9 +1478,9 @@ class VentanaAltaParcela(tk.Toplevel):
                                          values=["Cosecha de grano", "Siega en verde (forraje)"])
         self.cb_finalidad.set("Cosecha de grano")
         # siembra
-        self.lbl_siembra = tk.Label(self.frame_spec, text="Fecha de siembra (AAAA-MM-DD)",
+        self.lbl_siembra = tk.Label(self.frame_spec, text="Fecha de siembra",
                                     bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
-        self.e_siembra = ttk.Entry(self.frame_spec)
+        self.e_siembra = CampoFecha(self.frame_spec)
         # marco
         self.lbl_marco = tk.Label(self.frame_spec, text="Marco de plantacion (calle x pie, m)",
                                   bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
@@ -1480,7 +1579,7 @@ class VentanaAltaParcela(tk.Toplevel):
                                       if cult.get("subtipo") == "SIEGA_VERDE" or cult.get("finalidad") == "SIEGA_VERDE"
                                       else "Cosecha de grano")
                 if cult.get("fecha_siembra"):
-                    self.e_siembra.insert(0, cult["fecha_siembra"])
+                    self.e_siembra.set_iso(cult["fecha_siembra"])
             elif tipo == "LENOSO":
                 if cult.get("marco_calle") is not None:
                     self.e_calle.insert(0, str(cult["marco_calle"]))
@@ -1605,13 +1704,12 @@ class VentanaAltaParcela(tk.Toplevel):
         if tipo == "EXTENSIVO":
             spec["finalidad"] = ("SIEGA_VERDE" if self.cb_finalidad.get().startswith("Siega")
                                  else "COSECHA_GRANO")
-            siembra = self.e_siembra.get().strip()
-            if siembra:
-                try:
-                    datetime.strptime(siembra, "%Y-%m-%d")
-                    spec["fecha_siembra"] = siembra
-                except ValueError:
-                    return messagebox.showwarning("Siembra", "Fecha de siembra: formato AAAA-MM-DD.", parent=self)
+            if not self.e_siembra.esta_vacio():
+                siembra = self.e_siembra.get_iso()
+                if not siembra:
+                    return messagebox.showwarning("Siembra", "Fecha de siembra: dd-mm-aaaa (o dejala vacia).",
+                                                  parent=self)
+                spec["fecha_siembra"] = siembra
         elif tipo == "LENOSO":
             try:
                 spec["marco_calle"] = float(self.e_calle.get().replace(",", "."))
@@ -1689,9 +1787,9 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.cb_finalidad = ttk.Combobox(self.spec_wrap, state="readonly",
                                          values=["Cosecha de grano", "Siega en verde (forraje)"])
         self.cb_finalidad.set("Cosecha de grano")
-        self.lbl_siembra = tk.Label(self.spec_wrap, text="Fecha de siembra (AAAA-MM-DD)",
+        self.lbl_siembra = tk.Label(self.spec_wrap, text="Fecha de siembra",
                                     bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
-        self.e_siembra = ttk.Entry(self.spec_wrap)
+        self.e_siembra = CampoFecha(self.spec_wrap)
         self.lbl_marco = tk.Label(self.spec_wrap, text="Marco (calle x pie, m)",
                                   bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
         self.marco_wrap = tk.Frame(self.spec_wrap, bg=TEMA["surface"])
@@ -1759,8 +1857,7 @@ class DialogoRelevoCampana(tk.Toplevel):
             if prev.get("finalidad") == "SIEGA_VERDE" or prev.get("subtipo") == "SIEGA_VERDE":
                 self.cb_finalidad.set("Siega en verde (forraje)")
             if prev.get("fecha_siembra"):
-                self.e_siembra.delete(0, tk.END)
-                self.e_siembra.insert(0, prev["fecha_siembra"])
+                self.e_siembra.set_iso(prev["fecha_siembra"])
             if prev.get("marco_calle"):
                 self.e_calle.delete(0, tk.END); self.e_calle.insert(0, str(prev["marco_calle"]))
                 self.e_pie.delete(0, tk.END); self.e_pie.insert(0, str(prev["marco_pie"]))
@@ -1777,8 +1874,12 @@ class DialogoRelevoCampana(tk.Toplevel):
         if tipo == "EXTENSIVO":
             spec["finalidad"] = ("SIEGA_VERDE" if self.cb_finalidad.get().startswith("Siega")
                                  else "COSECHA_GRANO")
-            if self.e_siembra.get().strip():
-                spec["fecha_siembra"] = self.e_siembra.get().strip()
+            if not self.e_siembra.esta_vacio():
+                siembra = self.e_siembra.get_iso()
+                if not siembra:
+                    return messagebox.showwarning("Siembra", "Fecha de siembra: dd-mm-aaaa (o dejala vacia).",
+                                                  parent=self)
+                spec["fecha_siembra"] = siembra
         if tipo == "LENOSO":
             try:
                 spec["marco_calle"] = float(self.e_calle.get().replace(",", "."))
@@ -2514,13 +2615,8 @@ class FichaParcela:
         form.pack(fill="x", padx=12, pady=(0, 6))
         tk.Label(form, text="Fecha de la intervencion", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=0, sticky="w")
-        celda_fecha = tk.Frame(form, bg=TEMA["surface"])
-        celda_fecha.grid(row=1, column=0, padx=(0, 8), sticky="w")
-        self.ev_fecha = ttk.Entry(celda_fecha, width=11)
-        self.ev_fecha.insert(0, datetime.now().strftime("%Y-%m-%d"))  # por defecto hoy; se puede cambiar
-        self.ev_fecha.pack(side="left")
-        ttk.Button(celda_fecha, text="📅", width=3,
-                   command=lambda: PopupCalendario(self.master, self.ev_fecha)).pack(side="left", padx=(2, 0))
+        self.ev_fecha = CampoFecha(form, iso=datetime.now().strftime("%Y-%m-%d"))  # hoy por defecto
+        self.ev_fecha.grid(row=1, column=0, padx=(0, 8), sticky="w")
         tk.Label(form, text="Tipo", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=1, sticky="w")
         self.ev_tipo = ttk.Combobox(form, state="readonly", width=12, values=REG.TIPOS_EVENTO)
@@ -2547,10 +2643,8 @@ class FichaParcela:
         self.ev_dosis.grid(row=0, column=5)
         tk.Label(self.frame_prod, text="Dia informe (opc.)", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=6, sticky="w", padx=(8, 4))
-        self.ev_informe = ttk.Entry(self.frame_prod, width=11)
-        self.ev_informe.grid(row=0, column=7)
-        ttk.Button(self.frame_prod, text="📅", width=3,
-                   command=lambda: PopupCalendario(self.master, self.ev_informe)).grid(row=0, column=8, padx=(2, 0))
+        self.ev_informe = CampoFecha(self.frame_prod, width=11)
+        self.ev_informe.grid(row=0, column=7, columnspan=2, sticky="w")
 
         tk.Label(form, text="Notas", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=5, sticky="w")
@@ -2580,11 +2674,9 @@ class FichaParcela:
             self.frame_prod.grid_remove()
 
     def _add_evento(self):
-        fecha = self.ev_fecha.get().strip()
-        try:
-            datetime.strptime(fecha, "%Y-%m-%d")
-        except Exception:
-            return messagebox.showwarning("Fecha", "Formato de fecha: AAAA-MM-DD.")
+        fecha = self.ev_fecha.get_iso()
+        if not fecha:
+            return messagebox.showwarning("Fecha", "Elige la fecha de la intervencion (dd-mm-aaaa).")
         ev = {"fecha": fecha, "tipo": self.ev_tipo.get(), "notas": self.ev_notas.get().strip()}
         if ev["tipo"] == "PRODUCTO":
             if not self.ev_prod.get().strip():
@@ -2592,20 +2684,18 @@ class FichaParcela:
             ev.update({"producto": self.ev_prod.get().strip(),
                        "objetivo": self.ev_obj.get(), "dosis": self.ev_dosis.get().strip()})
             # dia del informe opcional: fecha en la que se quiere medir el efecto
-            informe = self.ev_informe.get().strip()
-            if informe:
-                try:
-                    datetime.strptime(informe, "%Y-%m-%d")
-                    ev["fecha_informe"] = informe
-                except ValueError:
-                    return messagebox.showwarning("Dia informe", "Dia del informe: formato AAAA-MM-DD "
+            if not self.ev_informe.esta_vacio():
+                informe = self.ev_informe.get_iso()
+                if not informe:
+                    return messagebox.showwarning("Dia informe", "Dia del informe: dd-mm-aaaa "
                                                   "(o dejalo vacio para el automatico).")
+                ev["fecha_informe"] = informe
         REG.registrar_evento(self.nombre, self.campana, ev)
         self.ev_notas.delete(0, tk.END)
         if hasattr(self, "ev_prod"):
             self.ev_prod.delete(0, tk.END)
             self.ev_dosis.delete(0, tk.END)
-            self.ev_informe.delete(0, tk.END)
+            self.ev_informe.set_iso("")
         self._refrescar_eventos()
         self._pintar_graficas(sorted(self.panel._historico(self.nombre),
                                      key=lambda r: r.get("fecha", "")))
