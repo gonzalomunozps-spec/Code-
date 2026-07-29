@@ -602,6 +602,12 @@ INDICES = {
 }
 INDICES_ORDEN = ["NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"]
 
+# color de cada indice en la grafica de evolucion (7 tonos distinguibles)
+COLOR_INDICE = {"NDVI": "#2f855a", "EVI": "#805ad5", "SAVI": "#dd6b20", "GNDVI": "#0ea5e9",
+                "LAI": "#d69e2e", "MSAVI": "#e53e3e", "NDMI": "#3182ce"}
+# indices que se muestran por defecto en la grafica (los demas, a eleccion)
+INDICES_GRAFICA_DEF = ["NDVI", "EVI", "SAVI", "NDMI"]
+
 # Resoluciones de descarga del mapa: (etiqueta, metros por pixel)
 # 10 m = nativo de Sentinel-2 en B2/B3/B4/B8. NDMI y MSAVI usan B11 (20 m nativos),
 # asi que por debajo de 20 m esos dos indices se remuestrean, no ganan detalle real.
@@ -2409,9 +2415,22 @@ class FichaParcela:
         card = tarjeta(parent, width=560)
         card.pack(side="left", fill="both", expand=True, padx=(0, 7))
         self._titulo(card, "Evolucion en la campana")
-        self.fig = Figure(figsize=(6, 2.9), dpi=90)
+        # selector de indices a mostrar en la grafica
+        ctrl = tk.Frame(card, bg=TEMA["surface"])
+        ctrl.pack(fill="x", padx=12, pady=(0, 2))
+        tk.Label(ctrl, text="Indices:", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left")
+        self.idx_vars = {}
+        for K in INDICES_ORDEN:
+            v = tk.BooleanVar(value=(K in INDICES_GRAFICA_DEF))
+            self.idx_vars[K] = v
+            ttk.Checkbutton(ctrl, text=K, variable=v, command=self._replot).pack(side="left", padx=1)
+        self.fig = Figure(figsize=(6, 2.7), dpi=90)
         self.cv = FigureCanvasTkAgg(self.fig, master=card)
         self.cv.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+    def _replot(self):
+        self._pintar_graficas(getattr(self, "_regs_actual", []))
 
     def _build_interp(self, parent):
         card = tarjeta(parent, width=420)
@@ -2464,6 +2483,7 @@ class FichaParcela:
         return f"{dias[d.weekday()]}, {d.day} {meses[d.month-1]} {d.year}"
 
     def _pintar_graficas(self, regs):
+        self._regs_actual = regs         # para volver a pintar al cambiar de indices
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         self._hover_ax = ax
@@ -2479,12 +2499,15 @@ class FichaParcela:
             fechas = [p[0] for p in puntos]
             validos = [p[1] for p in puntos]
             self._hover_datos = [(mdates.date2num(f), r) for f, r in zip(fechas, validos)]
-            for idx, color in [("ndvi", "#2f855a"), ("evi", "#805ad5"),
-                               ("savi", "#dd6b20"), ("ndmi", "#3182ce")]:
-                ys = [r.get(idx) for r in validos]
+            if hasattr(self, "idx_vars"):
+                seleccion = [K for K in INDICES_ORDEN if self.idx_vars[K].get()]
+            else:
+                seleccion = INDICES_GRAFICA_DEF
+            for K in seleccion:
+                ys = [r.get(K.lower()) for r in validos]
                 if any(v is not None for v in ys):
                     ax.plot(fechas, [v if v is not None else float("nan") for v in ys],
-                            marker="o", ms=3, lw=1.8, label=idx.upper(), color=color)
+                            marker="o", ms=3, lw=1.8, label=K, color=COLOR_INDICE.get(K, "#666"))
             # --- marcadores de eventos del cuaderno de campo ---
             iconos = {"PRODUCTO": ("#c05621", "Producto"), "SIEGA": ("#2b6cb0", "Siega"),
                       "COSECHA": ("#b7791f", "Cosecha"), "RIEGO": ("#3182ce", "Riego"),
@@ -2500,7 +2523,7 @@ class FichaParcela:
                 lbl = et if et not in vistos else None
                 vistos.add(et)
                 ax.axvline(fx, color=col, ls="--", lw=1.0, alpha=0.7, label=lbl)
-            ax.legend(fontsize=7, ncol=4, loc="upper center", bbox_to_anchor=(0.5, 1.16))
+            ax.legend(fontsize=7, ncol=5, loc="upper center", bbox_to_anchor=(0.5, 1.18))
             self.fig.autofmt_xdate()
             # --- puntero interactivo: linea vertical + caja con los valores del dia ---
             self._hover_linea = ax.axvline(fechas[0], color="#94a3b8", lw=0.8,
@@ -2534,6 +2557,17 @@ class FichaParcela:
         self._hover_linea.set_alpha(0.6)
         caja.xy = (xn, event.ydata)
         caja.set_text(tooltip_pasada(reg))
+        # coloca la caja hacia el interior para que NO se salga por los bordes
+        ax = self._hover_ax
+        x0, x1 = ax.get_xlim()
+        y0, y1 = ax.get_ylim()
+        fx = (xn - x0) / (x1 - x0) if x1 != x0 else 0.0
+        fy = (event.ydata - y0) / (y1 - y0) if y1 != y0 else 0.0
+        dx, ha = (-12, "right") if fx > 0.55 else (12, "left")
+        dy, va = (-12, "top") if fy > 0.6 else (12, "bottom")
+        caja.set_position((dx, dy))
+        caja.set_ha(ha)
+        caja.set_va(va)
         caja.set_visible(True)
         self.cv.draw_idle()
 
