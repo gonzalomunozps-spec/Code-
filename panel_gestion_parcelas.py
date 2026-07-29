@@ -27,6 +27,7 @@ import io
 import re
 import json
 import math
+import calendar as _cal
 import tempfile
 import threading
 from datetime import datetime, timedelta
@@ -261,6 +262,162 @@ def enlazar_rueda(widget, handler):
         hijos = []
     for ch in hijos:
         enlazar_rueda(ch, handler)
+
+
+class LienzoMapa:
+    """Canvas que muestra un PNG con ZOOM (rueda / botones) y DESPLAZAMIENTO
+    (arrastrar con el raton) para recorrer las distintas zonas de la parcela.
+    Lo usan tanto la ficha como la ventana de comparacion."""
+    def __init__(self, parent, bg="#d7ddd9", on_info=None):
+        self.canvas = tk.Canvas(parent, bg=bg, highlightthickness=0)
+        self.on_info = on_info                 # callback(texto) para el estado (zoom/resolucion)
+        self.png = None
+        self.info = ""
+        self.img_tk = None
+        self.zoom = None                       # None = ajustar al lienzo
+        self.offset = [0, 0]                   # desplazamiento (px) respecto al centro
+        self._drag = None
+        c = self.canvas
+        c.bind("<Configure>", lambda e: self.redibujar())
+        c.bind("<MouseWheel>", lambda e: self.zoom_rel(1.25 if e.delta > 0 else 1 / 1.25))
+        c.bind("<Button-4>", lambda e: self.zoom_rel(1.25))
+        c.bind("<Button-5>", lambda e: self.zoom_rel(1 / 1.25))
+        c.bind("<ButtonPress-1>", self._pan_ini)
+        c.bind("<B1-Motion>", self._pan_mov)
+        c.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag", None))
+        c.bind("<Double-Button-1>", lambda e: self.ajustar())
+
+    def pack(self, **kw):
+        self.canvas.pack(**kw)
+
+    def set_png(self, png, info=""):
+        """Cambia la imagen conservando el zoom/desplazamiento (util para comparar
+        la MISMA zona entre dias o indices)."""
+        self.png = png
+        self.info = info
+        self.redibujar()
+
+    def mensaje(self, texto, color=None):
+        self.canvas.delete("all")
+        self.canvas.create_text(20, 20, anchor="nw", fill=color or TEMA["text_muted"], text=texto)
+
+    def ajustar(self):
+        self.zoom = None
+        self.offset = [0, 0]
+        self.redibujar()
+
+    def zoom_rel(self, factor):
+        base = self.zoom if self.zoom else 1.0
+        self.zoom = max(0.2, min(8.0, base * factor))
+        self.redibujar()
+
+    def _pan_ini(self, e):
+        self._drag = (e.x, e.y, self.offset[0], self.offset[1])
+
+    def _pan_mov(self, e):
+        if not self._drag:
+            return
+        x0, y0, ox, oy = self._drag
+        self.offset = [ox + (e.x - x0), oy + (e.y - y0)]
+        self.redibujar()
+
+    def redibujar(self):
+        c = self.canvas
+        if not (c.winfo_exists() and self.png and os.path.exists(self.png) and _PIL):
+            return
+        cw = max(c.winfo_width(), 50)
+        ch = max(c.winfo_height(), 50)
+        im = Image.open(self.png)
+        ow, oh = im.size
+        if self.zoom is None:                  # ajustar: imagen entera, centrada
+            im.thumbnail((cw, ch), Image.LANCZOS)
+            self.offset = [0, 0]
+        else:                                  # zoom manual (NEAREST conserva el pixel)
+            escala = min(cw / ow, ch / oh) * self.zoom
+            nw, nh = max(1, int(ow * escala)), max(1, int(oh * escala))
+            im = im.resize((nw, nh), Image.NEAREST if escala > 1 else Image.LANCZOS)
+        self.img_tk = ImageTk.PhotoImage(im)
+        c.delete("all")
+        c.create_image(cw // 2 + self.offset[0], ch // 2 + self.offset[1], image=self.img_tk)
+        c.config(scrollregion=c.bbox("all"))
+        if self.on_info:
+            z = "ajuste" if self.zoom is None else f"{self.zoom:.2f}x"
+            self.on_info((f"{self.info}  ·  " if self.info else "") + f"zoom {z}  ·  arrastra para mover")
+
+
+class PopupCalendario(tk.Toplevel):
+    """Mini calendario para elegir una fecha y escribirla en un Entry (AAAA-MM-DD)."""
+    MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+             "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+    def __init__(self, parent, entry):
+        super().__init__(parent)
+        self.entry = entry
+        self.title("Elegir fecha")
+        self.configure(bg=TEMA["surface"])
+        self.resizable(False, False)
+        self.transient(parent.winfo_toplevel())
+        self.lift()
+        self.after(40, self.focus_force)
+        try:
+            base = datetime.strptime(entry.get().strip(), "%Y-%m-%d")
+        except (ValueError, AttributeError):
+            base = datetime.now()
+        self.anio, self.mes = base.year, base.month
+        self._grid = None
+        self._build()
+        # colocar cerca del entry
+        try:
+            self.update_idletasks()
+            self.geometry(f"+{entry.winfo_rootx()}+{entry.winfo_rooty() + entry.winfo_height() + 2}")
+        except Exception:
+            pass
+        self.after(60, self._grab)
+
+    def _grab(self):
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+
+    def _build(self):
+        cab = tk.Frame(self, bg=TEMA["surface"])
+        cab.pack(fill="x", padx=6, pady=(6, 2))
+        ttk.Button(cab, text="◀", width=3, command=lambda: self._mover(-1)).pack(side="left")
+        tk.Label(cab, text=f"{self.MESES[self.mes - 1]} {self.anio}", bg=TEMA["surface"],
+                 fg=TEMA["text"], font=FUENTES["small"], width=16).pack(side="left", expand=True)
+        ttk.Button(cab, text="▶", width=3, command=lambda: self._mover(1)).pack(side="left")
+
+        if self._grid:
+            self._grid.destroy()
+        self._grid = tk.Frame(self, bg=TEMA["surface"])
+        self._grid.pack(padx=6, pady=(2, 6))
+        for i, d in enumerate(["L", "M", "X", "J", "V", "S", "D"]):
+            tk.Label(self._grid, text=d, bg=TEMA["surface"], fg=TEMA["text_muted"], width=3,
+                     font=FUENTES["small"]).grid(row=0, column=i)
+        cal = _cal.Calendar(firstweekday=0)     # lunes primero
+        for r, semana in enumerate(cal.monthdayscalendar(self.anio, self.mes), start=1):
+            for cix, dia in enumerate(semana):
+                if dia == 0:
+                    continue
+                ttk.Button(self._grid, text=str(dia), width=3,
+                           command=lambda d=dia: self._elegir(d)).grid(row=r, column=cix, padx=1, pady=1)
+
+    def _mover(self, delta):
+        self.mes += delta
+        if self.mes < 1:
+            self.mes, self.anio = 12, self.anio - 1
+        elif self.mes > 12:
+            self.mes, self.anio = 1, self.anio + 1
+        for w in self.winfo_children():
+            w.destroy()
+        self._grid = None
+        self._build()
+
+    def _elegir(self, dia):
+        self.entry.delete(0, tk.END)
+        self.entry.insert(0, f"{self.anio:04d}-{self.mes:02d}-{dia:02d}")
+        self.destroy()
 
 
 # --- texto emergente de la grafica: valores de los indices y fiabilidad del dia ---
@@ -1797,17 +1954,25 @@ class PanelMapaComparado:
         top2.pack(fill="x", padx=8, pady=(0, 4))
         tk.Label(top2, text="Resolucion", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).pack(side="left")
-        self.cb_res = ttk.Combobox(top2, state="readonly", width=20,
+        self.cb_res = ttk.Combobox(top2, state="readonly", width=18,
                                    values=[e[0] for e in RESOLUCIONES])
         self.cb_res.set(res_ini if res_ini in [e[0] for e in RESOLUCIONES] else RESOLUCIONES[1][0])
         self.cb_res.pack(side="left", padx=4)
         self.cb_res.bind("<<ComboboxSelected>>", lambda e: self.cargar())
+        ttk.Button(top2, text="−", width=3, command=lambda: self.lienzo.zoom_rel(1 / 1.25)).pack(side="left", padx=(6, 1))
+        ttk.Button(top2, text="+", width=3, command=lambda: self.lienzo.zoom_rel(1.25)).pack(side="left", padx=1)
+        ttk.Button(top2, text="Ajustar", command=lambda: self.lienzo.ajustar()).pack(side="left", padx=2)
+
+        self.lbl_info = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_muted"],
+                                 font=FUENTES["small"])
+        self.lbl_info.pack(anchor="w", padx=10)
 
         cont = tk.Frame(card, bg=TEMA["surface"])
         cont.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        self.canvas = tk.Canvas(cont, bg="#d7ddd9", highlightthickness=0)
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.canvas.bind("<Configure>", lambda e: self._redibujar())
+        self.lienzo = LienzoMapa(cont, on_info=lambda t: self.lbl_info.winfo_exists() and
+                                 self.lbl_info.config(text=t))
+        self.lienzo.pack(side="left", fill="both", expand=True)
+        self.canvas = self.lienzo.canvas          # alias para mensajes de estado
         self.fig_ley = Figure(figsize=(0.9, 3.0), dpi=90)
         self.cv_ley = FigureCanvasTkAgg(self.fig_ley, master=cont)
         self.cv_ley.get_tk_widget().pack(side="right", fill="y")
@@ -1827,37 +1992,19 @@ class PanelMapaComparado:
         metros = dict(RESOLUCIONES).get(self.cb_res.get(), 10)
         png = ruta_cache_mapa(self.nombre, idx, iso, metros)
         if os.path.exists(png):
-            self.png = png
-            self._redibujar()
+            self.lienzo.set_png(png, f"{metros} m/pixel")
         elif _EE and _PIL:
-            self.canvas.delete("all")
-            self.canvas.create_text(20, 20, anchor="nw", fill=TEMA["text_muted"],
-                                    text=f"Descargando a {metros} m/pixel...")
+            self.lienzo.mensaje(f"Descargando a {metros} m/pixel...")
             threading.Thread(target=self._descargar, args=(iso, idx, png, metros), daemon=True).start()
         else:
-            self.canvas.delete("all")
-            self.canvas.create_text(20, 20, anchor="nw", fill=TEMA["text_muted"],
-                                    text="(mapa no disponible sin GEE/PIL)")
+            self.lienzo.mensaje("(mapa no disponible sin GEE/PIL)")
 
     def _descargar(self, iso, idx, png, metros):
         try:
-            descargar_mapa_indice(self.coords, iso, idx, metros, png)
-            self.png = png
-            self.canvas.after(0, self._redibujar)
+            dim = descargar_mapa_indice(self.coords, iso, idx, metros, png)
+            self.canvas.after(0, lambda: self.lienzo.set_png(png, f"{dim}x{dim} px  ·  {metros} m/pixel"))
         except Exception as e:
-            self.canvas.after(0, lambda: self.canvas.winfo_exists() and self.canvas.create_text(
-                20, 20, anchor="nw", fill=TEMA["danger_fg"], text=f"Error mapa: {e}"))
-
-    def _redibujar(self):
-        if not (self.canvas.winfo_exists() and self.png and os.path.exists(self.png) and _PIL):
-            return
-        cw = max(self.canvas.winfo_width(), 50)
-        ch = max(self.canvas.winfo_height(), 50)
-        im = Image.open(self.png)
-        im.thumbnail((cw, ch), Image.LANCZOS)
-        self.img_tk = ImageTk.PhotoImage(im)
-        self.canvas.delete("all")
-        self.canvas.create_image(cw // 2, ch // 2, image=self.img_tk)
+            self.canvas.after(0, lambda: self.lienzo.mensaje(f"Error mapa: {e}", TEMA["danger_fg"]))
 
     def _leyenda(self):
         self.fig_ley.clear()
@@ -2109,14 +2256,10 @@ class FichaParcela:
 
         cont = tk.Frame(card, bg=TEMA["surface"])
         cont.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self.canvas_mapa = tk.Canvas(cont, bg="#d7ddd9", highlightthickness=0)
-        self.canvas_mapa.pack(side="left", fill="both", expand=True)
-        self.canvas_mapa.bind("<Configure>", lambda e: self._redibujar_png())
-        self.canvas_mapa.bind("<MouseWheel>",                       # Windows / macOS
-                              lambda e: self._zoom(1.25 if e.delta > 0 else 1 / 1.25))
-        self.canvas_mapa.bind("<Button-4>", lambda e: self._zoom(1.25))       # Linux
-        self.canvas_mapa.bind("<Button-5>", lambda e: self._zoom(1 / 1.25))   # Linux
-        self.zoom = None                        # None = ajustar al lienzo
+        self.lienzo = LienzoMapa(cont, on_info=lambda t: self.lbl_res.winfo_exists() and
+                                 self.lbl_res.config(text=t))
+        self.lienzo.pack(side="left", fill="both", expand=True)
+        self.canvas_mapa = self.lienzo.canvas   # alias para mensajes de estado
         self.fig_ley = Figure(figsize=(1.0, 3.2), dpi=90)
         self.cv_ley = FigureCanvasTkAgg(self.fig_ley, master=cont)
         self.cv_ley.get_tk_widget().pack(side="right", fill="y")
@@ -2124,11 +2267,12 @@ class FichaParcela:
     def _zoom(self, factor):
         """factor None = ajustar al lienzo; si no, multiplica el zoom actual."""
         if factor is None:
-            self.zoom = None
+            self.lienzo.ajustar()
         else:
-            base = self.zoom if self.zoom else 1.0
-            self.zoom = max(0.2, min(8.0, base * factor))
-        self._redibujar_png()
+            self.lienzo.zoom_rel(factor)
+
+    def _redibujar_png(self):
+        self.lienzo.redibujar()
 
     def _build_graficas(self, parent):
         card = tarjeta(parent, width=560)
@@ -2368,11 +2512,15 @@ class FichaParcela:
 
         form = tk.Frame(card, bg=TEMA["surface"])
         form.pack(fill="x", padx=12, pady=(0, 6))
-        tk.Label(form, text="Fecha", bg=TEMA["surface"], fg=TEMA["text_sec"],
+        tk.Label(form, text="Fecha de la intervencion", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=0, sticky="w")
-        self.ev_fecha = ttk.Entry(form, width=12)
-        self.ev_fecha.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.ev_fecha.grid(row=1, column=0, padx=(0, 8))
+        celda_fecha = tk.Frame(form, bg=TEMA["surface"])
+        celda_fecha.grid(row=1, column=0, padx=(0, 8), sticky="w")
+        self.ev_fecha = ttk.Entry(celda_fecha, width=11)
+        self.ev_fecha.insert(0, datetime.now().strftime("%Y-%m-%d"))  # por defecto hoy; se puede cambiar
+        self.ev_fecha.pack(side="left")
+        ttk.Button(celda_fecha, text="📅", width=3,
+                   command=lambda: PopupCalendario(self.master, self.ev_fecha)).pack(side="left", padx=(2, 0))
         tk.Label(form, text="Tipo", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=1, sticky="w")
         self.ev_tipo = ttk.Combobox(form, state="readonly", width=12, values=REG.TIPOS_EVENTO)
@@ -2399,8 +2547,10 @@ class FichaParcela:
         self.ev_dosis.grid(row=0, column=5)
         tk.Label(self.frame_prod, text="Dia informe (opc.)", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=6, sticky="w", padx=(8, 4))
-        self.ev_informe = ttk.Entry(self.frame_prod, width=12)
+        self.ev_informe = ttk.Entry(self.frame_prod, width=11)
         self.ev_informe.grid(row=0, column=7)
+        ttk.Button(self.frame_prod, text="📅", width=3,
+                   command=lambda: PopupCalendario(self.master, self.ev_informe)).grid(row=0, column=8, padx=(2, 0))
 
         tk.Label(form, text="Notas", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=5, sticky="w")
@@ -2522,59 +2672,21 @@ class FichaParcela:
         # la cache distingue la resolucion: cada m/pixel es un PNG distinto
         png = ruta_cache_mapa(self.nombre, idx, iso, metros)
         if os.path.exists(png):
-            self._png = png
-            self._redibujar_png()
+            self.lienzo.set_png(png, f"{metros} m/pixel")
         elif _EE and _PIL:
-            self.canvas_mapa.delete("all")
-            self.canvas_mapa.create_text(20, 20, anchor="nw", fill=TEMA["text_muted"],
-                                         text=f"Descargando a {metros} m/pixel...")
+            self.lienzo.mensaje(f"Descargando a {metros} m/pixel...")
             threading.Thread(target=self._descargar, args=(iso, idx, png, metros),
                              daemon=True).start()
         else:
-            self.canvas_mapa.delete("all")
-            self.canvas_mapa.create_text(20, 20, anchor="nw", fill=TEMA["text_muted"],
-                                         text="(mapa no disponible sin GEE/PIL)")
+            self.lienzo.mensaje("(mapa no disponible sin GEE/PIL)")
 
     def _descargar(self, iso, idx, png, metros):
         try:
             coords = DB.ficha(self.nombre)["coordenadas"]
             dim = descargar_mapa_indice(coords, iso, idx, metros, png)
-            self._png = png
-            self._info_res = f"{dim}x{dim} px  ·  {metros} m/pixel"
-            self.master.after(0, self._redibujar_png)
+            self.master.after(0, lambda: self.lienzo.set_png(png, f"{dim}x{dim} px  ·  {metros} m/pixel"))
         except Exception as e:
-            self.master.after(0, lambda: self.canvas_mapa.winfo_exists() and self.canvas_mapa.create_text(
-                20, 20, anchor="nw", fill=TEMA["danger_fg"], text=f"Error mapa: {e}"))
-
-    def _redibujar_png(self):
-        if not (hasattr(self, "canvas_mapa") and self.canvas_mapa.winfo_exists()):
-            return                                # ficha cerrada mientras se descargaba
-        png = getattr(self, "_png", None)
-        if not (png and os.path.exists(png) and _PIL):
-            return
-        cw = max(self.canvas_mapa.winfo_width(), 50)
-        ch = max(self.canvas_mapa.winfo_height(), 50)
-        im = Image.open(png)
-        orig_w, orig_h = im.size
-
-        if self.zoom is None:                       # ajustar al lienzo
-            im.thumbnail((cw, ch), Image.LANCZOS)
-        else:                                       # zoom manual (NEAREST conserva el pixel)
-            escala_ajuste = min(cw / orig_w, ch / orig_h)
-            f = escala_ajuste * self.zoom
-            nw, nh = max(1, int(orig_w * f)), max(1, int(orig_h * f))
-            remuestreo = Image.NEAREST if f > 1 else Image.LANCZOS
-            im = im.resize((nw, nh), remuestreo)
-
-        self.img_tk = ImageTk.PhotoImage(im)
-        self.canvas_mapa.delete("all")
-        self.canvas_mapa.create_image(cw // 2, ch // 2, image=self.img_tk)
-        # region desplazable si la imagen es mayor que el lienzo
-        self.canvas_mapa.config(scrollregion=self.canvas_mapa.bbox("all"))
-
-        if hasattr(self, "lbl_res"):
-            z = "ajuste" if self.zoom is None else f"{self.zoom:.2f}x"
-            self.lbl_res.config(text=f"{getattr(self, '_info_res', f'{orig_w}x{orig_h} px')}  ·  zoom {z}")
+            self.master.after(0, lambda: self.lienzo.mensaje(f"Error mapa: {e}", TEMA["danger_fg"]))
 
     def _comparar_mapas(self):
         if not self._map_fechas:
