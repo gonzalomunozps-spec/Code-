@@ -378,6 +378,24 @@ def enmascarar_fecha(texto):
     return out
 
 
+def filtrar_fecha_digitos(digs):
+    """Acepta los digitos mientras formen una fecha posible y descarta el primero
+    que la haga imposible (dia 1-31, mes 1-12). Valida al vuelo segun se teclea."""
+    digs = re.sub(r"\D", "", digs or "")
+    out = ""
+    for i, ch in enumerate(digs[:8]):
+        if i == 0 and ch > "3":                      # decena del dia: 0-3
+            break
+        if i == 1 and not (1 <= int(out[0] + ch) <= 31):   # dia completo 01-31
+            break
+        if i == 2 and ch > "1":                      # decena del mes: 0-1
+            break
+        if i == 3 and not (1 <= int(out[2] + ch) <= 12):   # mes completo 01-12
+            break
+        out += ch                                    # anio (i>=4): cualquier digito
+    return out
+
+
 class PopupCalendario(tk.Toplevel):
     """Mini calendario. Al elegir un dia llama on_pick(iso) con la fecha ISO."""
     MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -494,7 +512,8 @@ class CampoFecha(tk.Frame):
         if event and event.keysym in ("Tab", "Left", "Right", "Up", "Down"):
             return
         self.entry.config(fg=TEMA["text"])
-        self.var.set(enmascarar_fecha(self.var.get()))
+        digs = filtrar_fecha_digitos(self.var.get())   # rechaza dia>31 / mes>12 al vuelo
+        self.var.set(enmascarar_fecha(digs))
         self.entry.icursor(tk.END)
 
     def _abrir_cal(self):

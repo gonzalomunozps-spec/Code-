@@ -579,6 +579,15 @@ def pruebas_panel_helpers():
     check("fecha: mascara pone los guiones sola", lambda: mask("04052026"), lambda r: r == "04-05-2026")
     check("fecha: mascara parcial", lambda: mask("0405"), lambda r: r == "04-05")
     check("fecha: iso invalido -> '' (display)", lambda: a_disp("no-fecha"), lambda r: r == "")
+    # validacion al vuelo mientras se teclea
+    filt = ns4["filtrar_fecha_digitos"]
+    check("fecha viva: fecha valida pasa entera", lambda: filt("04052026"), lambda r: r == "04052026")
+    check("fecha viva: dia 32 se corta (mantiene el 3)", lambda: filt("32"), lambda r: r == "3")
+    check("fecha viva: decena de dia > 3 se rechaza", lambda: filt("4"), lambda r: r == "")
+    check("fecha viva: mes 13 se corta (mantiene el 1)", lambda: filt("0413"), lambda r: r == "041")
+    check("fecha viva: decena de mes > 1 se rechaza", lambda: filt("042"), lambda r: r == "04")
+    check("fecha viva: dia 00 se rechaza", lambda: filt("00"), lambda r: r == "0")
+    check("fecha viva: dia 31 valido", lambda: filt("3112"), lambda r: r == "3112")
 
 
 # =====================================================================
