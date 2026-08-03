@@ -70,6 +70,7 @@ import registro_parcela as REG
 import fenologia_especies as FEN
 import credenciales as CRED
 import almacen as DB          # capa de datos (SQLite): parcelas, historico y eventos
+import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al optico
 
 
 # =====================================================================
@@ -602,9 +603,9 @@ INDICES = {
 }
 INDICES_ORDEN = ["NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"]
 
-# color de cada indice en la grafica de evolucion (7 tonos distinguibles)
+# color de cada indice en la grafica de evolucion (7 opticos + RVI de radar)
 COLOR_INDICE = {"NDVI": "#2f855a", "EVI": "#805ad5", "SAVI": "#dd6b20", "GNDVI": "#0ea5e9",
-                "LAI": "#d69e2e", "MSAVI": "#e53e3e", "NDMI": "#3182ce"}
+                "LAI": "#d69e2e", "MSAVI": "#e53e3e", "NDMI": "#3182ce", "RVI": "#0d9488"}
 # indices que se muestran por defecto en la grafica (los demas, a eleccion)
 INDICES_GRAFICA_DEF = ["NDVI", "EVI", "SAVI", "NDMI"]
 
@@ -2280,6 +2281,45 @@ class DialogoEfectoProducto(tk.Toplevel):
         self.destroy()
 
 
+class DialogoRadar(tk.Toplevel):
+    """Muestra los valores/indices de Sentinel-1 (radar) y su interpretacion
+    RELACIONADA con Sentinel-2 (optico). Se abre al pulsar el boton de radar."""
+    def __init__(self, master, nombre, radar, info, n, msg):
+        super().__init__(master)
+        self.title(f"Sentinel-1 (radar) · {nombre.replace('_', ' ')}")
+        self.configure(bg=TEMA["surface"])
+        self.resizable(False, False)
+        self.transient(master.winfo_toplevel())
+        self.lift()
+        self.after(60, self.focus_force)
+        self.grab_set()
+
+        tk.Label(self, text="Radar Sentinel-1  ·  complemento al optico (atraviesa nubes)",
+                 bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
+        estado = (f"Descarga: {msg}." if n == 0 else f"Descargadas {n} pasadas de radar nuevas.")
+        tk.Label(self, text=estado, bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=16)
+
+        if radar:
+            r = radar[-1]
+            linea = (f"Ultima pasada {r.get('fecha')}:   VV {r.get('vv')} dB    VH {r.get('vh')} dB"
+                     f"    RVI {r.get('rvi')}    CR {r.get('cr')} dB")
+            tk.Label(self, text=linea, bg=TEMA["surface"], fg=TEMA["text"],
+                     font=FUENTES["body"]).pack(anchor="w", padx=16, pady=(8, 0))
+
+        txt = tk.Text(self, width=66, height=10, bd=0, relief="flat", bg="#eef7f5",
+                      fg=TEMA["text"], font=FUENTES["body"], padx=12, pady=10, highlightthickness=0)
+        txt.pack(fill="both", expand=True, padx=16, pady=(8, 0))
+        txt.insert(tk.END, info.get("texto", ""))
+        txt.config(state="disabled")
+
+        bar = tk.Frame(self, bg=TEMA["surface"])
+        bar.pack(fill="x", padx=16, pady=12)
+        ttk.Button(bar, text="Cerrar", style="Ghost.TButton", command=self.destroy).pack(side="right")
+        tk.Label(bar, text="El RVI del radar aparece en la grafica como 'RVI·S1'.",
+                 bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(side="left")
+
+
 # =====================================================================
 # FICHA DE PARCELA
 # =====================================================================
@@ -2289,6 +2329,7 @@ class FichaParcela:
         self.nombre, self.campana = nombre, campana
         self.img_tk = None
         self._map_fechas = {}
+        self._radar = []          # serie Sentinel-1 (solo si se pulsa el boton de radar)
 
         cab = tk.Frame(master, bg=TEMA["header_bg"])
         cab.pack(fill="x")
@@ -2298,6 +2339,8 @@ class FichaParcela:
                  bg=TEMA["header_bg"], fg="#fff", font=FUENTES["h2"]).pack(side="left")
         ttk.Button(cab, text="  \u21BB Sincronizar Copernicus  ", style="Ghost.TButton",
                    command=self.sincronizar).pack(side="right", padx=(0, 12), pady=10)
+        ttk.Button(cab, text="  \uD83D\uDCE1 Sentinel-1 (radar)  ", style="Ghost.TButton",
+                   command=self._sincronizar_radar).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u23F2 Campanas anteriores  ", style="Ghost.TButton",
                    command=self._sincronizar_anteriores).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u270E Editar parcela  ", style="Ghost.TButton",
@@ -2425,6 +2468,10 @@ class FichaParcela:
             v = tk.BooleanVar(value=(K in INDICES_GRAFICA_DEF))
             self.idx_vars[K] = v
             ttk.Checkbutton(ctrl, text=K, variable=v, command=self._replot).pack(side="left", padx=1)
+        # RVI (radar Sentinel-1): solo se dibuja si se han descargado pasadas de radar
+        self.idx_vars["RVI"] = tk.BooleanVar(value=True)
+        ttk.Checkbutton(ctrl, text="RVI·S1", variable=self.idx_vars["RVI"],
+                        command=self._replot).pack(side="left", padx=(6, 1))
         self.fig = Figure(figsize=(6, 2.7), dpi=90)
         self.cv = FigureCanvasTkAgg(self.fig, master=card)
         self.cv.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -2459,6 +2506,7 @@ class FichaParcela:
 
     def refrescar(self):
         regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
+        self._radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
         for i in self.tv.get_children():
             self.tv.delete(i)
         for k, r in enumerate(regs):
@@ -2508,6 +2556,18 @@ class FichaParcela:
                 if any(v is not None for v in ys):
                     ax.plot(fechas, [v if v is not None else float("nan") for v in ys],
                             marker="o", ms=3, lw=1.8, label=K, color=COLOR_INDICE.get(K, "#666"))
+            # RVI de Sentinel-1 (radar): serie propia, con sus fechas, si existe y esta marcada
+            if (self.idx_vars.get("RVI") and self.idx_vars["RVI"].get() and getattr(self, "_radar", None)):
+                rp = []
+                for r in self._radar:
+                    try:
+                        rp.append((datetime.strptime(r.get("fecha", ""), "%Y-%m-%d"), r.get("rvi")))
+                    except (TypeError, ValueError):
+                        continue
+                rp = [(f, y) for f, y in rp if y is not None]
+                if rp:
+                    ax.plot([p[0] for p in rp], [p[1] for p in rp], marker="s", ms=3, lw=1.6,
+                            ls="--", label="RVI·S1", color=COLOR_INDICE["RVI"])
             # --- marcadores de eventos del cuaderno de campo ---
             iconos = {"PRODUCTO": ("#c05621", "Producto"), "SIEGA": ("#2b6cb0", "Siega"),
                       "COSECHA": ("#b7791f", "Cosecha"), "RIEGO": ("#3182ce", "Riego"),
@@ -2854,6 +2914,33 @@ class FichaParcela:
 
     def _sincronizar_anteriores(self):
         DialogoSincronizarCampanas(self.master, self.panel, self.nombre, self.campana)
+
+    # ---- Sentinel-1 (radar): SOLO bajo demanda desde el boton ----
+    def _sincronizar_radar(self):
+        if not _EE:
+            return messagebox.showwarning("Sentinel-1", "earthengine-api no disponible.", parent=self.master)
+        threading.Thread(target=self._sync_radar, daemon=True).start()
+
+    def _sync_radar(self):
+        n, msg = S1.sincronizar_radar(self.nombre, self.campana, silencioso=True)
+
+        def fin():
+            try:
+                if not self.cv.get_tk_widget().winfo_exists():
+                    return                                 # ficha cerrada mientras descargaba
+            except Exception:
+                return
+            self._radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
+            self._pintar_graficas(getattr(self, "_regs_actual", []))   # dibuja la linea RVI·S1
+            optica = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
+            cult = (DB.ficha(self.nombre) or {}).get("cultivos_por_campana", {}).get(self.campana, {})
+            diag = None
+            if optica:
+                diag = evaluar_parcela(cult.get("tipo", "BARBECHO"), cult.get("subtipo", ""),
+                                       optica, spec=spec_de(cult))
+            info = S1.interpretar_radar(optica, self._radar, diag)
+            DialogoRadar(self.master, self.nombre, self._radar, info, n, msg)
+        self.master.after(0, fin)
 
     def sincronizar(self):
         if not _EE:

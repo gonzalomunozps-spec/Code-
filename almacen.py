@@ -88,6 +88,10 @@ def _crear_tablas():
             datos TEXT,                -- JSON con los indices y la estadistica espacial
             interpretacion TEXT,
             PRIMARY KEY(nombre, campana, fecha));
+        CREATE TABLE IF NOT EXISTS pasadas_radar(
+            nombre TEXT, campana TEXT, fecha TEXT,
+            datos TEXT,                -- JSON con VV, VH y RVI (Sentinel-1, atraviesa nubes)
+            PRIMARY KEY(nombre, campana, fecha));
         CREATE TABLE IF NOT EXISTS eventos(
             id TEXT PRIMARY KEY,
             nombre TEXT, campana TEXT, fecha TEXT,
@@ -104,6 +108,7 @@ def _crear_tablas():
             PRIMARY KEY(nombre, campana, fecha));
         CREATE INDEX IF NOT EXISTS ix_pasadas_np ON pasadas(nombre, campana);
         CREATE INDEX IF NOT EXISTS ix_pasadas_c  ON pasadas(campana);
+        CREATE INDEX IF NOT EXISTS ix_radar_np   ON pasadas_radar(nombre, campana);
         CREATE INDEX IF NOT EXISTS ix_cultivos_c ON cultivos(campana);
         CREATE INDEX IF NOT EXISTS ix_eventos_np ON eventos(nombre, campana);
         CREATE INDEX IF NOT EXISTS ix_valida_ts  ON validaciones(ts);
@@ -298,6 +303,46 @@ def set_interpretacion(nombre, campana, fecha, texto):
     with _LOCK:
         c.execute("UPDATE pasadas SET interpretacion=? WHERE nombre=? AND campana=? AND fecha=?",
                   (texto, nombre, campana, fecha))
+        c.commit()
+
+
+# ---------------------------------------------------------------------------
+# RADAR (Sentinel-1): serie paralela, con sus propias fechas (atraviesa nubes)
+# ---------------------------------------------------------------------------
+def _radar_from_row(r):
+    d = json.loads(r["datos"]) if r["datos"] else {}
+    d["fecha"] = r["fecha"]
+    return d
+
+
+def radar(nombre, campana):
+    """Lista de pasadas de radar (VV/VH/RVI) de una parcela/campana, por fecha."""
+    c = _c()
+    with _LOCK:
+        return [_radar_from_row(r) for r in c.execute(
+            "SELECT fecha,datos FROM pasadas_radar WHERE nombre=? AND campana=? ORDER BY fecha",
+            (nombre, campana))]
+
+
+def ultima_fecha_radar(nombre, campana):
+    c = _c()
+    with _LOCK:
+        r = c.execute("SELECT MAX(fecha) AS f FROM pasadas_radar WHERE nombre=? AND campana=? "
+                      "AND fecha IS NOT NULL AND fecha<>''", (nombre, campana)).fetchone()
+        return r["f"] if r else None
+
+
+def anadir_radar(nombre, campana, nuevas):
+    """Inserta las pasadas de radar que no existan (no sobrescribe)."""
+    c = _c()
+    with _LOCK:
+        for p in nuevas or []:
+            fecha = p.get("fecha")
+            if not fecha:
+                continue
+            datos = {k: v for k, v in p.items() if k != "fecha"}
+            c.execute("INSERT OR IGNORE INTO pasadas_radar(nombre,campana,fecha,datos) VALUES(?,?,?,?)",
+                      (nombre, campana, fecha, json.dumps(datos, ensure_ascii=False)))
         c.commit()
 
 

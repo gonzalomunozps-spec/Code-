@@ -505,6 +505,49 @@ def pruebas_sigpac():
 
 
 # =====================================================================
+# 9b. SENTINEL-1 (RADAR): indices e interpretacion cruzada con el optico
+# =====================================================================
+def pruebas_radar():
+    import sentinel1 as S1
+    import almacen as DB
+    check("radar: db->lineal 0 dB = 1.0", lambda: S1.db_a_lineal(0.0), lambda r: abs(r - 1.0) < 1e-9)
+    check("radar: db->lineal None -> None", lambda: S1.db_a_lineal(None), lambda r: r is None)
+    check("radar: RVI en [0,1]", lambda: S1.rvi(-10, -17), lambda r: 0.0 <= r <= 1.0)
+    check("radar: RVI None si falta banda", lambda: S1.rvi(None, -12), lambda r: r is None)
+    check("radar: cross ratio VH-VV", lambda: S1.cross_ratio_db(-10, -17), lambda r: r == -7.0)
+    # interpretacion cruzada con el optico
+    check("radar: sin pasadas -> no disponible",
+          lambda: S1.interpretar_radar([{"fecha": "2026-05-01", "ndvi": 0.5}], []),
+          lambda r: r["disponible"] is False)
+    opt_nube = [{"fecha": "2026-05-01", "ndvi": 0.6}, {"fecha": "2026-05-13", "ndvi": None}]
+    rad = [{"fecha": "2026-05-02", "rvi": 0.42, "vv": -9, "vh": -15},
+           {"fecha": "2026-05-14", "rvi": 0.50, "vv": -9, "vh": -14}]
+    check("radar: optico nublado -> aporta continuidad",
+          lambda: S1.interpretar_radar(opt_nube, rad, {"estado": "OK", "fase": "encanado"}),
+          lambda r: r["concordancia"] == "continuidad" and "continuidad" in r["texto"].lower())
+    opt_baja = [{"fecha": "2026-06-01", "ndvi": 0.7}, {"fecha": "2026-06-13", "ndvi": 0.45}]
+    rad_baja = [{"fecha": "2026-06-02", "rvi": 0.55}, {"fecha": "2026-06-14", "rvi": 0.40}]
+    check("radar: bajan juntos -> descenso confirmado",
+          lambda: S1.interpretar_radar(opt_baja, rad_baja)["concordancia"], lambda r: r == "bajan juntos")
+    opt_verde = [{"fecha": "2026-03-01", "ndvi": 0.4}, {"fecha": "2026-03-13", "ndvi": 0.6}]
+    rad_plano = [{"fecha": "2026-03-02", "rvi": 0.40}, {"fecha": "2026-03-14", "rvi": 0.39}]
+    check("radar: NDVI sube sin radar -> verdor sin estructura",
+          lambda: S1.interpretar_radar(opt_verde, rad_plano)["concordancia"],
+          lambda r: r == "verdor sin estructura")
+    # almacen: serie de radar independiente
+    DB.conectar(os.path.join(tempfile.mkdtemp(), "radar.db"))
+    DB.guardar_ficha("P", {"propietario": "x", "coordenadas": [[0, 0], [0, 1], [1, 1]],
+                           "superficie_ha": 1.0})
+    DB.anadir_radar("P", "2025-2026", [{"fecha": "2026-05-02", "vv": -9, "vh": -15, "rvi": 0.42},
+                                       {"fecha": "2026-05-14", "vv": -9, "vh": -14, "rvi": 0.50}])
+    DB.anadir_radar("P", "2025-2026", [{"fecha": "2026-05-02", "rvi": 0.99}])  # ya existe: no pisa
+    check("radar: almacen roundtrip + no sobrescribe",
+          lambda: (len(DB.radar("P", "2025-2026")), DB.radar("P", "2025-2026")[0]["rvi"],
+                   DB.ultima_fecha_radar("P", "2025-2026")),
+          lambda r: r == (2, 0.42, "2026-05-14"))
+
+
+# =====================================================================
 # 9. TOOLTIP DE LA GRAFICA (valores del dia + fiabilidad) - helper del panel
 # =====================================================================
 def pruebas_panel_helpers():
@@ -594,7 +637,7 @@ def pruebas_panel_helpers():
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
-              pruebas_sigpac, pruebas_panel_helpers):
+              pruebas_sigpac, pruebas_radar, pruebas_panel_helpers):
         try:
             f()
         except Exception as e:
