@@ -515,6 +515,32 @@ def pruebas_radar():
     check("radar: RVI en [0,1]", lambda: S1.rvi(-10, -17), lambda r: 0.0 <= r <= 1.0)
     check("radar: RVI None si falta banda", lambda: S1.rvi(None, -12), lambda r: r is None)
     check("radar: cross ratio VH-VV", lambda: S1.cross_ratio_db(-10, -17), lambda r: r == -7.0)
+    # incertidumbre
+    check("radar: error estandar = std/sqrt(n)", lambda: S1.error_estandar(1.0, 100), lambda r: r == 0.1)
+    check("radar: error estandar n=0 -> None", lambda: S1.error_estandar(1.0, 0), lambda r: r is None)
+    check("radar: RVI con incertidumbre da rango lo<=base<=hi",
+          lambda: S1.rvi_incertidumbre(-9, -14, 0.5, 0.5),
+          lambda r: r[1] <= r[0] <= r[2])
+    check("radar: fiabilidad alta (muchos pixeles, poca dispersion)",
+          lambda: S1.fiabilidad_radar(80, 1.0, 1.2), lambda r: r == "alta")
+    check("radar: fiabilidad baja (pocos pixeles)",
+          lambda: S1.fiabilidad_radar(5, 4.0, 5.0), lambda r: r == "baja")
+    check("radar: fiabilidad desconocida sin n", lambda: S1.fiabilidad_radar(None, 1, 1),
+          lambda r: r == "desconocida")
+    # cambio de orbita resta validez a la tendencia
+    opt_o = [{"fecha": "2026-06-01", "ndvi": 0.7}, {"fecha": "2026-06-13", "ndvi": 0.45}]
+    rad_o = [{"fecha": "2026-06-02", "rvi": 0.55, "rvi_lo": 0.50, "rvi_hi": 0.60,
+              "orbita": "ASCENDING", "fiabilidad": "alta", "n_pixeles": 80},
+             {"fecha": "2026-06-14", "rvi": 0.40, "rvi_lo": 0.35, "rvi_hi": 0.45,
+              "orbita": "DESCENDING", "fiabilidad": "media", "n_pixeles": 30}]
+    check("radar: cambio de orbita -> tendencia no fiable + cautela",
+          lambda: S1.interpretar_radar(opt_o, rad_o, {"estado": "Revisar", "fase": "x"}),
+          lambda r: r["tendencia_fiable"] is False and any("ORBITA" in c.upper() for c in r["cautelas"]))
+    check("radar: fiabilidad baja aparece como cautela",
+          lambda: S1.interpretar_radar(
+              [{"fecha": "2026-06-01", "ndvi": 0.6}, {"fecha": "2026-06-13", "ndvi": 0.55}],
+              [{"fecha": "2026-06-14", "rvi": 0.4, "fiabilidad": "baja", "n_pixeles": 5}])["cautelas"],
+          lambda r: any("fiable" in c for c in r))
     # interpretacion cruzada con el optico
     check("radar: sin pasadas -> no disponible",
           lambda: S1.interpretar_radar([{"fecha": "2026-05-01", "ndvi": 0.5}], []),

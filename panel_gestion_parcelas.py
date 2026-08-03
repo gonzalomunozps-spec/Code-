@@ -2302,10 +2302,19 @@ class DialogoRadar(tk.Toplevel):
 
         if radar:
             r = radar[-1]
+            rango = ""
+            if r.get("rvi_lo") is not None and r.get("rvi_hi") is not None:
+                rango = f" [{r.get('rvi_lo')}-{r.get('rvi_hi')}]"
             linea = (f"Ultima pasada {r.get('fecha')}:   VV {r.get('vv')} dB    VH {r.get('vh')} dB"
-                     f"    RVI {r.get('rvi')}    CR {r.get('cr')} dB")
+                     f"    RVI {r.get('rvi')}{rango}    CR {r.get('cr')} dB")
             tk.Label(self, text=linea, bg=TEMA["surface"], fg=TEMA["text"],
                      font=FUENTES["body"]).pack(anchor="w", padx=16, pady=(8, 0))
+            fiab = (r.get("fiabilidad") or "desconocida").upper()
+            col = {"ALTA": TEMA["ok_fg"], "MEDIA": TEMA["warn_fg"], "BAJA": TEMA["danger_fg"]}.get(
+                fiab, TEMA["text_muted"])
+            tk.Label(self, text=f"Fiabilidad del dato: {fiab}   ·   {r.get('n_pixeles')} pixeles   ·   "
+                                f"dispersion VV/VH {r.get('vv_std')}/{r.get('vh_std')} dB",
+                     bg=TEMA["surface"], fg=col, font=FUENTES["small"]).pack(anchor="w", padx=16)
 
         txt = tk.Text(self, width=66, height=10, bd=0, relief="flat", bg="#eef7f5",
                       fg=TEMA["text"], font=FUENTES["body"], padx=12, pady=10, highlightthickness=0)
@@ -2568,6 +2577,19 @@ class FichaParcela:
                 if rp:
                     ax.plot([p[0] for p in rp], [p[1] for p in rp], marker="s", ms=3, lw=1.6,
                             ls="--", label="RVI·S1", color=COLOR_INDICE["RVI"])
+                    # banda de incertidumbre del RVI (rango por speckle/dispersion)
+                    banda = []
+                    for r in self._radar:
+                        try:
+                            fx = datetime.strptime(r.get("fecha", ""), "%Y-%m-%d")
+                        except (TypeError, ValueError):
+                            continue
+                        lo, hi = r.get("rvi_lo"), r.get("rvi_hi")
+                        if lo is not None and hi is not None:
+                            banda.append((fx, lo, hi))
+                    if len(banda) >= 2:
+                        ax.fill_between([b[0] for b in banda], [b[1] for b in banda],
+                                        [b[2] for b in banda], color=COLOR_INDICE["RVI"], alpha=0.15)
             # --- marcadores de eventos del cuaderno de campo ---
             iconos = {"PRODUCTO": ("#c05621", "Producto"), "SIEGA": ("#2b6cb0", "Siega"),
                       "COSECHA": ("#b7791f", "Cosecha"), "RIEGO": ("#3182ce", "Riego"),

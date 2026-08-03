@@ -25,6 +25,7 @@ e interpretacion son PURAS (se prueban sin satelite). La sincronizacion usa Eart
 Engine (COPERNICUS/S1_GRD) igual que el modulo optico.
 """
 
+import math
 from datetime import datetime, timedelta
 
 import almacen as DB
@@ -75,6 +76,50 @@ def _lectura_rvi(v):
 
 
 # =====================================================================
+# 1b. INCERTIDUMBRE del dato de radar (speckle, nº de looks, dispersion)
+# =====================================================================
+# El SAR tiene ruido speckle: la media sobre la parcela es tanto mas fiable cuantos
+# mas pixeles (looks) se promedian y menos dispersion espacial hay. Ademas, comparar
+# pasadas de ORBITAS distintas (ascendente/descendente) introduce variacion por el
+# angulo de incidencia, no por el cultivo. Estas metricas permiten discernir la
+# veracidad del valor y ponderar su aporte al diagnostico.
+def error_estandar(std, n):
+    """Error estandar de la media = std / sqrt(n). None si no procede."""
+    if std is None or n is None or n <= 0:
+        return None
+    return round(std / math.sqrt(n), 3)
+
+
+def rvi_incertidumbre(vv_db, vh_db, vv_err, vh_err):
+    """RVI y su rango propagando la incertidumbre de VV y VH. El RVI SUBE con VH y
+    BAJA con VV, asi que el minimo esta en (vv+e, vh-e) y el maximo en (vv-e, vh+e).
+    Devuelve (rvi, rvi_lo, rvi_hi)."""
+    base = rvi(vv_db, vh_db)
+    if base is None:
+        return (None, None, None)
+    ve = vv_err or 0.0
+    he = vh_err or 0.0
+    lo = rvi(vv_db + ve, vh_db - he)
+    hi = rvi(vv_db - ve, vh_db + he)
+    vals = [x for x in (lo, hi) if x is not None]
+    return (base, min(vals) if vals else None, max(vals) if vals else None)
+
+
+def fiabilidad_radar(n_pixeles, vv_std, vh_std):
+    """Fiabilidad cualitativa del valor de radar (heuristica): mas pixeles (looks) y
+    menos dispersion espacial (dB) => mas fiable. Devuelve 'alta' | 'media' | 'baja'."""
+    if n_pixeles is None:
+        return "desconocida"
+    ds = [s for s in (vv_std, vh_std) if s is not None]
+    disp = sum(ds) / len(ds) if ds else None
+    if n_pixeles >= 50 and (disp is None or disp < 1.5):
+        return "alta"
+    if n_pixeles >= 15 and (disp is None or disp < 3.0):
+        return "media"
+    return "baja"
+
+
+# =====================================================================
 # 2. INTERPRETACION CRUZADA S1 <-> S2 (pura)
 # =====================================================================
 def interpretar_radar(serie_optica, serie_radar, diag_optico=None):
@@ -94,18 +139,52 @@ def interpretar_radar(serie_optica, serie_radar, diag_optico=None):
     r_act = serie_radar[-1]
     r_prev = serie_radar[-2] if len(serie_radar) > 1 else None
     rvi_act = r_act.get("rvi")
+    fiab = r_act.get("fiabilidad", "desconocida")
+    rango = ""
+    if r_act.get("rvi_lo") is not None and r_act.get("rvi_hi") is not None:
+        rango = f" [{r_act['rvi_lo']}-{r_act['rvi_hi']}]"
 
     partes = [f"Radar Sentinel-1 del {r_act.get('fecha')}: "
-              f"VV {r_act.get('vv')} dB, VH {r_act.get('vh')} dB, RVI {rvi_act} "
-              f"({_lectura_rvi(rvi_act)})."]
+              f"VV {r_act.get('vv')} dB, VH {r_act.get('vh')} dB, RVI {rvi_act}{rango} "
+              f"({_lectura_rvi(rvi_act)}). Fiabilidad del dato: {fiab.upper()} "
+              f"({r_act.get('n_pixeles')} pixeles, dispersion VV/VH "
+              f"{r_act.get('vv_std')}/{r_act.get('vh_std')} dB)."]
+
+    # --- cautelas de incertidumbre que restan validez a la COMPARACION ---
+    cautelas = []
+    cambio_orbita = bool(r_prev and r_act.get("orbita") and r_prev.get("orbita")
+                         and r_act["orbita"] != r_prev["orbita"])
+    if cambio_orbita:
+        cautelas.append("las dos ultimas pasadas de radar son de ORBITAS distintas "
+                        f"({r_prev.get('orbita')} vs {r_act.get('orbita')}): parte del cambio "
+                        "puede deberse al angulo de incidencia, no al cultivo")
+    ndvi_act = serie_optica[-1].get("ndvi") if serie_optica else None
+    f_opt = serie_optica[-1].get("fecha") if serie_optica else None
+    desfase = None
+    if f_opt and r_act.get("fecha"):
+        try:
+            desfase = abs((datetime.strptime(r_act["fecha"], "%Y-%m-%d")
+                           - datetime.strptime(f_opt, "%Y-%m-%d")).days)
+        except ValueError:
+            desfase = None
+    if desfase is not None and desfase > 6:
+        cautelas.append(f"la pasada de radar y la optica distan {desfase} dias: "
+                        "la comparacion directa pierde precision")
+    if fiab == "baja":
+        cautelas.append("pocos pixeles o mucha dispersion: el valor de radar es POCO fiable")
 
     d_rvi = None
     if r_prev and r_prev.get("rvi") is not None and rvi_act is not None:
         d_rvi = round(rvi_act - r_prev["rvi"], 3)
-
-    ndvi_act = serie_optica[-1].get("ndvi") if serie_optica else None
     ndvi_prev = serie_optica[-2].get("ndvi") if serie_optica and len(serie_optica) > 1 else None
     d_ndvi = None if ndvi_act is None or ndvi_prev is None else round(ndvi_act - ndvi_prev, 3)
+
+    # una variacion de RVI dentro de su incertidumbre no es fiable como tendencia
+    rvi_err = None
+    if r_act.get("rvi_lo") is not None and r_act.get("rvi_hi") is not None:
+        rvi_err = (r_act["rvi_hi"] - r_act["rvi_lo"]) / 2.0
+    tendencia_fiable = (d_rvi is not None and (rvi_err is None or abs(d_rvi) > rvi_err)
+                        and not cambio_orbita and fiab != "baja")
 
     concordancia = "no evaluable"
     if ndvi_act is None:
@@ -131,21 +210,28 @@ def interpretar_radar(serie_optica, serie_radar, diag_optico=None):
         else:
             concordancia = "coherentes"
             partes.append("Radar y optico coherentes, sin cambios marcados entre pasadas.")
+        if concordancia in ("bajan juntos", "suben juntos") and not tendencia_fiable:
+            partes.append("(La tendencia del radar cae dentro de su incertidumbre o cambia de orbita: "
+                          "tomar la concordancia con cautela.)")
 
-    if rvi_act is not None and ndvi_act is not None:
-        if rvi_act >= 0.5 and ndvi_act >= 0.5:
-            partes.append("Alta concordancia (RVI y NDVI altos): el diagnostico de vigor es ROBUSTO.")
-        elif rvi_act < 0.35 and ndvi_act < 0.4:
-            partes.append("RVI y NDVI bajos: poca vegetacion confirmada por ambos sensores.")
+    if cautelas:
+        partes.append("Incertidumbre: " + "; ".join(cautelas) + ".")
 
+    # --- APORTE al diagnostico, ponderado por la fiabilidad del radar ---
+    peso = {"alta": "con ALTA confianza", "media": "con confianza media",
+            "baja": "con RESERVAS (baja fiabilidad del radar)"}.get(fiab, "con confianza indeterminada")
     if diag_optico and diag_optico.get("estado"):
-        refuerza = concordancia in ("bajan juntos", "suben juntos", "continuidad")
-        partes.append(f"Diagnostico optico actual: [{diag_optico['estado']}] "
-                      f"{diag_optico.get('fase', '')}. El radar "
-                      f"{'REFUERZA esa lectura' if refuerza else 'aporta un matiz adicional'}.")
+        refuerza = tendencia_fiable and concordancia in ("bajan juntos", "suben juntos", "continuidad")
+        verbo = "REFUERZA" if refuerza else ("aporta continuidad a" if concordancia == "continuidad"
+                                             else "matiza")
+        partes.append(f"Aporte al diagnostico optico [{diag_optico['estado']}] "
+                      f"{diag_optico.get('fase', '')}: el radar lo {verbo} {peso}.")
 
     return {"disponible": True, "texto": " ".join(partes), "rvi": rvi_act,
-            "d_rvi": d_rvi, "d_ndvi": d_ndvi, "concordancia": concordancia}
+            "rvi_lo": r_act.get("rvi_lo"), "rvi_hi": r_act.get("rvi_hi"),
+            "fiabilidad": fiab, "d_rvi": d_rvi, "d_ndvi": d_ndvi,
+            "tendencia_fiable": tendencia_fiable, "concordancia": concordancia,
+            "cautelas": cautelas}
 
 
 # =====================================================================
@@ -190,10 +276,17 @@ def sincronizar_radar(nombre, campana, silencioso=True):
                .select(["VV", "VH"])
                .sort("system:time_start", True))
 
+        # media + desviacion espacial + nº de pixeles (para la incertidumbre)
+        reductor = (ee.Reducer.mean()
+                    .combine(ee.Reducer.stdDev(), sharedInputs=True)
+                    .combine(ee.Reducer.count(), sharedInputs=True))
+
         def feat(img):
-            m = img.reduceRegion(ee.Reducer.mean(), geom, scale=10, bestEffort=True)
+            m = img.reduceRegion(reductor, geom, scale=10, bestEffort=True)
             return ee.Feature(None, {"fecha": img.date().format("yyyy-MM-dd"),
-                                     "vv": m.get("VV"), "vh": m.get("VH"),
+                                     "vv": m.get("VV_mean"), "vh": m.get("VH_mean"),
+                                     "vv_std": m.get("VV_stdDev"), "vh_std": m.get("VH_stdDev"),
+                                     "n": m.get("VV_count"),
                                      "orbita": img.get("orbitProperties_pass")})
 
         data = col.map(feat).getInfo()["features"]
@@ -205,8 +298,17 @@ def sincronizar_radar(nombre, campana, silencioso=True):
             if not fecha or fecha in existentes or vv is None or vh is None:
                 continue
             existentes.add(fecha)          # evita duplicar si hay dos escenas el mismo dia
+            vv_std, vh_std = p.get("vv_std"), p.get("vh_std")
+            n = int(p["n"]) if p.get("n") is not None else None
+            vv_e = error_estandar(vv_std, n)
+            vh_e = error_estandar(vh_std, n)
+            rv, rlo, rhi = rvi_incertidumbre(vv, vh, vv_e, vh_e)
             nuevos.append({"fecha": fecha, "vv": round(vv, 2), "vh": round(vh, 2),
-                           "rvi": rvi(vv, vh), "cr": cross_ratio_db(vv, vh),
+                           "vv_std": round(vv_std, 2) if vv_std is not None else None,
+                           "vh_std": round(vh_std, 2) if vh_std is not None else None,
+                           "n_pixeles": n, "rvi": rv, "rvi_lo": rlo, "rvi_hi": rhi,
+                           "cr": cross_ratio_db(vv, vh),
+                           "fiabilidad": fiabilidad_radar(n, vv_std, vh_std),
                            "orbita": p.get("orbita")})
 
         if not nuevos:
