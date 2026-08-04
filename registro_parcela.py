@@ -142,13 +142,32 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
     d_ndmi = None
     if base.get("ndmi") is not None and resp.get("ndmi") is not None:
         d_ndmi = round(resp["ndmi"] - base["ndmi"], 3)
+    # LAI (area foliar): clave para HERBICIDAS, donde el efecto se ve como caida de
+    # biomasa/cobertura, no como recuperacion del verdor.
+    d_lai = None
+    if base.get("lai") is not None and resp.get("lai") is not None:
+        d_lai = round(resp["lai"] - base["lai"], 3)
 
-    if d_ndvi > 0.05:
-        verdicto = "respuesta positiva compatible (el verdor se recupera tras la aplicacion)"
-    elif d_ndvi < -0.03:
-        verdicto = "sin mejora / deterioro tras la aplicacion"
+    es_herbicida = "herbicida" in (evento.get("objetivo", "") or "").lower()
+    if es_herbicida:
+        # el herbicida ACTUA si baja el area foliar (LAI) y/o el verdor (NDVI)
+        baja_lai = d_lai is not None and d_lai < -0.3
+        baja_ndvi = d_ndvi < -0.05
+        if baja_lai or baja_ndvi:
+            detalle = f"LAI {d_lai:+.2f}" if d_lai is not None else f"NDVI {d_ndvi:+.3f}"
+            verdicto = (f"efecto compatible: baja el area foliar/cobertura ({detalle}) tras el "
+                        "herbicida (reduccion de vegetacion)")
+        elif (d_lai is not None and d_lai > 0.15) or d_ndvi > 0.05:
+            verdicto = "sin efecto herbicida visible: el area foliar y el verdor siguen al alza"
+        else:
+            verdicto = "sin cambio claro tras el herbicida"
     else:
-        verdicto = "sin cambio claro"
+        if d_ndvi > 0.05:
+            verdicto = "respuesta positiva compatible (el verdor se recupera tras la aplicacion)"
+        elif d_ndvi < -0.03:
+            verdicto = "sin mejora / deterioro tras la aplicacion"
+        else:
+            verdicto = "sin cambio claro"
 
     return {
         "disponible": True,
@@ -156,8 +175,10 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
         "dia_informe": resp["fecha"],
         "objetivo": evento.get("objetivo", ""),
         "producto": evento.get("producto", ""),
+        "es_herbicida": es_herbicida,
         "ndvi_antes": base["ndvi"], "ndvi_despues": resp["ndvi"], "d_ndvi": d_ndvi,
         "ndmi_antes": base.get("ndmi"), "ndmi_despues": resp.get("ndmi"), "d_ndmi": d_ndmi,
+        "lai_antes": base.get("lai"), "lai_despues": resp.get("lai"), "d_lai": d_lai,
         "dias_despues": _dias(f_ap, resp["fecha"]),
         "verdicto": verdicto,
         "aviso": ("Correlacion, no causa: el clima y la fenologia tambien mueven los indices. "

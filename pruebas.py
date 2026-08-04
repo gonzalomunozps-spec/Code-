@@ -123,6 +123,25 @@ def pruebas_motor():
     check("aprendizaje: sin veredicto util -> None",
           lambda: contexto_aprendizaje([{"veredicto": "", "fase": "x"}]), lambda r: r is None)
 
+    # --- aprendizaje que AJUSTA la prediccion (campanas anteriores) ---
+    from interpretacion_fenologica import ajuste_por_validaciones
+    vv = [{"cultivo": "EXTENSIVO/COSECHA_GRANO/TRIGO", "fase": "espigado / floracion",
+           "estado_sistema": "Revisar", "veredicto": "incorrecto", "estado_real": "OK"},
+          {"cultivo": "EXTENSIVO/COSECHA_GRANO/TRIGO", "fase": "espigado / floracion",
+           "estado_sistema": "Revisar", "veredicto": "incorrecto", "estado_real": "OK"}]
+    check("ajuste: 2 correcciones coherentes -> corrige la prediccion",
+          lambda: ajuste_por_validaciones("EXTENSIVO/COSECHA_GRANO/TRIGO", "espigado / floracion", "Revisar", vv),
+          lambda r: r.get("corregido") == "OK" and r.get("votos") == 2)
+    check("ajuste: 1 sola correccion -> solo anota (no corrige)",
+          lambda: ajuste_por_validaciones("EXTENSIVO/COSECHA_GRANO/TRIGO", "espigado / floracion", "Revisar", vv[:1]),
+          lambda r: r.get("corregido") is None and "nota" in r)
+    check("ajuste: cultivo/fase distintos -> sin ajuste",
+          lambda: ajuste_por_validaciones("OTRO", "otra", "OK", vv), lambda r: r == {})
+    check("ajuste: confirmaciones -> nota de confianza",
+          lambda: ajuste_por_validaciones("C", "f", "OK",
+                  [{"cultivo": "C", "fase": "f", "estado_sistema": "OK", "veredicto": "correcto"}]),
+          lambda r: r.get("corregido") is None and "correcto" in r.get("nota", ""))
+
     # deltas
     check("delta: previo=0 -> None", lambda: delta("NDVI", 0.5, 0), lambda r: r[1] is None)
     check("delta: previo None -> None", lambda: delta("NDVI", 0.5, None), lambda r: r[1] is None)
@@ -247,6 +266,15 @@ def pruebas_cuaderno():
           lambda r: r["dia_informe"] == "2026-05-12")
     check("efecto: sin objetivo usa el automatico (pasada mas tardia dentro de ventana)",
           lambda: REG.efecto_producto(serie_d, ev_d), lambda r: r["dia_informe"] == "2026-05-12")
+    # HERBICIDA: el efecto se mide por la bajada de LAI
+    serie_h = [{"fecha": "2026-04-01", "ndvi": 0.6, "lai": 2.5}, {"fecha": "2026-04-25", "ndvi": 0.5, "lai": 1.8}]
+    ev_h = {"fecha": "2026-04-05", "tipo": "PRODUCTO", "objetivo": "herbicida (malas hierbas)"}
+    check("efecto herbicida: baja de LAI -> efecto compatible",
+          lambda: REG.efecto_producto(serie_h, ev_h),
+          lambda r: r["es_herbicida"] and r["d_lai"] == -0.7 and "area foliar" in r["verdicto"])
+    serie_hn = [{"fecha": "2026-04-01", "ndvi": 0.5, "lai": 2.0}, {"fecha": "2026-04-25", "ndvi": 0.55, "lai": 2.4}]
+    check("efecto herbicida: LAI sube -> sin efecto visible",
+          lambda: REG.efecto_producto(serie_hn, ev_h)["verdicto"], lambda r: "sin efecto" in r)
     check("explicacion_por_eventos: siega explica caida", lambda: REG.explicacion_por_eventos(
           [(2, {"tipo": "SIEGA", "fecha": "2026-04-18"})], -0.3), lambda r: r[0] is True)
     check("explicacion_por_eventos: dN None", lambda: REG.explicacion_por_eventos(
@@ -404,6 +432,8 @@ def pruebas_almacen():
     check("almacen: set_interpretacion", lambda: DB.pasadas("Olivar", "2025-2026")[1].get("interpretacion"),
           lambda r: r == "nuevo")
     check("almacen: pasadas_de_campana", lambda: len(DB.pasadas_de_campana("2025-2026")["Olivar"]), lambda r: r == 2)
+    check("almacen: campanas_con_datos solo las que tienen pasadas",
+          lambda: DB.campanas_con_datos(), lambda r: r == {"2025-2026"})
     # validaciones del diagnostico (aprendizaje)
     DB.guardar_validacion("Olivar", "2025-2026", "2026-02-10", "floracion", "LENOSO/INTENSIVO",
                           "Revisar", "incorrecto", estado_real="OK", nota="estaba sano")

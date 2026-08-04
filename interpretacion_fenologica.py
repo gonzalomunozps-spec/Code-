@@ -453,6 +453,53 @@ def contexto_aprendizaje(aprendizaje):
             + "\n".join(lineas[:8]))
 
 
+def ajuste_por_validaciones(cultivo, fase, estado_sistema, validaciones):
+    """
+    APRENDE de campanas anteriores usando las validaciones del usuario.
+
+    Si en el MISMO cultivo y la MISMA fase el sistema dijo `estado_sistema` y el
+    usuario lo corrigio antes hacia otro estado, ajusta (>=2 correcciones coherentes)
+    o al menos anota la prediccion. Asi las predicciones se afinan con el uso.
+
+    Devuelve {} si no hay historial util; si no, un dict con:
+      - 'corregido': estado al que ajustar (o None si solo se anota)
+      - 'nota'     : explicacion para mostrar al usuario
+      - 'votos'    : nº de correcciones coherentes
+    """
+    if not validaciones or not cultivo:
+        return {}
+    fase_l = (fase or "").lower()
+    correcciones = {}      # estado_real -> conteo
+    confirmaciones = 0
+    for v in validaciones:
+        if not isinstance(v, dict):
+            continue
+        if v.get("cultivo") != cultivo or (v.get("fase") or "").lower() != fase_l:
+            continue
+        if v.get("estado_sistema") != estado_sistema:
+            continue
+        if v.get("veredicto") == "incorrecto" and v.get("estado_real"):
+            correcciones[v["estado_real"]] = correcciones.get(v["estado_real"], 0) + 1
+        elif v.get("veredicto") == "correcto":
+            confirmaciones += 1
+
+    if not correcciones:
+        if confirmaciones:
+            return {"corregido": None, "votos": confirmaciones,
+                    "nota": f"Validaste este diagnostico como correcto en {confirmaciones} "
+                            f"pasada(s) similar(es) de campanas anteriores."}
+        return {}
+
+    real, n = max(correcciones.items(), key=lambda kv: kv[1])
+    if n >= 2 and real != estado_sistema:
+        return {"corregido": real, "votos": n,
+                "nota": (f"Aprendizaje: en {n} pasadas similares de este cultivo y fase corregiste "
+                         f"'{estado_sistema}' a '{real}'. Se ajusta la prediccion a '{real}'.")}
+    return {"corregido": None, "votos": n,
+            "nota": (f"En una pasada similar corregiste '{estado_sistema}' a '{real}'. Se tiene en "
+                     "cuenta (aun sin suficiente historial para ajustar automaticamente).")}
+
+
 def texto_interpretacion(tipo, subtipo, serie, fecha_iso=None, modelo="gpt-4o-mini",
                          eventos_cerca=None, spec=None, aprendizaje=None):
     """Genera el texto. Usa ChatGPT si hay OPENAI_API_KEY; si no, respaldo por reglas.

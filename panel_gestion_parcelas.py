@@ -65,7 +65,7 @@ import matplotlib.dates as mdates
 # interpretacion_fenologica; el panel no habla con OpenAI directamente.
 
 # Modulo de interpretacion fenologica + deteccion de cubierta vegetal (IA)
-from interpretacion_fenologica import evaluar_parcela, texto_interpretacion
+from interpretacion_fenologica import evaluar_parcela, texto_interpretacion, ajuste_por_validaciones
 import registro_parcela as REG
 import fenologia_especies as FEN
 import credenciales as CRED
@@ -184,6 +184,20 @@ def aplicar_tema(root):
 def tarjeta(parent, **kw):
     return tk.Frame(parent, bg=TEMA["surface"], highlightbackground=TEMA["border"],
                     highlightcolor=TEMA["border"], highlightthickness=1, bd=0, **kw)
+
+
+def centrar_sobre(win, parent):
+    """Fija la ventana `win` centrada sobre la ventana principal (parent)."""
+    try:
+        win.update_idletasks()
+        top = parent.winfo_toplevel()
+        pw, ph = top.winfo_width(), top.winfo_height()
+        w, h = win.winfo_width(), win.winfo_height()
+        x = top.winfo_rootx() + max(0, (pw - w) // 2)
+        y = top.winfo_rooty() + max(0, (ph - h) // 2)
+        win.geometry(f"+{x}+{y}")
+    except Exception:
+        pass
 
 
 def marco_scroll(parent, bg=None, rueda_global=False):
@@ -892,6 +906,51 @@ def ruta_cache_mapa(nombre, idx, iso, metros):
     return os.path.join(DIR_MAPAS, f"{nombre_seguro(nombre)}_{idx}_{iso}_{metros}m.png")
 
 
+# --- MAPA DE RADAR (Sentinel-1): VV, VH o RVI ---
+RADAR_VIS = {
+    "VV":  {"rango": (-25, 0),  "paleta": ["000000", "8a8a8a", "ffffff"]},
+    "VH":  {"rango": (-30, -5), "paleta": ["000000", "8a8a8a", "ffffff"]},
+    "RVI": {"rango": (0, 1),    "paleta": ["9c6b30", "d9d59b", "3a9d23", "0b6623"]},
+}
+
+
+def imagen_param_radar(img, param):
+    """Banda del parametro de radar pedido (VV, VH en dB, o RVI en lineal)."""
+    vv, vh = img.select("VV"), img.select("VH")
+    if param == "VH":
+        return vh
+    if param == "RVI":
+        vvl = ee.Image(10).pow(vv.divide(10))
+        vhl = ee.Image(10).pow(vh.divide(10))
+        return vhl.multiply(4).divide(vvl.add(vhl)).rename("RVI")
+    return vv
+
+
+def descargar_mapa_radar(coords, iso, param, metros, png_destino):
+    """Descarga de GEE el mapa de un parametro de Sentinel-1 para un dia y lo guarda
+    como PNG. Devuelve el lado en pixeles."""
+    geom = ee.Geometry.Polygon(coords)
+    region = geom.bounds()
+    dim = dimensiones_para(coords, metros)
+    d1 = (datetime.strptime(iso, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    img = (ee.ImageCollection("COPERNICUS/S1_GRD")
+           .filterBounds(geom).filterDate(iso, d1)
+           .filter(ee.Filter.eq("instrumentMode", "IW"))
+           .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+           .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
+           .first())
+    vis = RADAR_VIS.get(param, RADAR_VIS["RVI"])
+    ov = imagen_param_radar(img, param).clip(geom).visualize(
+        min=vis["rango"][0], max=vis["rango"][1], palette=vis["paleta"]).getThumbURL(
+        {"region": region, "dimensions": dim, "format": "png"})
+    Image.open(io.BytesIO(requests.get(ov, timeout=90).content)).convert("RGBA").save(png_destino)
+    return dim
+
+
+def ruta_cache_radar(nombre, param, iso, metros):
+    return os.path.join(DIR_MAPAS, f"{nombre_seguro(nombre)}_S1_{param}_{iso}_{metros}m.png")
+
+
 # =====================================================================
 # PERSISTENCIA JSON (atomica y tolerante)
 # =====================================================================
@@ -1279,8 +1338,9 @@ class PanelGestionParcelas(ttk.Frame):
         self.after(0, fin)
 
     def _campanas(self):
+        # solo la actual + las campanas con datos de satelite (las vacias no se muestran)
         c = {campana_actual()}
-        c |= DB.campanas()
+        c |= DB.campanas_con_datos()
         return sorted(c, reverse=True)
 
     def _build_lista(self):
@@ -1455,6 +1515,7 @@ class VentanaAltaParcela(tk.Toplevel):
         self.transient(panel.winfo_toplevel())
         self.lift()
         self.after(80, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
@@ -1780,6 +1841,7 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.grab_set()          # modal
         self.lift()
         self.after(80, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
@@ -1943,6 +2005,7 @@ class DialogoCorreccion(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         tk.Label(self, text="El sistema diagnostico:", bg=TEMA["surface"], fg=TEMA["text_sec"],
@@ -1983,32 +2046,41 @@ class DialogoSincronizarCampanas(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         ficha = DB.ficha(nombre) or {}
         actual = campana_actual()
         a0 = int(actual.split("-")[0])
-        inicio = ficha.get("anio_inicio_monitoreo") or f"{a0 - 5}-{a0 - 4}"
+        tope = f"{a0 - 5}-{a0 - 4}"                 # Copernicus: 5 campanas hacia atras
+        inicio = ficha.get("anio_inicio_monitoreo") or tope
+        try:                                        # no ofrecer campanas mas alla de 5 anos
+            if int(inicio.split("-")[0]) < a0 - 5:
+                inicio = tope
+        except (ValueError, IndexError):
+            inicio = tope
         camps = campanas_entre(inicio, actual)     # mas reciente primero
+        con_datos = {c for c in camps if DB.ultima_fecha(nombre, c)}   # campanas ya descargadas
 
         tk.Label(self, text=f"Parcela: {nombre.replace('_', ' ')}", bg=TEMA["surface"],
                  fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
-        tk.Label(self, text="Marca las campanas que quieras descargar del satelite. La descarga\n"
-                            "es incremental (no repite lo ya guardado). Para VER una campana,\n"
-                            "seleccionala luego en el desplegable de campana del panel.",
+        tk.Label(self, text="Copernicus cubre hasta 5 campanas atras. Marca las que quieras descargar\n"
+                            "(incremental, no repite). Si una campana no tiene datos de satelite, se\n"
+                            "avisara al sincronizar. Para VER una, seleccionala luego en el panel.",
                  bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"],
                  justify="left").pack(anchor="w", padx=16)
 
         cont, interior = marco_scroll(self, bg=TEMA["surface"], rueda_global=True)
-        cont.configure(height=180, width=280)
+        cont.configure(height=180, width=300)
         cont.pack(fill="x", padx=16, pady=8)
         cont.pack_propagate(False)
         self.vars = {}
         for c in camps:
             v = tk.BooleanVar(value=(c == campana_ficha))
             self.vars[c] = v
-            etq = c + ("   (actual)" if c == actual else "")
-            ttk.Checkbutton(interior, text=etq, variable=v).pack(anchor="w", pady=1)
+            etiqueta = c + ("   (actual)" if c == actual else
+                            "   ✓ con datos" if c in con_datos else "   · sin descargar")
+            ttk.Checkbutton(interior, text=etiqueta, variable=v).pack(anchor="w", pady=1)
 
         self.lbl_prog = tk.Label(self, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
                                  font=FUENTES["small"])
@@ -2034,12 +2106,16 @@ class DialogoSincronizarCampanas(tk.Toplevel):
         orden = sorted(sel)
         for i, camp in enumerate(orden, 1):
             self.after(0, lambda c=camp, k=i: self._prog(f"Sincronizando {c}  ({k}/{len(orden)})…"))
+            tenia = DB.ultima_fecha(self.nombre, camp) is not None
             try:
                 n, msg = sincronizar_parcela(self.nombre, camp, silencioso=True)
             except Exception as e:
                 n, msg = 0, f"error: {e}"
             total += n
-            lineas.append(f"{camp}: {msg}")
+            if n == 0 and not tenia and DB.ultima_fecha(self.nombre, camp) is None:
+                lineas.append(f"{camp}: NO hay datos de Copernicus para esa campana")
+            else:
+                lineas.append(f"{camp}: {msg}")
         if ULTIMO_SYNC.get("estado") != "fallo":
             _marca_sync_guardar()
 
@@ -2165,6 +2241,7 @@ class VentanaComparaMapas(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(80, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
 
         coords = (DB.ficha(nombre) or {}).get("coordenadas") or []
         cab = tk.Frame(self, bg=TEMA["header_bg"])
@@ -2199,6 +2276,7 @@ class DialogoEfectoProducto(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         f_ap = evento.get("fecha")
@@ -2263,6 +2341,9 @@ class DialogoEfectoProducto(tk.Toplevel):
                    f"NDVI: {ef['ndvi_antes']} -> {ef['ndvi_despues']}   ({ef['d_ndvi']:+.3f})\n")
             if ef.get("d_ndmi") is not None:
                 msg += f"NDMI: {ef['ndmi_antes']} -> {ef['ndmi_despues']}   ({ef['d_ndmi']:+.3f})\n"
+            if ef.get("d_lai") is not None:
+                msg += f"LAI:  {ef['lai_antes']} -> {ef['lai_despues']}   ({ef['d_lai']:+.2f})"
+                msg += "   (clave en herbicidas)\n" if ef.get("es_herbicida") else "\n"
             msg += f"\nLectura: {ef['verdicto']}.\n\n{ef['aviso']}"
             self.txt.insert(tk.END, msg)
         self.txt.config(state="disabled")
@@ -2281,52 +2362,162 @@ class DialogoEfectoProducto(tk.Toplevel):
         self.destroy()
 
 
-class DialogoRadar(tk.Toplevel):
-    """Muestra los valores/indices de Sentinel-1 (radar) y su interpretacion
-    RELACIONADA con Sentinel-2 (optico). Se abre al pulsar el boton de radar."""
-    def __init__(self, master, nombre, radar, info, n, msg):
+class VentanaRadar(tk.Toplevel):
+    """Ventana propia de Sentinel-1: grafica de parametros de radar (VV/VH/RVI/CR)
+    con su interpretacion relacionada con el optico, y un MAPA de radar con
+    selector de parametro, dia y resolucion."""
+    RADAR_FECHAS = None
+
+    def __init__(self, master, nombre, campana, radar, info, n, msg):
         super().__init__(master)
-        self.title(f"Sentinel-1 (radar) · {nombre.replace('_', ' ')}")
-        self.configure(bg=TEMA["surface"])
-        self.resizable(False, False)
+        self.nombre, self.campana = nombre, campana
+        self.radar = radar or []
+        self.coords = (DB.ficha(nombre) or {}).get("coordenadas") or []
+        self.title(f"Sentinel-1 (radar) · {nombre.replace('_', ' ')} · {campana}")
+        self.geometry("1160x650")
+        self.configure(bg=TEMA["page"])
         self.transient(master.winfo_toplevel())
         self.lift()
-        self.after(60, self.focus_force)
-        self.grab_set()
+        self.after(80, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
 
-        tk.Label(self, text="Radar Sentinel-1  ·  complemento al optico (atraviesa nubes)",
-                 bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
-        estado = (f"Descarga: {msg}." if n == 0 else f"Descargadas {n} pasadas de radar nuevas.")
-        tk.Label(self, text=estado, bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).pack(anchor="w", padx=16)
+        cab = tk.Frame(self, bg=TEMA["header_bg"])
+        cab.pack(fill="x")
+        tk.Label(cab, text="Radar Sentinel-1  ·  parametros, interpretacion y mapa",
+                 bg=TEMA["header_bg"], fg="#fff", font=FUENTES["h2"]).pack(side="left", padx=16, pady=10)
+        est = (f"{msg}" if n == 0 else f"descargadas {n} pasadas de radar nuevas")
+        tk.Label(cab, text=f"({est})", bg=TEMA["header_bg"], fg="#cbd5e1",
+                 font=FUENTES["small"]).pack(side="left", padx=6)
 
-        if radar:
-            r = radar[-1]
-            rango = ""
-            if r.get("rvi_lo") is not None and r.get("rvi_hi") is not None:
-                rango = f" [{r.get('rvi_lo')}-{r.get('rvi_hi')}]"
-            linea = (f"Ultima pasada {r.get('fecha')}:   VV {r.get('vv')} dB    VH {r.get('vh')} dB"
-                     f"    RVI {r.get('rvi')}{rango}    CR {r.get('cr')} dB")
-            tk.Label(self, text=linea, bg=TEMA["surface"], fg=TEMA["text"],
-                     font=FUENTES["body"]).pack(anchor="w", padx=16, pady=(8, 0))
-            fiab = (r.get("fiabilidad") or "desconocida").upper()
-            col = {"ALTA": TEMA["ok_fg"], "MEDIA": TEMA["warn_fg"], "BAJA": TEMA["danger_fg"]}.get(
-                fiab, TEMA["text_muted"])
-            tk.Label(self, text=f"Fiabilidad del dato: {fiab}   ·   {r.get('n_pixeles')} pixeles   ·   "
-                                f"dispersion VV/VH {r.get('vv_std')}/{r.get('vh_std')} dB",
-                     bg=TEMA["surface"], fg=col, font=FUENTES["small"]).pack(anchor="w", padx=16)
+        cuerpo = tk.Frame(self, bg=TEMA["page"])
+        cuerpo.pack(fill="both", expand=True, padx=8, pady=8)
 
-        txt = tk.Text(self, width=66, height=10, bd=0, relief="flat", bg="#eef7f5",
+        # ---- IZQUIERDA: grafica de parametros de radar + interpretacion ----
+        izq = tarjeta(cuerpo, width=560)
+        izq.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        tk.Label(izq, text="Evolucion de los parametros de radar", bg=TEMA["surface"],
+                 fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=12, pady=(10, 4))
+        self.fig = Figure(figsize=(6, 2.7), dpi=90)
+        self.cv = FigureCanvasTkAgg(self.fig, master=izq)
+        self.cv.get_tk_widget().pack(fill="x", padx=12, pady=(0, 6))
+        self._pintar_grafica_radar()
+        txt = tk.Text(izq, wrap="word", height=8, bd=0, relief="flat", bg="#eef7f5",
                       fg=TEMA["text"], font=FUENTES["body"], padx=12, pady=10, highlightthickness=0)
-        txt.pack(fill="both", expand=True, padx=16, pady=(8, 0))
-        txt.insert(tk.END, info.get("texto", ""))
+        txt.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        txt.insert(tk.END, (info or {}).get("texto", ""))
         txt.config(state="disabled")
 
-        bar = tk.Frame(self, bg=TEMA["surface"])
-        bar.pack(fill="x", padx=16, pady=12)
-        ttk.Button(bar, text="Cerrar", style="Ghost.TButton", command=self.destroy).pack(side="right")
-        tk.Label(bar, text="El RVI del radar aparece en la grafica como 'RVI·S1'.",
-                 bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(side="left")
+        # ---- DERECHA: mapa de radar con selectores ----
+        der = tarjeta(cuerpo)
+        der.pack(side="right", fill="both", expand=True, padx=(6, 0))
+        barra = tk.Frame(der, bg=TEMA["surface"])
+        barra.pack(fill="x", padx=10, pady=10)
+        tk.Label(barra, text="Parametro", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left")
+        self.cb_par = ttk.Combobox(barra, state="readonly", width=6, values=["RVI", "VV", "VH"])
+        self.cb_par.set("RVI")
+        self.cb_par.pack(side="left", padx=4)
+        self.cb_par.bind("<<ComboboxSelected>>", lambda e: self._cargar_mapa())
+        tk.Label(barra, text="Dia", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left", padx=(8, 0))
+        fechas = [r["fecha"] for r in self.radar if r.get("fecha")]
+        self.cb_dia = ttk.Combobox(barra, state="readonly", width=12, values=fechas)
+        if fechas:
+            self.cb_dia.set(fechas[-1])
+        self.cb_dia.pack(side="left", padx=4)
+        self.cb_dia.bind("<<ComboboxSelected>>", lambda e: self._cargar_mapa())
+        tk.Label(barra, text="Resol.", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left", padx=(8, 0))
+        self.cb_res = ttk.Combobox(barra, state="readonly", width=16,
+                                   values=[e[0] for e in RESOLUCIONES])
+        self.cb_res.set(RESOLUCIONES[1][0])
+        self.cb_res.pack(side="left", padx=4)
+        self.cb_res.bind("<<ComboboxSelected>>", lambda e: self._cargar_mapa())
+        self.lbl_info = tk.Label(der, text="", bg=TEMA["surface"], fg=TEMA["text_muted"],
+                                 font=FUENTES["small"])
+        self.lbl_info.pack(anchor="w", padx=12)
+        cont = tk.Frame(der, bg=TEMA["surface"])
+        cont.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.lienzo = LienzoMapa(cont, on_info=lambda t: self.lbl_info.winfo_exists() and
+                                 self.lbl_info.config(text=t))
+        self.lienzo.pack(side="left", fill="both", expand=True)
+        self.fig_ley = Figure(figsize=(0.95, 3.0), dpi=90)
+        self.cv_ley = FigureCanvasTkAgg(self.fig_ley, master=cont)
+        self.cv_ley.get_tk_widget().pack(side="right", fill="y")
+        self._cargar_mapa()
+
+    def _pintar_grafica_radar(self):
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        pts = []
+        for r in self.radar:
+            try:
+                pts.append((datetime.strptime(r.get("fecha", ""), "%Y-%m-%d"), r))
+            except (TypeError, ValueError):
+                continue
+        if pts:
+            fechas = [p[0] for p in pts]
+            for k, color, lbl in [("vv", "#64748b", "VV (dB)"), ("vh", "#0ea5e9", "VH (dB)"),
+                                  ("cr", "#d97706", "CR=VH-VV (dB)")]:
+                ys = [p[1].get(k) for p in pts]
+                if any(v is not None for v in ys):
+                    ax.plot(fechas, [v if v is not None else float("nan") for v in ys],
+                            marker="o", ms=3, lw=1.6, label=lbl, color=color)
+            ax.set_ylabel("dB", fontsize=8)
+            ax2 = ax.twinx()          # RVI en eje 0-1 aparte
+            rvis = [p[1].get("rvi") for p in pts]
+            if any(v is not None for v in rvis):
+                ax2.plot(fechas, [v if v is not None else float("nan") for v in rvis],
+                         marker="s", ms=3, lw=1.8, ls="--", label="RVI", color="#0d9488")
+                los = [p[1].get("rvi_lo") for p in pts]
+                his = [p[1].get("rvi_hi") for p in pts]
+                if all(x is not None for x in los) and all(x is not None for x in his):
+                    ax2.fill_between(fechas, los, his, color="#0d9488", alpha=0.15)
+                ax2.set_ylabel("RVI", fontsize=8)
+                ax2.set_ylim(0, 1)
+            h1, l1 = ax.get_legend_handles_labels()
+            h2, l2 = ax2.get_legend_handles_labels()
+            ax.legend(h1 + h2, l1 + l2, fontsize=7, ncol=4, loc="upper center",
+                      bbox_to_anchor=(0.5, 1.18))
+            self.fig.autofmt_xdate()
+        self.fig.tight_layout()
+        self.cv.draw()
+
+    def _leyenda_radar(self, param):
+        self.fig_ley.clear()
+        vis = RADAR_VIS.get(param, RADAR_VIS["RVI"])
+        ax = self.fig_ley.add_axes([0.1, 0.05, 0.32, 0.9])
+        cmap = mcolors.LinearSegmentedColormap.from_list("x", ["#" + c for c in vis["paleta"]])
+        cb = matplotlib.colorbar.ColorbarBase(ax, cmap=cmap,
+                                              norm=mcolors.Normalize(*vis["rango"]),
+                                              orientation="vertical")
+        cb.ax.tick_params(labelsize=7)
+        cb.set_label(param + (" (dB)" if param in ("VV", "VH") else ""), fontsize=8)
+        self.cv_ley.draw()
+
+    def _cargar_mapa(self):
+        param = self.cb_par.get()
+        iso = self.cb_dia.get()
+        self._leyenda_radar(param)
+        if not iso:
+            return self.lienzo.mensaje("No hay dias de radar. Descarga con el boton de la ficha.")
+        metros = dict(RESOLUCIONES).get(self.cb_res.get(), 10)
+        png = ruta_cache_radar(self.nombre, param, iso, metros)
+        if os.path.exists(png):
+            self.lienzo.set_png(png, f"S1 {param} · {metros} m/pixel")
+        elif _EE and _PIL:
+            self.lienzo.mensaje(f"Descargando mapa S1 {param} a {metros} m/pixel...")
+            threading.Thread(target=self._descargar_mapa, args=(iso, param, png, metros),
+                             daemon=True).start()
+        else:
+            self.lienzo.mensaje("(mapa no disponible sin GEE/PIL)")
+
+    def _descargar_mapa(self, iso, param, png, metros):
+        try:
+            dim = descargar_mapa_radar(self.coords, iso, param, metros, png)
+            self.after(0, lambda: self.lienzo.set_png(png, f"S1 {param} · {dim}x{dim} px · {metros} m/pixel"))
+        except Exception as e:
+            self.after(0, lambda: self.lienzo.mensaje(f"Error mapa radar: {e}", TEMA["danger_fg"]))
 
 
 # =====================================================================
@@ -2681,16 +2872,24 @@ class FichaParcela:
 
         # diagnostico fenologico (rapido, local): fase, estado, cubierta y eventos
         diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec)
+        estado_bruto = diag["estado"]          # el que produce el motor (base del aprendizaje)
+        cultivo_id = f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")
+        # --- APRENDIZAJE de campanas anteriores por validacion del usuario ---
+        aj = ajuste_por_validaciones(cultivo_id, diag.get("fase"), estado_bruto,
+                                     DB.validaciones_recientes(limite=300))
+        if aj.get("corregido"):
+            diag["estado"] = aj["corregido"]   # la prediccion se afina con el historial
         self._estado_actual = diag["estado"]
-        # contexto que se guarda al validar (para aprender)
+        # contexto que se guarda al validar (se guarda el estado BRUTO, para aprender coherente)
         self._val_ctx = {"fecha": actual.get("fecha"), "fase": diag.get("fase"),
-                         "estado": diag.get("estado"),
-                         "cultivo": f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")}
+                         "estado": estado_bruto, "cultivo": cultivo_id}
         cab = f"[{diag['estado']}]  Fase: {diag['fase']}"
         c = diag.get("cubierta")
         if c and c["señales"] >= 2:
             cab += f"  ·  Cubierta: {c['hipotesis_preliminar']} ({c['señales']}/4)"
         self.txt.insert(tk.END, cab + "\n\n")
+        if aj.get("nota"):
+            self.txt.insert(tk.END, "🧠 " + aj["nota"] + "\n\n")
         self._refrescar_validacion()
 
         if tipo == "BARBECHO":
@@ -2961,7 +3160,7 @@ class FichaParcela:
                 diag = evaluar_parcela(cult.get("tipo", "BARBECHO"), cult.get("subtipo", ""),
                                        optica, spec=spec_de(cult))
             info = S1.interpretar_radar(optica, self._radar, diag)
-            DialogoRadar(self.master, self.nombre, self._radar, info, n, msg)
+            VentanaRadar(self.master, self.nombre, self.campana, self._radar, info, n, msg)
         self.master.after(0, fin)
 
     def sincronizar(self):
