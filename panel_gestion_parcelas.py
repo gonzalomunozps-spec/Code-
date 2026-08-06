@@ -78,6 +78,7 @@ from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
 from geo import superficie_ha    # area de la parcela (shoelace), logica compartida
 from campanas import campana_actual, rango_campana, campanas_entre   # logica de campana
 from sigpac import sigpac_consultar, _sigpac_get, SigpacError         # consulta de recintos SIGPAC
+from cultivo import spec_de, clave_cultivo                            # modelo de cultivo (puro)
 
 # Modulo OPCIONAL y desacoplado: informe anual en PDF. Si se borra el fichero
 # informe_anual.py, esto queda en None y el boton no aparece (ver su cabecera).
@@ -658,8 +659,7 @@ NOMBRE_CULTIVO = {
 # (se importan arriba). superficie_ha vive en geo.py.
 
 
-def clave_cultivo(tipo, subtipo):
-    return tipo if tipo == "BARBECHO" else f"{tipo}_{subtipo}"
+# clave_cultivo vive ahora en cultivo.py (se importa arriba).
 
 
 def nombre_seguro(nombre):
@@ -678,14 +678,7 @@ def nombre_seguro(nombre):
 # SigpacError arriba.
 
 
-def spec_de(cultivo):
-    """Extrae el modelo por especie del registro de cultivo (o None si es antiguo)."""
-    if not cultivo or not cultivo.get("especie"):
-        return None
-    return {"especie": cultivo.get("especie"),
-            "fecha_siembra": cultivo.get("fecha_siembra"),
-            "marco_calle": cultivo.get("marco_calle"),
-            "marco_pie": cultivo.get("marco_pie")}
+# spec_de vive ahora en cultivo.py (se importa arriba).
 
 
 def construir_indice(img, indice):

@@ -102,10 +102,9 @@ def _superficie_ha(coords):
 
 
 def _spec_de(cultivo):
-    if not cultivo or not cultivo.get("especie"):
-        return None
-    return {"especie": cultivo.get("especie"), "fecha_siembra": cultivo.get("fecha_siembra"),
-            "marco_calle": cultivo.get("marco_calle"), "marco_pie": cultivo.get("marco_pie")}
+    # mismo modelo de cultivo que usa el panel, centralizado en cultivo.py
+    import cultivo as _CU
+    return _CU.spec_de(cultivo)
 
 
 def _eventos_cerca(eventos, fecha_iso, ventana=20):
