@@ -2716,6 +2716,41 @@ class FichaParcela:
         self.fig = Figure(figsize=(6, 2.7), dpi=90)
         self.cv = FigureCanvasTkAgg(self.fig, master=card)
         self.cv.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        # --- BLITTING del tooltip (EXPERIMENTAL, rama claude/tooltip-blit) ---
+        # Redibuja solo la linea+caja del puntero sobre un fondo cacheado, en vez de
+        # repintar todo el lienzo en cada movimiento del raton. Si el entorno grafico
+        # no lo soporta, se desactiva solo y se vuelve al metodo normal (draw_idle).
+        self._useblit = True
+        self._hover_bg = None
+        self.cv.mpl_connect("draw_event", self._capturar_fondo)
+
+    def _capturar_fondo(self, _event=None):
+        """Guarda el fondo del lienzo tras cada redibujado completo (para el blit)."""
+        if not self._useblit:
+            return
+        try:
+            self._hover_bg = self.cv.copy_from_bbox(self.fig.bbox)
+        except Exception:
+            self._hover_bg = None
+
+    def _pintar_hover(self):
+        """Pinta la linea+caja del puntero. Con blit solo toca esos artistas; si el
+        blit falla en este equipo, se desactiva y se sigue con el redibujado normal."""
+        if self._useblit and self._hover_bg is not None:
+            try:
+                self.cv.restore_region(self._hover_bg)
+                self._hover_ax.draw_artist(self._hover_linea)
+                self._hover_ax.draw_artist(self._hover_caja)
+                self.cv.blit(self.fig.bbox)
+                return
+            except Exception:
+                self._useblit = False           # degrada a comportamiento estable
+                for a in (getattr(self, "_hover_linea", None), getattr(self, "_hover_caja", None)):
+                    try:
+                        a.set_animated(False)
+                    except Exception:
+                        pass
+        self.cv.draw_idle()
 
     def _replot(self):
         self._pintar_graficas(getattr(self, "_regs_actual", []))
@@ -2836,13 +2871,14 @@ class FichaParcela:
             ax.legend(fontsize=7, ncol=5, loc="upper center", bbox_to_anchor=(0.5, 1.18))
             self.fig.autofmt_xdate()
             # --- puntero interactivo: linea vertical + caja con los valores del dia ---
+            # animated=_useblit -> quedan fuera del fondo cacheado y se pintan por blit
             self._hover_linea = ax.axvline(fechas[0], color="#94a3b8", lw=0.8,
-                                           alpha=0.0, zorder=1)
+                                           alpha=0.0, zorder=1, animated=self._useblit)
             self._hover_caja = ax.annotate(
                 "", xy=(0, 0), xytext=(12, 12), textcoords="offset points",
                 fontsize=7.5, ha="left", va="bottom", visible=False, zorder=6,
                 bbox=dict(boxstyle="round,pad=0.4", fc="#111827", ec="#111827", alpha=0.92),
-                color="#f8fafc")
+                color="#f8fafc", animated=self._useblit)
             if getattr(self, "_hover_cid", None) is not None:
                 try:
                     self.cv.mpl_disconnect(self._hover_cid)
@@ -2859,7 +2895,7 @@ class FichaParcela:
             if caja is not None and caja.get_visible():
                 caja.set_visible(False)
                 self._hover_linea.set_alpha(0.0)
-                self.cv.draw_idle()
+                self._pintar_hover()
             return
         x = event.xdata
         xn, reg, texto = min(self._hover_datos, key=lambda t: abs(t[0] - x))
@@ -2879,7 +2915,7 @@ class FichaParcela:
         caja.set_ha(ha)
         caja.set_va(va)
         caja.set_visible(True)
-        self.cv.draw_idle()
+        self._pintar_hover()
 
     def _pintar_leyenda(self):
         self.fig_ley.clear()
