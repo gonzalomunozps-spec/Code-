@@ -36,14 +36,12 @@ TIPOS_EVENTO = ["PRODUCTO", "SIEGA", "COSECHA", "RIEGO", "LABOREO", "SIEMBRA", "
 OBJETIVOS_PRODUCTO = ["fitosanitario (plaga)", "fungicida (enfermedad)",
                       "herbicida (malas hierbas)", "abono / nutricion", "otro"]
 
-# --- INTERRUPTOR REVERSIBLE -------------------------------------------------
-# Cuando un herbicida deja el LAI/NDVI CONSTANTE, el resultado es ambiguo. Con
-# este contexto activado, se intenta desambiguar usando la PROPIA serie:
-#   - si la dispersion intraparcela (ndvi_std) BAJA -> se limpiaron rodales de
-#     mala hierba manteniendo la cobertura del cultivo (efecto probable);
-#   - si el LAI VENIA SUBIENDO y se estanca -> el tratamiento freno vegetacion.
-# Para volver al comportamiento anterior ("sin cambio claro"), poner en False.
-HERBICIDA_CONTEXTO_ACTIVO = True
+# Interpretacion (opcional) del herbicida con LAI constante. Vive en un modulo
+# aparte; si se borra ese fichero, se vuelve solo al comportamiento base.
+try:
+    import herbicida_contexto as _HB
+except Exception:
+    _HB = None
 
 # eventos que, si estan registrados, EXPLICAN una caida brusca del NDVI
 EVENTOS_QUE_BAJAN_NDVI = {"SIEGA", "COSECHA"}
@@ -179,15 +177,14 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
                         "herbicida (reduccion de vegetacion)")
         elif (d_lai is not None and d_lai > 0.15) or d_ndvi > 0.05:
             verdicto = "sin efecto herbicida visible: el area foliar y el verdor siguen al alza"
-        elif HERBICIDA_CONTEXTO_ACTIVO and d_std is not None and d_std < -0.02:
-            verdicto = (f"efecto probable: el area foliar se mantiene pero la parcela se HOMOGENEIZA "
-                        f"(dispersion {d_std:+.3f}); compatible con limpieza de rodales de mala hierba "
-                        "conservando la cobertura del cultivo")
-        elif HERBICIDA_CONTEXTO_ACTIVO and lai_subia_antes:
-            verdicto = ("efecto probable: el LAI venia SUBIENDO y se estanca tras el herbicida; el "
-                        "tratamiento pudo frenar vegetacion (maleza controlada o fitotoxicidad)")
         else:
-            verdicto = "sin cambio claro tras el herbicida (LAI estable, sin contexto que lo aclare)"
+            # LAI/NDVI plano: se delega en el modulo opcional herbicida_contexto.
+            # Si ese modulo se ha borrado (_HB is None), se usa el texto base.
+            verdicto = None
+            if _HB is not None:
+                verdicto = _HB.verdicto_lai_constante(d_std, lai_subia_antes)
+            if not verdicto:
+                verdicto = "sin cambio claro tras el herbicida (LAI estable)"
     else:
         if d_ndvi > 0.05:
             verdicto = "respuesta positiva compatible (el verdor se recupera tras la aplicacion)"
