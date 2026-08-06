@@ -679,7 +679,7 @@ def pruebas_panel_helpers():
     check("tooltip: registro vacio -> cadena vacia", lambda: tip({}), lambda r: r == "" or "None" not in r)
 
     # campanas_entre (para sincronizar anos anteriores)
-    m2 = re.search(r"\ndef campanas_entre\(.*?\n(?=\ndef superficie_ha)", src, re.S)
+    m2 = re.search(r"\ndef campanas_entre\(.*?\n(?=\ndef clave_cultivo)", src, re.S)
     if not m2:
         _FALLA.append(("panel", "no se localiza campanas_entre en el panel"))
         return
@@ -814,11 +814,34 @@ def _informe_anual_error():
 
 
 # =====================================================================
+# 12. GEOMETRIA (geo.py) y contratos de superficie_ha en cada llamador
+# =====================================================================
+def pruebas_geo():
+    import geo
+    sq = [[-4.10, 41.650], [-4.093, 41.650], [-4.093, 41.654], [-4.10, 41.654], [-4.10, 41.650]]
+    check("geo: superficie de un cuadrado conocido (~25.87 ha)",
+          lambda: geo.superficie_ha(sq), lambda r: abs(r - 25.868) < 0.05)
+    check("geo: sin redondear (contrato del panel)",
+          lambda: geo.superficie_ha(sq), lambda r: r != round(r, 2))
+    check("geo: poligono invalido -> 0.0", lambda: geo.superficie_ha([[0, 0], [1, 1]]),
+          lambda r: r == 0.0)
+    # los llamadores conservan su contrato exacto
+    import demo_sistema as D
+    check("demo: superficie redondeada a 2 (== round(geo))",
+          lambda: D.superficie_ha(sq), lambda r: r == round(geo.superficie_ha(sq), 2))
+    import informe_anual as IA
+    check("informe: poligono invalido -> None (contrato propio)",
+          lambda: IA._superficie_ha([[0, 0], [1, 1]]), lambda r: r is None)
+    check("informe: valido -> round(geo, 2)",
+          lambda: IA._superficie_ha(sq), lambda r: r == round(geo.superficie_ha(sq), 2))
+
+
+# =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
-              pruebas_informe_anual, _informe_anual_error):
+              pruebas_informe_anual, _informe_anual_error, pruebas_geo):
         try:
             f()
         except Exception as e:

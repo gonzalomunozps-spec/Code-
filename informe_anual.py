@@ -32,7 +32,6 @@ Dependencias (ambas OPCIONALES, tolerantes):
 """
 
 import os
-import math
 from datetime import datetime
 
 # --- motor real del programa (nucleo; estos modulos siempre estan) ---
@@ -94,19 +93,12 @@ def _fnat(iso):
 
 
 def _superficie_ha(coords):
+    # geometria compartida en geo.py; aqui se conserva el contrato del informe:
+    # None si el poligono no es valido, y hectareas redondeadas en caso contrario.
     if not coords or len(coords) < 3:
         return None
-    pts = coords[:-1] if coords[0] == coords[-1] else coords
-    lat0 = math.radians(sum(p[1] for p in pts) / len(pts))
-    R = 6371000.0
-    xy = [(math.radians(p[0]) * R * math.cos(lat0), math.radians(p[1]) * R) for p in pts]
-    area = 0.0
-    n = len(xy)
-    for i in range(n):
-        x1, y1 = xy[i]
-        x2, y2 = xy[(i + 1) % n]
-        area += x1 * y2 - x2 * y1
-    return round(abs(area) / 2.0 / 10000.0, 2)
+    import geo
+    return round(geo.superficie_ha(coords), 2)
 
 
 def _spec_de(cultivo):

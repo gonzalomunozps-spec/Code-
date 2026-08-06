@@ -75,6 +75,7 @@ import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al 
 # utilidades puras de fecha (dd-mm-aaaa <-> ISO, mascara y validacion al vuelo)
 from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
                     filtrar_fecha_digitos)
+from geo import superficie_ha    # area de la parcela (shoelace), logica compartida
 
 # Modulo OPCIONAL y desacoplado: informe anual en PDF. Si se borra el fichero
 # informe_anual.py, esto queda en None y el boton no aparece (ver su cabecera).
@@ -674,20 +675,7 @@ def campanas_entre(inicio, fin):
     return [f"{y}-{y + 1}" for y in range(a1, a0 - 1, -1)]
 
 
-def superficie_ha(coords):
-    if not coords or len(coords) < 3:
-        return 0.0
-    pts = coords[:-1] if coords[0] == coords[-1] else coords
-    lat0 = math.radians(sum(p[1] for p in pts) / len(pts))
-    R = 6371000.0
-    xy = [(math.radians(p[0]) * R * math.cos(lat0), math.radians(p[1]) * R) for p in pts]
-    area = 0.0
-    n = len(xy)
-    for i in range(n):
-        x1, y1 = xy[i]
-        x2, y2 = xy[(i + 1) % n]
-        area += x1 * y2 - x2 * y1
-    return abs(area) / 2.0 / 10000.0
+# superficie_ha vive ahora en geo.py (se importa arriba): misma logica compartida.
 
 
 def clave_cultivo(tipo, subtipo):
