@@ -142,6 +142,27 @@ def pruebas_motor():
                   [{"cultivo": "C", "fase": "f", "estado_sistema": "OK", "veredicto": "correcto"}]),
           lambda r: r.get("corregido") is None and "correcto" in r.get("nota", ""))
 
+    # --- APRENDE DE LO QUE LA PERSONA ESCRIBE: se recuperan sus observaciones ---
+    from interpretacion_fenologica import observaciones_del_agricultor
+    obs = [{"cultivo": "T", "fase": "llenado", "veredicto": "incorrecto", "estado_real": "OK",
+            "fecha": "2026-05-14", "nota": "es maduracion, el trigo amarillea"},
+           {"cultivo": "T", "fase": "llenado", "veredicto": "correcto", "estado_sistema": "OK",
+            "fecha": "2025-05-20", "nota": "igual que el ano pasado"},
+           {"cultivo": "OTRO", "fase": "llenado", "veredicto": "incorrecto", "estado_real": "OK",
+            "fecha": "2024-05-20", "nota": "no cuenta, otro cultivo"}]
+    check("observaciones: recupera lo escrito para el mismo cultivo/fase",
+          lambda: [o["nota"] for o in observaciones_del_agricultor("T", "llenado", obs)],
+          lambda r: len(r) == 2 and "amarillea" in r[0])
+    check("observaciones: usa estado_real si fue correccion",
+          lambda: observaciones_del_agricultor("T", "llenado", obs)[0]["estado"],
+          lambda r: r == "OK")
+    check("observaciones: sin notas -> []",
+          lambda: observaciones_del_agricultor("T", "llenado",
+                  [{"cultivo": "T", "fase": "llenado", "veredicto": "correcto", "nota": ""}]),
+          lambda r: r == [])
+    check("observaciones: cultivo distinto no se mezcla",
+          lambda: observaciones_del_agricultor("Z", "llenado", obs), lambda r: r == [])
+
     # deltas
     check("delta: previo=0 -> None", lambda: delta("NDVI", 0.5, 0), lambda r: r[1] is None)
     check("delta: previo None -> None", lambda: delta("NDVI", 0.5, None), lambda r: r[1] is None)

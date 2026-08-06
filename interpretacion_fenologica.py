@@ -500,6 +500,34 @@ def ajuste_por_validaciones(cultivo, fase, estado_sistema, validaciones):
                      "cuenta (aun sin suficiente historial para ajustar automaticamente).")}
 
 
+def observaciones_del_agricultor(cultivo, fase, validaciones, limite=3):
+    """Devuelve lo que la PERSONA escribio al validar, para el MISMO cultivo y fase.
+
+    El programa aprende de lo que se le dice: estas notas de texto se muestran tal
+    cual en la interpretacion (funcione o no ChatGPT), y se reutilizan cuando vuelve
+    a darse la misma situacion. Lista de dicts {fecha, veredicto, estado, nota},
+    de la mas reciente a la mas antigua, sin repetir texto."""
+    if not validaciones or not cultivo:
+        return []
+    fase_l = (fase or "").lower()
+    out, vistos = [], set()
+    for v in validaciones:
+        if not isinstance(v, dict):
+            continue
+        if v.get("cultivo") != cultivo or (v.get("fase") or "").lower() != fase_l:
+            continue
+        nota = (v.get("nota") or "").strip()
+        if not nota or nota in vistos:
+            continue
+        vistos.add(nota)
+        estado = v.get("estado_real") if v.get("veredicto") == "incorrecto" else v.get("estado_sistema")
+        out.append({"fecha": v.get("fecha"), "veredicto": v.get("veredicto"),
+                    "estado": estado, "nota": nota})
+        if len(out) >= limite:
+            break
+    return out
+
+
 def texto_interpretacion(tipo, subtipo, serie, fecha_iso=None, modelo="gpt-4o-mini",
                          eventos_cerca=None, spec=None, aprendizaje=None):
     """Genera el texto. Usa ChatGPT si hay OPENAI_API_KEY; si no, respaldo por reglas.

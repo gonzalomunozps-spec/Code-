@@ -65,7 +65,8 @@ import matplotlib.dates as mdates
 # interpretacion_fenologica; el panel no habla con OpenAI directamente.
 
 # Modulo de interpretacion fenologica + deteccion de cubierta vegetal (IA)
-from interpretacion_fenologica import evaluar_parcela, texto_interpretacion, ajuste_por_validaciones
+from interpretacion_fenologica import (evaluar_parcela, texto_interpretacion,
+                                       ajuste_por_validaciones, observaciones_del_agricultor)
 import registro_parcela as REG
 import fenologia_especies as FEN
 import credenciales as CRED
@@ -2019,7 +2020,7 @@ class DialogoRelevoCampana(tk.Toplevel):
 
 class DialogoCorreccion(tk.Toplevel):
     """Pide el estado real y una nota para corregir un diagnostico (aprendizaje)."""
-    def __init__(self, master, ficha, ctx):
+    def __init__(self, master, ficha, ctx, nota_inicial=""):
         super().__init__(master)
         self.ficha = ficha
         self.title("Corregir diagnostico")
@@ -2045,6 +2046,8 @@ class DialogoCorreccion(tk.Toplevel):
         self.txt = tk.Text(self, width=44, height=4, bd=1, relief="solid",
                            font=FUENTES["body"], highlightthickness=0)
         self.txt.pack(padx=16, pady=(2, 0))
+        if nota_inicial:
+            self.txt.insert("1.0", nota_inicial)
         bar = tk.Frame(self, bg=TEMA["surface"])
         bar.pack(fill="x", padx=16, pady=14)
         ttk.Button(bar, text="Cancelar", style="Ghost.TButton", command=self.destroy).pack(side="right")
@@ -2723,10 +2726,16 @@ class FichaParcela:
         self.lbl_val = tk.Label(val, text="¿El diagnostico es correcto?", bg=TEMA["surface"],
                                 fg=TEMA["text_sec"], font=FUENTES["small"])
         self.lbl_val.pack(anchor="w")
+        # observacion libre: el programa aprende de lo que TU escribas aqui
+        self.ent_obs = ttk.Entry(val)
+        self.ent_obs.pack(fill="x", pady=(4, 0))
+        tk.Label(val, text="Escribe lo que observas y valida: el programa lo aprende.",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w")
         botones = tk.Frame(val, bg=TEMA["surface"])
         botones.pack(fill="x", pady=(2, 0))
         self.btn_val_ok = ttk.Button(botones, text="  ✓ Correcto  ", style="Ghost.TButton",
-                                     command=lambda: self._validar("correcto"))
+                                     command=lambda: self._validar("correcto",
+                                                                   nota=self.ent_obs.get().strip()))
         self.btn_val_ok.pack(side="left")
         self.btn_val_no = ttk.Button(botones, text="  ✗ Corregir…  ", style="Ghost.TButton",
                                      command=self._abrir_correccion)
@@ -2902,30 +2911,62 @@ class FichaParcela:
         diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec)
         estado_bruto = diag["estado"]          # el que produce el motor (base del aprendizaje)
         cultivo_id = f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")
-        # --- APRENDIZAJE de campanas anteriores por validacion del usuario ---
-        aj = ajuste_por_validaciones(cultivo_id, diag.get("fase"), estado_bruto,
-                                     DB.validaciones_recientes(limite=300))
+
+        historial = DB.validaciones_recientes(limite=300)
+        # --- APRENDIZAJE de campanas anteriores (ajuste del estado por historial) ---
+        aj = ajuste_por_validaciones(cultivo_id, diag.get("fase"), estado_bruto, historial)
         if aj.get("corregido"):
             diag["estado"] = aj["corregido"]   # la prediccion se afina con el historial
+
+        # --- VALIDACION PROPIA DE ESTA PASADA: lo que TU dijiste manda sobre lo mostrado ---
+        # Aprende al momento: si corregiste esta pasada, se muestra tu estado; si la
+        # confirmaste, se marca; y tu observacion escrita se refleja siempre.
+        val_actual = DB.validacion_de(self.nombre, self.campana, actual.get("fecha"))
+        nota_usuario = None
+        if val_actual:
+            if val_actual.get("veredicto") == "incorrecto" and val_actual.get("estado_real"):
+                diag["estado"] = val_actual["estado_real"]
+                nota_usuario = (f"Corregido por ti a '{val_actual['estado_real']}' "
+                                f"(el sistema decia '{estado_bruto}'). El programa lo recuerda.")
+            elif val_actual.get("veredicto") == "correcto":
+                nota_usuario = f"Confirmado por ti como '{estado_bruto}'."
+            obs_txt = (val_actual.get("nota") or "").strip()
+            if obs_txt:
+                nota_usuario = (nota_usuario or "") + f"  Tu observacion: “{obs_txt}”."
+
         self._estado_actual = diag["estado"]
         # contexto que se guarda al validar (se guarda el estado BRUTO, para aprender coherente)
         self._val_ctx = {"fecha": actual.get("fecha"), "fase": diag.get("fase"),
                          "estado": estado_bruto, "cultivo": cultivo_id}
+
+        # ---- ENCABEZADO compartido por el render inmediato y el de la IA ----
         cab = f"[{diag['estado']}]  Fase: {diag['fase']}"
         c = diag.get("cubierta")
         if c and c["señales"] >= 2:
             cab += f"  ·  Cubierta: {c['hipotesis_preliminar']} ({c['señales']}/4)"
-        self.txt.insert(tk.END, cab + "\n\n")
+        lineas = [cab]
         if aj.get("nota"):
-            self.txt.insert(tk.END, "🧠 " + aj["nota"] + "\n\n")
+            lineas.append("🧠 " + aj["nota"])
+        if nota_usuario:
+            lineas.append("🧠 " + nota_usuario)
+        # lo que la PERSONA dijo antes en este cultivo/fase (se muestra haya o no ChatGPT)
+        obs_prev = [o for o in observaciones_del_agricultor(cultivo_id, diag.get("fase"), historial)
+                    if o.get("fecha") != actual.get("fecha")]
+        if obs_prev:
+            lineas.append("🗣️ Segun tus validaciones anteriores:")
+            for o in obs_prev:
+                lineas.append(f"   • [{o.get('estado', '?')}] {o['nota']}")
+        encabezado = "\n".join(lineas) + "\n\n"
+
+        self.txt.insert(tk.END, encabezado)
         self._refrescar_validacion()
 
         if tipo == "BARBECHO":
             self.txt.insert(tk.END, diag["motivo"])
             return
-        # validaciones pasadas del agricultor -> aprendizaje para la IA
-        aprendizaje = DB.validaciones_recientes(limite=8, cultivo=self._val_ctx["cultivo"])
-        if actual.get("interpretacion"):          # cacheado
+        # validaciones pasadas del agricultor -> aprendizaje para la IA (incluye tus notas)
+        aprendizaje = DB.validaciones_recientes(limite=8, cultivo=cultivo_id)
+        if actual.get("interpretacion"):          # cacheado (se invalida al corregir)
             self.txt.insert(tk.END, actual["interpretacion"])
             return
         self.txt.insert(tk.END, "Generando interpretacion...")
@@ -2940,7 +2981,7 @@ class FichaParcela:
                 if not self.txt.winfo_exists():   # el usuario ya navego a otra vista
                     return
                 self.txt.delete("1.0", tk.END)
-                self.txt.insert(tk.END, cab + "\n\n" + texto)
+                self.txt.insert(tk.END, encabezado + texto)
             self.master.after(0, pintar)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2970,13 +3011,29 @@ class FichaParcela:
         DB.guardar_validacion(self.nombre, self.campana, ctx["fecha"], ctx.get("fase"),
                               ctx.get("cultivo"), ctx.get("estado"), veredicto,
                               estado_real=estado_real, nota=nota)
-        self._refrescar_validacion()
+        # APRENDER AL MOMENTO: si corriges o escribes una observacion, se descarta la
+        # interpretacion cacheada de esta pasada para que se regenere teniendo en cuenta
+        # lo que acabas de decir; ademas se vuelve a pintar la interpretacion ya mismo.
+        regs = getattr(self, "_regs_actual", None)
+        if veredicto == "incorrecto" or (nota or "").strip():
+            DB.set_interpretacion(self.nombre, self.campana, ctx["fecha"], None)
+            if regs:
+                for r in regs:
+                    if r.get("fecha") == ctx["fecha"]:
+                        r["interpretacion"] = None
+        if hasattr(self, "ent_obs") and self.ent_obs.winfo_exists():
+            self.ent_obs.delete(0, "end")
+        if regs:
+            self._pintar_interp(regs)
+        else:
+            self._refrescar_validacion()
 
     def _abrir_correccion(self):
         ctx = getattr(self, "_val_ctx", None)
         if not ctx or not ctx.get("fecha"):
             return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.", parent=self.master)
-        DialogoCorreccion(self.master, self, ctx)
+        nota_ini = self.ent_obs.get().strip() if hasattr(self, "ent_obs") else ""
+        DialogoCorreccion(self.master, self, ctx, nota_inicial=nota_ini)
 
     # ================= CUADERNO DE CAMPO =================
     def _build_cuaderno(self, parent):
