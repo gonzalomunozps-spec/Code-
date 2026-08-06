@@ -771,6 +771,12 @@ def pruebas_informe_anual():
                        os.path.getsize(xls))[1],
               lambda r: r > 2000)
 
+        def _hojas():
+            import openpyxl
+            return openpyxl.load_workbook(xls).sheetnames
+        check("informe excel: incluye hoja de variacion mensual",
+              _hojas, lambda r: "Variación mensual" in r and "Medias mensuales" in r)
+
 
 # la comprobacion de "debe lanzar" se maneja aparte: check marca fallo si NO revienta,
 # asi que la envolvemos para invertir la logica.

@@ -66,7 +66,7 @@ MOTIVO_NO_DISPONIBLE = ("" if _RL else
 # --- openpyxl: solo para la exportacion a Excel (tolerante) ---
 try:
     from openpyxl import Workbook
-    from openpyxl.chart import LineChart, Reference
+    from openpyxl.chart import LineChart, BarChart, Reference
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     _XL = True
@@ -714,6 +714,25 @@ def _construir_pdf_tecnico(ruta, ctx):
                        filas, [30 * mm, 12 * mm] + [23.4 * mm] * 7))
     story.append(Paragraph("n = n&uacute;mero de pasadas v&aacute;lidas promediadas en el mes.", SMALL))
 
+    # 3b. Variacion mes a mes (delta de las medias mensuales)
+    filas = []
+    for i in range(1, len(mensual)):
+        a, b = mensual[i - 1], mensual[i]
+        fila = [Paragraph(f"{esc(a['label'])} &rarr; {esc(b['label'])}", CL)]
+        for k in INDICES:
+            if a.get(k) is not None and b.get(k) is not None:
+                dv = round(b[k] - a[k], 3)
+                cc = ROJO if dv < 0 else VERDE
+                fila.append(Paragraph(f"<font color='{cc.hexval()}'>{dv:+.3f}</font>", C))
+            else:
+                fila.append(Paragraph("&ndash;", C))
+        filas.append(fila)
+    if filas:
+        story.append(Spacer(1, 3))
+        story.append(Paragraph("<b>Variaci&oacute;n mes a mes (&Delta; de las medias mensuales)</b>", BODY))
+        story.append(tabla(["Intervalo"] + [INDICES_ET[k] for k in INDICES],
+                           filas, [46 * mm] + [23.7 * mm] * 7))
+
     # grafica
     story.append(Spacer(1, 4))
     story.append(grafica_ancha())
@@ -903,6 +922,34 @@ def _construir_excel(ruta, ctx):
             ch.add_data(data, titles_from_data=True)
         ch.set_categories(cats)
         ws.add_chart(ch, "M2")
+
+    # ---- Hoja 3b: Variación mensual (deltas de las medias mensuales) ----
+    if len(mensual) >= 2:
+        ws = wb.create_sheet("Variación mensual")
+        cols = ["Intervalo"] + [INDICES_ET[k] for k in INDICES]
+        encabeza(ws, cols)
+        rojo = Font(color="C53030"); verde = Font(color="2F855A")
+        for i in range(1, len(mensual)):
+            a, b = mensual[i - 1], mensual[i]
+            fila = i + 1                                   # cabecera en fila 1
+            ws.cell(row=fila, column=1, value=f"{a['label']} → {b['label']}")
+            for j, k in enumerate(INDICES, 2):
+                if a.get(k) is not None and b.get(k) is not None:
+                    dv = round(b[k] - a[k], 3)
+                    cel = ws.cell(row=fila, column=j, value=dv)
+                    cel.font = rojo if dv < 0 else verde
+                    cel.alignment = centro
+        anchos(ws, 12, len(cols)); ws.column_dimensions["A"].width = 26
+        ws.freeze_panes = "A2"
+        # grafica de barras: variacion mensual de NDVI, LAI, NDMI
+        ch = BarChart(); ch.type = "col"; ch.title = "Variación mes a mes (Δ medias)"
+        ch.height = 9; ch.width = 22; ch.y_axis.title = "Δ índice"; ch.x_axis.title = "intervalo"
+        cats = Reference(ws, min_col=1, min_row=2, max_row=len(mensual))
+        for k, colidx in (("ndvi", 2), ("lai", 6), ("ndmi", 8)):
+            data = Reference(ws, min_col=colidx, min_row=1, max_row=len(mensual))
+            ch.add_data(data, titles_from_data=True)
+        ch.set_categories(cats)
+        ws.add_chart(ch, "K2")
 
     # ---- Hoja 4: Fenología ----
     ws = wb.create_sheet("Fenología")
