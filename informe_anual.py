@@ -3,29 +3,32 @@
 informe_anual.py
 ================
 
-Modulo OPCIONAL y DESACOPLADO: genera un INFORME ANUAL de una parcela en PDF, en
-clave de BALANCE de toda la campana (la parcela contada a lo largo del ano), no un
-estado puntual "de ahora".
+Modulo OPCIONAL y DESACOPLADO: genera informes ANUALES de una parcela (toda la
+campana, no un estado puntual "de ahora") en tres formatos:
 
-Que incluye (todo se calcula con el motor real del programa):
-  - Resumen narrativo de la campana.
-  - Grafica de evolucion (NDVI, LAI, NDMI y, si hay, RVI de Sentinel-1).
-  - Recorrido fenologico (fase estimada en cada pasada).
-  - Hitos: maximo verdor, maxima biomasa, momento de menos agua, cierre.
-  - Estado hidrico durante el ano.
-  - Uniformidad de la parcela.
-  - Intervenciones del cuaderno de campo y su efecto.
-  - Corroboracion con radar (si se ha descargado Sentinel-1).
-  - Valoracion general de la campana.
+  1. generar_informe_anual   -> PDF de BALANCE (divulgativo): resumen narrativo,
+     grafica de evolucion, recorrido fenologico, hitos, estado hidrico,
+     uniformidad, intervenciones del cuaderno, radar y valoracion general.
+  2. generar_informe_tecnico -> PDF TECNICO (apaisado): tablas completas de
+     indices por pasada y por mes, variaciones (deltas), estadisticos de
+     campana, fenologia por pasada, heterogeneidad, parametros de radar y
+     metodologia (formulas de los indices).
+  3. generar_excel           -> .xlsx con los indices por pasada y por MES y
+     GRAFICAS embebidas (nativas de Excel), mas hojas de fenologia y radar.
+
+Todo se calcula con el motor real del programa (evaluar_parcela, heterogeneidad,
+efecto_producto, interpretar_radar).
 
 COMO QUITAR ESTA PARTE:
   Basta con BORRAR este fichero. El panel lo importa de forma tolerante
-  (try/except): si no existe, el boton "Informe anual (PDF)" simplemente no
+  (try/except): si no existe, el boton "Informe / Exportar" simplemente no
   aparece y el resto del programa sigue igual. No hay interruptor ni
   configuracion que tocar.
 
-Dependencia: reportlab  (pip install reportlab). Si no esta instalado, el modulo
-se carga igual pero DISPONIBLE = False, y el panel avisa de como instalarlo.
+Dependencias (ambas OPCIONALES, tolerantes):
+  - reportlab  -> los dos PDF. Si falta, DISPONIBLE = False.
+  - openpyxl   -> el Excel. Si falta, EXCEL_DISPONIBLE = False.
+  El panel consulta esas banderas y avisa de como instalar lo que falte.
 """
 
 import os
@@ -34,7 +37,7 @@ from datetime import datetime
 
 # --- motor real del programa (nucleo; estos modulos siempre estan) ---
 from interpretacion_fenologica import evaluar_parcela
-from contraste_indices import heterogeneidad
+from contraste_indices import heterogeneidad, contrastes
 import registro_parcela as REG
 try:
     import sentinel1 as S1
@@ -43,7 +46,7 @@ except Exception:
 
 # --- reportlab: dependencia propia de este modulo (tolerante) ---
 try:
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.units import mm
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
@@ -59,6 +62,20 @@ except Exception:
 DISPONIBLE = _RL
 MOTIVO_NO_DISPONIBLE = ("" if _RL else
                         "Falta la libreria 'reportlab'. Instalala con:  pip install reportlab")
+
+# --- openpyxl: solo para la exportacion a Excel (tolerante) ---
+try:
+    from openpyxl import Workbook
+    from openpyxl.chart import LineChart, Reference
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    _XL = True
+except Exception:
+    _XL = False
+
+EXCEL_DISPONIBLE = _XL
+MOTIVO_EXCEL = ("" if _XL else
+                "Falta la libreria 'openpyxl'. Instalala con:  pip install openpyxl")
 
 MESES = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
          7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre",
@@ -122,22 +139,50 @@ def _num(serie, clave):
     return [r for r in serie if r.get(clave) is not None]
 
 
-# =====================================================================
-# API PUBLICA
-# =====================================================================
-def generar_informe_anual(nombre, campana, ficha, cultivo, serie,
-                          radar=None, eventos=None, ruta_salida=None):
-    """Genera el PDF y devuelve la ruta. Lanza RuntimeError si no se puede."""
-    if not _RL:
-        raise RuntimeError(MOTIVO_NO_DISPONIBLE)
-    serie = sorted([r for r in (serie or []) if r.get("fecha")], key=lambda r: r["fecha"])
-    if not serie:
-        raise RuntimeError("La parcela no tiene pasadas de satelite: no hay campana que resumir.")
-    radar = sorted([r for r in (radar or []) if r.get("fecha")], key=lambda r: r["fecha"])
-    eventos = eventos or []
-    if not ruta_salida:
-        ruta_salida = os.path.abspath(f"Informe_{nombre}_{campana}.pdf")
+# indices opticos en el orden de presentacion (clave interna -> etiqueta)
+INDICES = ["ndvi", "evi", "savi", "gndvi", "lai", "msavi", "ndmi"]
+INDICES_ET = {"ndvi": "NDVI", "evi": "EVI", "savi": "SAVI", "gndvi": "GNDVI",
+              "lai": "LAI", "msavi": "MSAVI", "ndmi": "NDMI"}
 
+
+def _agregado_mensual(serie):
+    """Media de cada indice por mes de la campana. Devuelve lista ordenada de dicts
+    {anio, mes, label, n, <indice>: media, ...}."""
+    grupos = {}
+    for r in serie:
+        try:
+            d = datetime.strptime(r["fecha"], "%Y-%m-%d")
+        except (TypeError, ValueError):
+            continue
+        grupos.setdefault((d.year, d.month), []).append(r)
+    filas = []
+    for (anio, mes) in sorted(grupos):
+        regs = grupos[(anio, mes)]
+        fila = {"anio": anio, "mes": mes, "label": f"{MESES[mes].capitalize()} {anio}",
+                "n": len(regs)}
+        for k in INDICES:
+            vals = [x[k] for x in regs if x.get(k) is not None]
+            fila[k] = round(sum(vals) / len(vals), 3) if vals else None
+        filas.append(fila)
+    return filas
+
+
+def _estadisticos(serie):
+    """min/max/media/amplitud de cada indice a lo largo de la campana."""
+    out = {}
+    for k in INDICES:
+        vals = [r[k] for r in serie if r.get(k) is not None]
+        if vals:
+            mn, mx = min(vals), max(vals)
+            out[k] = {"min": round(mn, 3), "max": round(mx, 3),
+                      "media": round(sum(vals) / len(vals), 3),
+                      "amplitud": round(mx - mn, 3), "n": len(vals)}
+    return out
+
+
+def _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos):
+    """Ejecuta el motor real sobre la parcela y devuelve el contexto comun que
+    consumen los tres formatos (PDF balance, PDF tecnico y Excel)."""
     tipo = (cultivo or {}).get("tipo", "BARBECHO")
     sub = (cultivo or {}).get("subtipo", "")
     especie = (cultivo or {}).get("especie") or tipo.capitalize()
@@ -201,7 +246,71 @@ def generar_informe_anual(nombre, campana, ficha, cultivo, serie,
         except Exception:
             radar_info = None
 
-    _construir_pdf(ruta_salida, locals())
+    return {
+        "nombre": nombre, "campana": campana, "ficha": ficha, "cultivo": cultivo,
+        "serie": serie, "radar": radar, "eventos": eventos,
+        "tipo": tipo, "sub": sub, "especie": especie, "spec": spec,
+        "superficie": superficie, "propietario": propietario,
+        "inicio": inicio, "fin": fin,
+        "pico_ndvi": pico_ndvi, "pico_lai": pico_lai, "min_ndmi": min_ndmi,
+        "recorrido": recorrido, "fases_orden": fases_orden,
+        "alertas": alertas, "alertas_vigentes": alertas_vigentes,
+        "diag_final": diag_final, "hetero": hetero, "efectos": efectos,
+        "radar_info": radar_info,
+        "mensual": _agregado_mensual(serie), "estadisticos": _estadisticos(serie),
+    }
+
+
+def _preparar(serie, radar, eventos, ruta_salida, ext, nombre, campana):
+    """Validacion y normalizacion comun de entradas para todos los formatos."""
+    serie = sorted([r for r in (serie or []) if r.get("fecha")], key=lambda r: r["fecha"])
+    if not serie:
+        raise RuntimeError("La parcela no tiene pasadas de satelite: no hay campana que resumir.")
+    radar = sorted([r for r in (radar or []) if r.get("fecha")], key=lambda r: r["fecha"])
+    eventos = eventos or []
+    if not ruta_salida:
+        ruta_salida = os.path.abspath(f"Informe_{nombre}_{campana}.{ext}")
+    return serie, radar, eventos, ruta_salida
+
+
+# =====================================================================
+# API PUBLICA
+# =====================================================================
+def generar_informe_anual(nombre, campana, ficha, cultivo, serie,
+                          radar=None, eventos=None, ruta_salida=None):
+    """Informe de BALANCE (PDF, divulgativo). Devuelve la ruta. Lanza RuntimeError."""
+    if not _RL:
+        raise RuntimeError(MOTIVO_NO_DISPONIBLE)
+    serie, radar, eventos, ruta_salida = _preparar(serie, radar, eventos, ruta_salida,
+                                                   "pdf", nombre, campana)
+    ctx = _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos)
+    _construir_pdf(ruta_salida, ctx)
+    return ruta_salida
+
+
+def generar_informe_tecnico(nombre, campana, ficha, cultivo, serie,
+                            radar=None, eventos=None, ruta_salida=None):
+    """Informe TECNICO (PDF): tablas completas de indices por pasada y por mes,
+    deltas, estadisticos, parametros de radar y metodologia. Lanza RuntimeError."""
+    if not _RL:
+        raise RuntimeError(MOTIVO_NO_DISPONIBLE)
+    serie, radar, eventos, ruta_salida = _preparar(serie, radar, eventos, ruta_salida,
+                                                   "pdf", nombre, campana)
+    ctx = _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos)
+    _construir_pdf_tecnico(ruta_salida, ctx)
+    return ruta_salida
+
+
+def generar_excel(nombre, campana, ficha, cultivo, serie,
+                  radar=None, eventos=None, ruta_salida=None):
+    """Hoja de calculo (.xlsx): indices por pasada y por mes, radar y GRAFICAS
+    embebidas (nativas de Excel). Requiere openpyxl. Lanza RuntimeError."""
+    if not _XL:
+        raise RuntimeError(MOTIVO_EXCEL)
+    serie, radar, eventos, ruta_salida = _preparar(serie, radar, eventos, ruta_salida,
+                                                   "xlsx", nombre, campana)
+    ctx = _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos)
+    _construir_excel(ruta_salida, ctx)
     return ruta_salida
 
 
@@ -464,3 +573,362 @@ def _construir_pdf(ruta, ctx):
                             leftMargin=20 * mm, rightMargin=20 * mm,
                             title=f"Balance de campana - {nombre}")
     doc.build(story, onFirstPage=encpie, onLaterPages=encpie)
+
+
+# =====================================================================
+# PDF TECNICO (tablas completas, deltas, mensual, estadisticos, radar)
+# =====================================================================
+def _construir_pdf_tecnico(ruta, ctx):
+    PRIMARY_DK = colors.HexColor("#276749"); HEADER = colors.HexColor("#1e3a2b")
+    INK = colors.HexColor("#1a202c"); INK2 = colors.HexColor("#4a5568")
+    INK3 = colors.HexColor("#718096"); BORDER = colors.HexColor("#e2e8f0")
+    PANEL = colors.HexColor("#f4f8f5"); ROJO = colors.HexColor("#c53030")
+    VERDE = colors.HexColor("#2f855a")
+    COL = {"ndvi": colors.HexColor("#2f855a"), "lai": colors.HexColor("#dd6b20"),
+           "ndmi": colors.HexColor("#3182ce")}
+
+    serie = ctx["serie"]; radar = ctx["radar"]; nombre = ctx["nombre"]; campana = ctx["campana"]
+    especie = ctx["especie"]; propietario = ctx["propietario"]; superficie = ctx["superficie"]
+    cultivo = ctx["cultivo"]; mensual = ctx["mensual"]; estad = ctx["estadisticos"]
+    recorrido = ctx["recorrido"]; hetero = ctx["hetero"]; diag_final = ctx["diag_final"]
+    tipo = ctx["tipo"]; sub = ctx["sub"]
+
+    def esc(s): return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    H1 = ParagraphStyle("TH1", fontName="Helvetica-Bold", fontSize=12, textColor=PRIMARY_DK,
+                        spaceBefore=11, spaceAfter=4, leading=15)
+    BODY = ParagraphStyle("TB", fontName="Helvetica", fontSize=8.6, textColor=INK2, leading=12, spaceAfter=3)
+    SMALL = ParagraphStyle("TS", parent=BODY, fontSize=7.6, textColor=INK3, leading=10)
+    C = ParagraphStyle("TC", fontName="Helvetica", fontSize=7.6, textColor=INK, leading=9.5, alignment=1)
+    CL = ParagraphStyle("TCL", parent=C, alignment=0)
+    W = ParagraphStyle("TW", parent=C, textColor=colors.white, fontName="Helvetica-Bold")
+
+    def SEC(t):
+        return Paragraph(t, H1)
+
+    def celda(v, fmt="{:.3f}", pct=False):
+        if v is None:
+            return Paragraph("&ndash;", C)
+        try:
+            return Paragraph(fmt.format(v), C)
+        except Exception:
+            return Paragraph(esc(v), C)
+
+    def _num(fila, k):  # media mensual coloreada segun signo si es delta
+        return fila.get(k)
+
+    def tabla(cabeceras, filas, anchos, aliniz=()):
+        head = [Paragraph(f"<b>{esc(h)}</b>", W) for h in cabeceras]
+        data = [head] + filas
+        t = Table(data, colWidths=anchos, repeatRows=1)
+        est = [("BACKGROUND", (0, 0), (-1, 0), PRIMARY_DK),
+               ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, PANEL]),
+               ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+               ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+               ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]
+        t.setStyle(TableStyle(est))
+        return t
+
+    def grafica_ancha():
+        n = len(serie); xs = list(range(n)); fechas = [r["fecha"] for r in serie]
+
+        def col(clave, factor=1.0):
+            return [(i, serie[i][clave] * factor) for i in range(n) if serie[i].get(clave) is not None]
+        data = [col("ndvi"), col("lai", 0.2), col("ndmi")]
+        cols = [COL["ndvi"], COL["lai"], COL["ndmi"]]
+        d = Drawing(250 * mm, 62 * mm)
+        lp = LinePlot(); lp.x = 12 * mm; lp.y = 12 * mm; lp.width = 232 * mm; lp.height = 40 * mm
+        lp.data = data
+        for i, c in enumerate(cols):
+            lp.lines[i].strokeColor = c; lp.lines[i].strokeWidth = 1.6
+            lp.lines[i].symbol = makeMarker("FilledCircle"); lp.lines[i].symbol.size = 3
+            lp.lines[i].symbol.fillColor = c
+        lp.xValueAxis.valueMin = -0.3; lp.xValueAxis.valueMax = n - 0.7; lp.xValueAxis.valueSteps = xs
+        lp.xValueAxis.labelTextFormat = lambda v: (fechas[int(round(v))][5:] if 0 <= int(round(v)) < n else "")
+        lp.xValueAxis.labels.fontSize = 6
+        lp.yValueAxis.valueMin = -0.1; lp.yValueAxis.valueMax = 1.0; lp.yValueAxis.valueStep = 0.2
+        lp.yValueAxis.labels.fontSize = 6
+        d.add(lp)
+        leg = [("NDVI", COL["ndvi"]), ("LAI /5", COL["lai"]), ("NDMI", COL["ndmi"])]
+        x = 14 * mm
+        for texto, c in leg:
+            d.add(Rect(x, 56 * mm, 4 * mm, 2 * mm, fillColor=c, strokeColor=None))
+            d.add(String(x + 5 * mm, 55.6 * mm, texto, fontName="Helvetica", fontSize=6.5, fillColor=INK2))
+            x += 26 * mm
+        return d
+
+    story = []
+    story.append(Paragraph("Informe t&eacute;cnico de campa&ntilde;a",
+                 ParagraphStyle("t", fontName="Helvetica-Bold", fontSize=17, textColor=HEADER, leading=20)))
+    story.append(Paragraph(f"{esc(nombre.replace('_', ' '))} &middot; {esc(especie)} &middot; Campa&ntilde;a {esc(campana)} "
+                           f"&middot; {esc(propietario)}"
+                           + (f" &middot; {superficie} ha" if superficie else ""),
+                 ParagraphStyle("s", fontName="Helvetica", fontSize=9.5, textColor=INK2, leading=13)))
+    story.append(HRFlowable(width="100%", thickness=1.2, color=colors.HexColor("#2f855a"),
+                            spaceBefore=4, spaceAfter=6))
+
+    # 1. Indices por pasada
+    story.append(SEC("1. &Iacute;ndices de vegetaci&oacute;n por pasada"))
+    cab = ["Fecha"] + [INDICES_ET[k] for k in INDICES] + ["Cob.%", "NDVI_std"]
+    filas = []
+    for r in serie:
+        fila = [Paragraph(r["fecha"], C)]
+        for k in INDICES:
+            fila.append(celda(r.get(k)))
+        cob = r.get("cobertura_valida")
+        fila.append(Paragraph(f"{int(cob * 100)}" if cob is not None else "&ndash;", C))
+        fila.append(celda(r.get("ndvi_std")))
+        filas.append(fila)
+    anchos = [22 * mm] + [23 * mm] * 7 + [15 * mm, 20 * mm]
+    story.append(tabla(cab, filas, anchos))
+
+    # 2. Variacion (delta) entre pasadas consecutivas
+    story.append(SEC("2. Variaci&oacute;n entre pasadas consecutivas (&Delta;)"))
+    filas = []
+    for i in range(1, len(serie)):
+        a, b = serie[i - 1], serie[i]
+        fila = [Paragraph(f"{a['fecha']} &rarr; {b['fecha']}", CL)]
+        for k in INDICES:
+            if a.get(k) is not None and b.get(k) is not None:
+                dv = round(b[k] - a[k], 3)
+                c = ROJO if dv < 0 else VERDE
+                fila.append(Paragraph(f"<font color='{c.hexval()}'>{dv:+.3f}</font>", C))
+            else:
+                fila.append(Paragraph("&ndash;", C))
+        filas.append(fila)
+    if filas:
+        story.append(tabla(["Intervalo"] + [INDICES_ET[k] for k in INDICES],
+                           filas, [40 * mm] + [24.5 * mm] * 7))
+    else:
+        story.append(Paragraph("Una sola pasada: no hay variaci&oacute;n que calcular.", SMALL))
+
+    # 3. Agregado mensual (medias por mes)
+    story.append(SEC("3. Medias mensuales por &iacute;ndice"))
+    filas = []
+    for f in mensual:
+        fila = [Paragraph(esc(f["label"]), CL), Paragraph(str(f["n"]), C)]
+        for k in INDICES:
+            fila.append(celda(f.get(k)))
+        filas.append(fila)
+    story.append(tabla(["Mes", "n"] + [INDICES_ET[k] for k in INDICES],
+                       filas, [30 * mm, 12 * mm] + [23.4 * mm] * 7))
+    story.append(Paragraph("n = n&uacute;mero de pasadas v&aacute;lidas promediadas en el mes.", SMALL))
+
+    # grafica
+    story.append(Spacer(1, 4))
+    story.append(grafica_ancha())
+
+    # 4. Estadisticos de campana
+    story.append(SEC("4. Estad&iacute;sticos de la campa&ntilde;a"))
+    filas = []
+    for k in INDICES:
+        e = estad.get(k)
+        if not e:
+            continue
+        filas.append([Paragraph(f"<b>{INDICES_ET[k]}</b>", CL), celda(e["min"]), celda(e["max"]),
+                      celda(e["media"]), celda(e["amplitud"]), Paragraph(str(e["n"]), C)])
+    story.append(tabla(["Índice", "Mín", "Máx", "Media", "Amplitud", "n"],
+                       filas, [28 * mm, 24 * mm, 24 * mm, 24 * mm, 26 * mm, 14 * mm]))
+
+    # 5. Fenologia y estado por pasada
+    story.append(SEC("5. Fase fenol&oacute;gica y estado por pasada"))
+    filas = []
+    for r in recorrido:
+        est = r["estado"]
+        cc = {"OK": VERDE, "Vigilar": colors.HexColor("#d69e2e"),
+              "Revisar": colors.HexColor("#dd6b20"), "Segado": VERDE}.get(est, INK)
+        filas.append([Paragraph(r["fecha"], C), Paragraph(esc(r["fase"]), CL),
+                      Paragraph(f"<font color='{cc.hexval()}'><b>{esc(est)}</b></font>", C),
+                      Paragraph("s&iacute;" if r["esperado"] else "no", C)])
+    story.append(tabla(["Fecha", "Fase estimada", "Estado", "Esperado"],
+                       filas, [24 * mm, 90 * mm, 30 * mm, 24 * mm]))
+    lo, hi = diag_final.get("rango_fase", (None, None))
+    story.append(Paragraph(f"Diagn&oacute;stico final ({esc(diag_final.get('fase', '-'))}): "
+                           f"<b>{esc(diag_final.get('estado', '-'))}</b>. "
+                           + (f"Rango NDVI esperado en la fase: {lo:.2f}&ndash;{hi:.2f}. " if lo is not None else "")
+                           + esc(diag_final.get("motivo", "")), SMALL))
+
+    # 6. Heterogeneidad
+    story.append(SEC("6. Distribuci&oacute;n intraparcela (heterogeneidad)"))
+    if hetero and hetero.get("disponible"):
+        pares = [("Media NDVI", hetero.get("media")), ("Std", hetero.get("std")),
+                 ("CV", hetero.get("cv")), ("p10", hetero.get("p10")), ("p50", hetero.get("p50")),
+                 ("p90", hetero.get("p90")), ("Amplitud p90-p10", hetero.get("amplitud")),
+                 ("&Delta;media", hetero.get("d_media")), ("&Delta;std", hetero.get("d_std"))]
+        fila = []
+        for et, v in pares:
+            fila.append(Paragraph(f"<b>{et}</b><br/>" + (f"{v:.3f}" if isinstance(v, (int, float)) else "&ndash;"), C))
+        t = Table([fila], colWidths=[21 * mm] * len(pares))
+        t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, BORDER), ("BACKGROUND", (0, 0), (-1, -1), PANEL),
+                               ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+        story.append(t)
+        story.append(Paragraph(f"Uniformidad: <b>{esc(hetero.get('uniformidad', '-'))}</b>. "
+                               f"Patr&oacute;n: {esc(hetero.get('patron', '-'))}. {esc(hetero.get('lectura', ''))}", SMALL))
+    else:
+        story.append(Paragraph("Sin estad&iacute;stica espacial (std/percentiles) en las pasadas de esta campa&ntilde;a.", SMALL))
+
+    # 7. Radar Sentinel-1
+    if radar:
+        story.append(SEC("7. Par&aacute;metros de radar (Sentinel-1)"))
+        cab = ["Fecha", "VV dB", "VH dB", "RVI", "RVI min", "RVI max", "CR dB", "Fiab.", "Órbita", "n px"]
+        filas = []
+        for r in radar:
+            filas.append([Paragraph(r["fecha"], C), celda(r.get("vv"), "{:.1f}"), celda(r.get("vh"), "{:.1f}"),
+                          celda(r.get("rvi")), celda(r.get("rvi_lo")), celda(r.get("rvi_hi")),
+                          celda(r.get("cr"), "{:.1f}"), Paragraph(esc(r.get("fiabilidad", "-")), C),
+                          Paragraph(esc(r.get("orbita", "-")), C),
+                          Paragraph(str(r.get("n_pixeles", "&ndash;")), C)])
+        story.append(tabla(cab, filas, [22 * mm, 18 * mm, 18 * mm, 16 * mm, 18 * mm, 18 * mm,
+                                        16 * mm, 18 * mm, 18 * mm, 14 * mm]))
+        story.append(Paragraph("RVI = 4&middot;VH/(VV+VH) en potencia lineal; RVI min/max = rango por incertidumbre "
+                               "(speckle). CR = VH&minus;VV (dB). Fiabilidad heur&iacute;stica por n&ordm; de p&iacute;xeles y dispersi&oacute;n.", SMALL))
+
+    # 8. Metodologia
+    story.append(SEC("8. Metodolog&iacute;a e &iacute;ndices"))
+    metod = [
+        "NDVI = (NIR&minus;RED)/(NIR+RED) &mdash; verdor / actividad fotosint&eacute;tica.",
+        "GNDVI = (NIR&minus;GREEN)/(NIR+GREEN); NDMI = (NIR&minus;SWIR1)/(NIR+SWIR1) &mdash; humedad del dosel.",
+        "SAVI = 1,5&middot;(NIR&minus;RED)/(NIR+RED+0,5); MSAVI corrige el efecto suelo; LAI, &iacute;ndice de &aacute;rea foliar.",
+        "Fuente: Copernicus/Sentinel-2 (SR, armonizado) con enmascarado de nubes por SCL; Sentinel-1 (GRD) para el radar.",
+        "La fase fenol&oacute;gica se estima por especie y d&iacute;as desde la siembra (le&ntilde;osos por mes y marco). "
+        "Una ca&iacute;da propia de la fase (senescencia, siega) no se marca como anomal&iacute;a.",
+    ]
+    for m in metod:
+        story.append(Paragraph("&bull;&nbsp; " + m, SMALL))
+
+    def encpie(c, doc):
+        c.saveState(); w, h = landscape(A4)
+        c.setStrokeColor(BORDER); c.setLineWidth(0.5); c.line(12 * mm, 10 * mm, w - 12 * mm, 10 * mm)
+        c.setFont("Helvetica", 7); c.setFillColor(INK3)
+        c.drawString(12 * mm, 6 * mm, f"Informe tecnico - {nombre.replace('_', ' ')} - {campana} - generado {datetime.now():%d-%m-%Y %H:%M}")
+        c.drawRightString(w - 12 * mm, 6 * mm, f"Pag. {doc.page}")
+        c.restoreState()
+
+    doc = SimpleDocTemplate(ruta, pagesize=landscape(A4), topMargin=13 * mm, bottomMargin=13 * mm,
+                            leftMargin=12 * mm, rightMargin=12 * mm,
+                            title=f"Informe tecnico - {nombre}")
+    doc.build(story, onFirstPage=encpie, onLaterPages=encpie)
+
+
+# =====================================================================
+# EXCEL (.xlsx) con indices por pasada, por mes y graficas embebidas
+# =====================================================================
+def _construir_excel(ruta, ctx):
+    serie = ctx["serie"]; radar = ctx["radar"]; mensual = ctx["mensual"]
+    estad = ctx["estadisticos"]; recorrido = ctx["recorrido"]
+    nombre = ctx["nombre"]; campana = ctx["campana"]; especie = ctx["especie"]
+    propietario = ctx["propietario"]; superficie = ctx["superficie"]; cultivo = ctx["cultivo"]
+
+    VERDE = "2F855A"; CAB = "276749"; GRIS = "F4F8F5"
+    f_cab = Font(bold=True, color="FFFFFF"); relleno_cab = PatternFill("solid", fgColor=CAB)
+    f_tit = Font(bold=True, size=14, color="1E3A2B")
+    centro = Alignment(horizontal="center")
+    borde = Border(*[Side(style="thin", color="E2E8F0")] * 4)
+
+    wb = Workbook()
+
+    def encabeza(ws, cols, fila=1):
+        for j, c in enumerate(cols, 1):
+            cel = ws.cell(row=fila, column=j, value=c)
+            cel.font = f_cab; cel.fill = relleno_cab; cel.alignment = centro; cel.border = borde
+
+    def anchos(ws, ancho, ncols):
+        for j in range(1, ncols + 1):
+            ws.column_dimensions[get_column_letter(j)].width = ancho
+
+    # ---- Hoja 1: Resumen ----
+    ws = wb.active; ws.title = "Resumen"
+    ws["A1"] = f"Balance de campaña — {nombre.replace('_',' ')}"; ws["A1"].font = f_tit
+    info = [("Parcela", nombre.replace("_", " ")), ("Cultivo", especie),
+            ("Propietario", propietario), ("Superficie (ha)", superficie or "-"),
+            ("Campaña", campana), ("Siembra", (cultivo or {}).get("fecha_siembra", "-")),
+            ("Pasadas", len(serie)), ("Periodo", f"{serie[0]['fecha']} a {serie[-1]['fecha']}")]
+    for i, (k, v) in enumerate(info, 3):
+        ws.cell(row=i, column=1, value=k).font = Font(bold=True)
+        ws.cell(row=i, column=2, value=v)
+    ws.column_dimensions["A"].width = 18; ws.column_dimensions["B"].width = 32
+    ws.cell(row=12, column=1, value="Estadísticos de campaña").font = Font(bold=True, size=11)
+    encabeza(ws, ["Índice", "Mín", "Máx", "Media", "Amplitud", "n"], fila=13)
+    r = 14
+    for k in INDICES:
+        e = estad.get(k)
+        if not e:
+            continue
+        for j, v in enumerate([INDICES_ET[k], e["min"], e["max"], e["media"], e["amplitud"], e["n"]], 1):
+            cel = ws.cell(row=r, column=j, value=v); cel.border = borde
+            if j > 1:
+                cel.alignment = centro
+        r += 1
+
+    # ---- Hoja 2: Datos por pasada ----
+    ws = wb.create_sheet("Índices por pasada")
+    cols = ["Fecha"] + [INDICES_ET[k] for k in INDICES] + ["Cobertura %", "NDVI_std"]
+    encabeza(ws, cols)
+    for i, reg in enumerate(serie, 2):
+        ws.cell(row=i, column=1, value=reg["fecha"])
+        for j, k in enumerate(INDICES, 2):
+            ws.cell(row=i, column=j, value=reg.get(k))
+        cob = reg.get("cobertura_valida")
+        ws.cell(row=i, column=9, value=round(cob * 100, 1) if cob is not None else None)
+        ws.cell(row=i, column=10, value=reg.get("ndvi_std"))
+    anchos(ws, 12, len(cols)); ws.column_dimensions["A"].width = 12
+    ws.freeze_panes = "A2"
+    # grafica: NDVI, LAI, NDMI por pasada
+    ch = LineChart(); ch.title = "Evolución de índices por pasada"; ch.height = 9; ch.width = 22
+    ch.y_axis.title = "valor índice"; ch.x_axis.title = "fecha"
+    fechas_ref = Reference(ws, min_col=1, min_row=2, max_row=len(serie) + 1)
+    for k, colidx in (("ndvi", 2), ("lai", 6), ("ndmi", 8)):
+        data = Reference(ws, min_col=colidx, min_row=1, max_row=len(serie) + 1)
+        ch.add_data(data, titles_from_data=True)
+    ch.set_categories(fechas_ref)
+    ws.add_chart(ch, "L2")
+
+    # ---- Hoja 3: Medias mensuales ----
+    ws = wb.create_sheet("Medias mensuales")
+    cols = ["Mes", "n"] + [INDICES_ET[k] for k in INDICES]
+    encabeza(ws, cols)
+    for i, f in enumerate(mensual, 2):
+        ws.cell(row=i, column=1, value=f["label"])
+        ws.cell(row=i, column=2, value=f["n"])
+        for j, k in enumerate(INDICES, 3):
+            ws.cell(row=i, column=j, value=f.get(k))
+    anchos(ws, 12, len(cols)); ws.column_dimensions["A"].width = 16
+    ws.freeze_panes = "A2"
+    if len(mensual) >= 1:
+        ch = LineChart(); ch.title = "Medias mensuales por índice"; ch.height = 9; ch.width = 22
+        ch.y_axis.title = "media mensual"; ch.x_axis.title = "mes"
+        cats = Reference(ws, min_col=1, min_row=2, max_row=len(mensual) + 1)
+        for k, colidx in (("ndvi", 3), ("lai", 7), ("ndmi", 9)):
+            data = Reference(ws, min_col=colidx, min_row=1, max_row=len(mensual) + 1)
+            ch.add_data(data, titles_from_data=True)
+        ch.set_categories(cats)
+        ws.add_chart(ch, "M2")
+
+    # ---- Hoja 4: Fenología ----
+    ws = wb.create_sheet("Fenología")
+    encabeza(ws, ["Fecha", "Fase estimada", "Estado", "Esperado", "NDVI", "LAI"])
+    for i, rr in enumerate(recorrido, 2):
+        for j, v in enumerate([rr["fecha"], rr["fase"], rr["estado"],
+                               "sí" if rr["esperado"] else "no", rr["ndvi"], rr["lai"]], 1):
+            ws.cell(row=i, column=j, value=v)
+    anchos(ws, 14, 6); ws.column_dimensions["B"].width = 26; ws.freeze_panes = "A2"
+
+    # ---- Hoja 5: Radar (si hay) ----
+    if radar:
+        ws = wb.create_sheet("Radar S1")
+        cols = ["Fecha", "VV dB", "VH dB", "RVI", "RVI min", "RVI max", "CR dB",
+                "Fiabilidad", "Órbita", "n píxeles"]
+        encabeza(ws, cols)
+        for i, rr in enumerate(radar, 2):
+            for j, v in enumerate([rr["fecha"], rr.get("vv"), rr.get("vh"), rr.get("rvi"),
+                                   rr.get("rvi_lo"), rr.get("rvi_hi"), rr.get("cr"),
+                                   rr.get("fiabilidad"), rr.get("orbita"), rr.get("n_pixeles")], 1):
+                ws.cell(row=i, column=j, value=v)
+        anchos(ws, 12, len(cols)); ws.column_dimensions["A"].width = 12; ws.freeze_panes = "A2"
+        ch = LineChart(); ch.title = "RVI (Sentinel-1)"; ch.height = 8; ch.width = 18
+        data = Reference(ws, min_col=4, min_row=1, max_row=len(radar) + 1)
+        ch.add_data(data, titles_from_data=True)
+        ch.set_categories(Reference(ws, min_col=1, min_row=2, max_row=len(radar) + 1))
+        ws.add_chart(ch, "L2")
+
+    wb.save(ruta)

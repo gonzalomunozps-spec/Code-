@@ -2567,8 +2567,8 @@ class FichaParcela:
         ttk.Button(cab, text="  \uD83D\uDCE1 Sentinel-1 (radar)  ", style="Ghost.TButton",
                    command=self._sincronizar_radar).pack(side="right", padx=(0, 4), pady=10)
         if _INFORME is not None:      # boton solo si el modulo opcional esta presente
-            ttk.Button(cab, text="  \uD83D\uDCC4 Informe anual (PDF)  ", style="Ghost.TButton",
-                       command=self._informe_anual).pack(side="right", padx=(0, 4), pady=10)
+            ttk.Button(cab, text="  \uD83D\uDCC4 Informe / Exportar  ", style="Ghost.TButton",
+                       command=self._menu_exportar).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u23F2 Campanas anteriores  ", style="Ghost.TButton",
                    command=self._sincronizar_anteriores).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u270E Editar parcela  ", style="Ghost.TButton",
@@ -3191,44 +3191,74 @@ class FichaParcela:
             VentanaRadar(self.master, self.nombre, self.campana, self._radar, info, n, msg)
         self.master.after(0, fin)
 
-    def _informe_anual(self):
-        """Genera el informe anual (PDF) de la parcela. Delegado al modulo opcional
-        informe_anual; si ese fichero se borra, este boton no existe."""
+    def _menu_exportar(self):
+        """Menu emergente con los formatos que ofrece el modulo opcional informe_anual.
+        Si ese fichero se borra, este boton ni siquiera existe."""
         if _INFORME is None:
             return
-        if not getattr(_INFORME, "DISPONIBLE", False):
+        m = tk.Menu(self.master, tearoff=0)
+        m.add_command(label="Informe de balance (PDF)",
+                      command=lambda: self._exportar("balance"))
+        m.add_command(label="Informe tecnico (PDF)",
+                      command=lambda: self._exportar("tecnico"))
+        m.add_separator()
+        excel_ok = getattr(_INFORME, "EXCEL_DISPONIBLE", False)
+        m.add_command(label="Hoja de calculo Excel (indices por mes + graficas)"
+                            + ("" if excel_ok else "  —  requiere openpyxl"),
+                      command=lambda: self._exportar("excel"),
+                      state=("normal" if excel_ok else "disabled"))
+        try:
+            m.tk_popup(self.master.winfo_pointerx(), self.master.winfo_pointery())
+        finally:
+            m.grab_release()
+
+    def _exportar(self, formato):
+        """Genera balance/tecnico (PDF) o Excel. Delegado al modulo opcional informe_anual."""
+        if _INFORME is None:
+            return
+        pdf_ok = getattr(_INFORME, "DISPONIBLE", False)
+        excel_ok = getattr(_INFORME, "EXCEL_DISPONIBLE", False)
+        if formato in ("balance", "tecnico") and not pdf_ok:
             return messagebox.showwarning(
-                "Informe anual", getattr(_INFORME, "MOTIVO_NO_DISPONIBLE",
-                                         "El modulo del informe anual no esta disponible."),
+                "Exportar", getattr(_INFORME, "MOTIVO_NO_DISPONIBLE",
+                                    "Falta reportlab."), parent=self.master)
+        if formato == "excel" and not excel_ok:
+            return messagebox.showwarning(
+                "Exportar", getattr(_INFORME, "MOTIVO_EXCEL", "Falta openpyxl."),
                 parent=self.master)
         serie = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
         if not serie:
             return messagebox.showinfo(
-                "Informe anual", "Esta parcela aun no tiene pasadas de satelite que resumir.",
+                "Exportar", "Esta parcela aun no tiene pasadas de satelite que resumir.",
                 parent=self.master)
         ficha = DB.ficha(self.nombre) or {}
         cultivo = (ficha.get("cultivos_por_campana", {}) or {}).get(self.campana, {})
         radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
         eventos = REG.eventos_de(self.nombre, self.campana)
+
+        cfg = {"balance": ("Informe de balance", _INFORME.generar_informe_anual, ".pdf", "PDF", "pdf"),
+               "tecnico": ("Informe tecnico", _INFORME.generar_informe_tecnico, ".pdf", "PDF", "pdf"),
+               "excel":   ("Hoja de calculo", _INFORME.generar_excel, ".xlsx", "Excel", "xlsx")}
+        titulo, generar, ext, etiq, sufijo = cfg[formato]
+        base = "Informe" if formato != "excel" else "Indices"
         destino = filedialog.asksaveasfilename(
-            parent=self.master, title="Guardar informe anual", defaultextension=".pdf",
-            filetypes=[("PDF", "*.pdf")], initialfile=f"Informe_{self.nombre}_{self.campana}.pdf")
+            parent=self.master, title=f"Guardar {titulo.lower()}", defaultextension=ext,
+            filetypes=[(etiq, f"*{ext}")],
+            initialfile=f"{base}_{sufijo}_{self.nombre}_{self.campana}{ext}")
         if not destino:
             return
 
         def worker():
             try:
-                ruta = _INFORME.generar_informe_anual(
-                    self.nombre, self.campana, ficha, cultivo, serie,
-                    radar=radar, eventos=eventos, ruta_salida=destino)
+                ruta = generar(self.nombre, self.campana, ficha, cultivo, serie,
+                               radar=radar, eventos=eventos, ruta_salida=destino)
             except Exception as e:
                 self.master.after(0, lambda err=e: messagebox.showerror(
-                    "Informe anual", f"No se pudo generar el informe:\n\n{err}", parent=self.master))
+                    titulo, f"No se pudo generar:\n\n{err}", parent=self.master))
                 return
 
             def ok():
-                if messagebox.askyesno("Informe anual",
-                                       f"Informe generado:\n{ruta}\n\n¿Abrirlo ahora?",
+                if messagebox.askyesno(titulo, f"Generado:\n{ruta}\n\n¿Abrirlo ahora?",
                                        parent=self.master):
                     _abrir_archivo(ruta)
             self.master.after(0, ok)

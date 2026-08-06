@@ -745,9 +745,31 @@ def pruebas_informe_anual():
                                             serie, ruta_salida=out),
                    os.path.getsize(out))[1],
           lambda r: r > 1000)
+    # informe TECNICO (PDF): mismo motor, mas detalle
+    tec = os.path.join(d, "tec.pdf")
+    check("informe tecnico: genera un PDF no vacio",
+          lambda: (IA.generar_informe_tecnico("Prueba_Parcela", "2025-2026", ficha, cultivo,
+                                              serie, ruta_salida=tec),
+                   os.path.getsize(tec))[1],
+          lambda r: r > 1000)
+    # agregado mensual (puro): una fila por mes con medias
+    check("informe: agregado mensual = una fila por mes",
+          lambda: [f["label"] for f in IA._agregado_mensual(serie)],
+          lambda r: len(r) == 4 and r[0].startswith("Diciembre"))
+    check("informe: media mensual correcta (abril)",
+          lambda: next(f for f in IA._agregado_mensual(serie) if f["mes"] == 4)["ndvi"],
+          lambda r: abs(r - 0.80) < 1e-6)
     # el helper de superficie es puro y no depende del PDF
     check("informe anual: superficie_ha coherente (>0)",
           lambda: IA._superficie_ha(ficha["coordenadas"]), lambda r: r and r > 0)
+    # EXCEL: solo si openpyxl esta presente (si no, se omite, no es fallo)
+    if getattr(IA, "EXCEL_DISPONIBLE", False):
+        xls = os.path.join(d, "idx.xlsx")
+        check("informe excel: genera un .xlsx con hojas de indices",
+              lambda: (IA.generar_excel("Prueba_Parcela", "2025-2026", ficha, cultivo,
+                                        serie, ruta_salida=xls),
+                       os.path.getsize(xls))[1],
+              lambda r: r > 2000)
 
 
 # la comprobacion de "debe lanzar" se maneja aparte: check marca fallo si NO revienta,
