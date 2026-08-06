@@ -585,6 +585,16 @@ class CampoFecha(tk.Frame):
         return self._es_ph() or not re.sub(r"\D", "", self.var.get())
 
 
+# Constantes de presentacion (se definen UNA vez, no en cada llamada/redibujado).
+_FMT_DIAS = ("lun", "mar", "mie", "jue", "vie", "sab", "dom")
+_FMT_MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+# color y etiqueta de cada tipo de evento del cuaderno para las lineas de la grafica
+_ICONOS_EVENTO = {"PRODUCTO": ("#c05621", "Producto"), "SIEGA": ("#2b6cb0", "Siega"),
+                  "COSECHA": ("#b7791f", "Cosecha"), "RIEGO": ("#3182ce", "Riego"),
+                  "LABOREO": ("#718096", "Laboreo"), "SIEMBRA": ("#276749", "Siembra"),
+                  "OTRO": ("#718096", "Evento")}
+
+
 # --- texto emergente de la grafica: valores de los indices y fiabilidad del dia ---
 def tooltip_pasada(reg):
     """Texto multilinea con los indices de una pasada y su fiabilidad (cobertura
@@ -2762,17 +2772,15 @@ class FichaParcela:
 
     @staticmethod
     def _fmt(iso):
-        dias = ["lun", "mar", "mie", "jue", "vie", "sab", "dom"]
-        meses = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
         d = datetime.strptime(iso, "%Y-%m-%d")
-        return f"{dias[d.weekday()]}, {d.day} {meses[d.month-1]} {d.year}"
+        return f"{_FMT_DIAS[d.weekday()]}, {d.day} {_FMT_MESES[d.month-1]} {d.year}"
 
     def _pintar_graficas(self, regs):
         self._regs_actual = regs         # para volver a pintar al cambiar de indices
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         self._hover_ax = ax
-        self._hover_datos = []          # [(x_num, registro), ...] para el puntero
+        self._hover_datos = []          # [(x_num, registro, texto_tooltip), ...] para el puntero
         # solo registros con fecha valida (uno mal formado no debe tumbar la grafica)
         puntos = []
         for r in regs:
@@ -2783,7 +2791,9 @@ class FichaParcela:
         if puntos:
             fechas = [p[0] for p in puntos]
             validos = [p[1] for p in puntos]
-            self._hover_datos = [(mdates.date2num(f), r) for f, r in zip(fechas, validos)]
+            # el texto del tooltip se calcula UNA vez por pasada (no en cada movimiento del raton)
+            self._hover_datos = [(mdates.date2num(f), r, tooltip_pasada(r))
+                                 for f, r in zip(fechas, validos)]
             if hasattr(self, "idx_vars"):
                 seleccion = [K for K in INDICES_ORDEN if self.idx_vars[K].get()]
             else:
@@ -2795,41 +2805,31 @@ class FichaParcela:
                             marker="o", ms=3, lw=1.8, label=K, color=COLOR_INDICE.get(K, "#666"))
             # RVI de Sentinel-1 (radar): serie propia, con sus fechas, si existe y esta marcada
             if (self.idx_vars.get("RVI") and self.idx_vars["RVI"].get() and getattr(self, "_radar", None)):
-                rp = []
+                # se parsea CADA fecha de radar una sola vez (antes se hacia hasta 3 veces)
+                rad = []
                 for r in self._radar:
                     try:
-                        rp.append((datetime.strptime(r.get("fecha", ""), "%Y-%m-%d"), r.get("rvi")))
+                        fx = datetime.strptime(r.get("fecha", ""), "%Y-%m-%d")
                     except (TypeError, ValueError):
                         continue
-                rp = [(f, y) for f, y in rp if y is not None]
+                    rad.append((fx, r.get("rvi"), r.get("rvi_lo"), r.get("rvi_hi")))
+                rp = [(f, y) for f, y, _lo, _hi in rad if y is not None]
                 if rp:
                     ax.plot([p[0] for p in rp], [p[1] for p in rp], marker="s", ms=3, lw=1.6,
                             ls="--", label="RVI·S1", color=COLOR_INDICE["RVI"])
                     # banda de incertidumbre del RVI (rango por speckle/dispersion)
-                    banda = []
-                    for r in self._radar:
-                        try:
-                            fx = datetime.strptime(r.get("fecha", ""), "%Y-%m-%d")
-                        except (TypeError, ValueError):
-                            continue
-                        lo, hi = r.get("rvi_lo"), r.get("rvi_hi")
-                        if lo is not None and hi is not None:
-                            banda.append((fx, lo, hi))
+                    banda = [(f, lo, hi) for f, _y, lo, hi in rad if lo is not None and hi is not None]
                     if len(banda) >= 2:
                         ax.fill_between([b[0] for b in banda], [b[1] for b in banda],
                                         [b[2] for b in banda], color=COLOR_INDICE["RVI"], alpha=0.15)
             # --- marcadores de eventos del cuaderno de campo ---
-            iconos = {"PRODUCTO": ("#c05621", "Producto"), "SIEGA": ("#2b6cb0", "Siega"),
-                      "COSECHA": ("#b7791f", "Cosecha"), "RIEGO": ("#3182ce", "Riego"),
-                      "LABOREO": ("#718096", "Laboreo"), "SIEMBRA": ("#276749", "Siembra"),
-                      "OTRO": ("#718096", "Evento")}
             vistos = set()
             for e in REG.eventos_de(self.nombre, self.campana):
                 try:
                     fx = datetime.strptime(e["fecha"], "%Y-%m-%d")
                 except Exception:
                     continue
-                col, et = iconos.get(e.get("tipo"), iconos["OTRO"])
+                col, et = _ICONOS_EVENTO.get(e.get("tipo"), _ICONOS_EVENTO["OTRO"])
                 lbl = et if et not in vistos else None
                 vistos.add(et)
                 ax.axvline(fx, color=col, ls="--", lw=1.0, alpha=0.7, label=lbl)
@@ -2862,11 +2862,11 @@ class FichaParcela:
                 self.cv.draw_idle()
             return
         x = event.xdata
-        xn, reg = min(self._hover_datos, key=lambda t: abs(t[0] - x))
+        xn, reg, texto = min(self._hover_datos, key=lambda t: abs(t[0] - x))
         self._hover_linea.set_xdata([xn, xn])
         self._hover_linea.set_alpha(0.6)
         caja.xy = (xn, event.ydata)
-        caja.set_text(tooltip_pasada(reg))
+        caja.set_text(texto)
         # coloca la caja hacia el interior para que NO se salga por los bordes
         ax = self._hover_ax
         x0, x1 = ax.get_xlim()
