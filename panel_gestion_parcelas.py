@@ -72,6 +72,9 @@ import fenologia_especies as FEN
 import credenciales as CRED
 import almacen as DB          # capa de datos (SQLite): parcelas, historico y eventos
 import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al optico
+# utilidades puras de fecha (dd-mm-aaaa <-> ISO, mascara y validacion al vuelo)
+from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
+                    filtrar_fecha_digitos)
 
 # Modulo OPCIONAL y desacoplado: informe anual en PDF. Si se borra el fichero
 # informe_anual.py, esto queda en None y el boton no aparece (ver su cabecera).
@@ -392,55 +395,8 @@ class LienzoMapa:
             self.on_info((f"{self.info}  ·  " if self.info else "") + f"zoom {z}  ·  arrastra para mover")
 
 
-# --- conversion de fechas: el programa usa ISO (aaaa-mm-dd); el usuario ve dd-mm-aaaa ---
-def iso_a_ddmmaaaa(iso):
-    """'2026-05-04' -> '04-05-2026' (o '' si no es una fecha valida)."""
-    try:
-        return datetime.strptime(iso, "%Y-%m-%d").strftime("%d-%m-%Y")
-    except (ValueError, TypeError):
-        return ""
-
-
-def ddmmaaaa_a_iso(texto):
-    """'04-05-2026' (o '04052026') -> '2026-05-04'. '' si esta incompleta o no existe."""
-    digs = re.sub(r"\D", "", texto or "")[:8]
-    if len(digs) != 8:
-        return ""
-    d, m, y = digs[:2], digs[2:4], digs[4:8]
-    try:
-        datetime.strptime(f"{y}-{m}-{d}", "%Y-%m-%d")
-    except ValueError:
-        return ""
-    return f"{y}-{m}-{d}"
-
-
-def enmascarar_fecha(texto):
-    """Formatea los digitos tecleados como dd-mm-aaaa (los guiones salen solos)."""
-    digs = re.sub(r"\D", "", texto or "")[:8]
-    out = digs[:2]
-    if len(digs) > 2:
-        out += "-" + digs[2:4]
-    if len(digs) > 4:
-        out += "-" + digs[4:8]
-    return out
-
-
-def filtrar_fecha_digitos(digs):
-    """Acepta los digitos mientras formen una fecha posible y descarta el primero
-    que la haga imposible (dia 1-31, mes 1-12). Valida al vuelo segun se teclea."""
-    digs = re.sub(r"\D", "", digs or "")
-    out = ""
-    for i, ch in enumerate(digs[:8]):
-        if i == 0 and ch > "3":                      # decena del dia: 0-3
-            break
-        if i == 1 and not (1 <= int(out[0] + ch) <= 31):   # dia completo 01-31
-            break
-        if i == 2 and ch > "1":                      # decena del mes: 0-1
-            break
-        if i == 3 and not (1 <= int(out[2] + ch) <= 12):   # mes completo 01-12
-            break
-        out += ch                                    # anio (i>=4): cualquier digito
-    return out
+# Las utilidades de fecha (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
+# filtrar_fecha_digitos) viven ahora en fechas.py y se importan arriba.
 
 
 class PopupCalendario(tk.Toplevel):

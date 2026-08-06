@@ -712,15 +712,10 @@ def pruebas_panel_helpers():
           lambda: rc("Olivar", "NDVI", "2026-05-05", 10) != rc("Olivar", "NDMI", "2026-05-05", 10),
           lambda r: r is True)
 
-    # conversores de fecha: el usuario ve dd-mm-aaaa, el programa guarda ISO
-    m4 = re.search(r"\ndef iso_a_ddmmaaaa\(.*?\n(?=\nclass PopupCalendario)", src, re.S)
-    if not m4:
-        _FALLA.append(("panel", "no se localizan los conversores de fecha"))
-        return
-    from datetime import datetime as _dt
-    ns4 = {"re": re, "datetime": _dt}
-    exec(m4.group(0), ns4)
-    a_iso = ns4["ddmmaaaa_a_iso"]; a_disp = ns4["iso_a_ddmmaaaa"]; mask = ns4["enmascarar_fecha"]
+    # conversores de fecha: el usuario ve dd-mm-aaaa, el programa guarda ISO.
+    # Ya viven en fechas.py (modulo puro): se importan directamente, sin extraer del panel.
+    from fechas import ddmmaaaa_a_iso as a_iso, iso_a_ddmmaaaa as a_disp
+    from fechas import enmascarar_fecha as mask, filtrar_fecha_digitos as filt
     check("fecha: iso -> dd-mm-aaaa", lambda: a_disp("2026-05-04"), lambda r: r == "04-05-2026")
     check("fecha: dd-mm-aaaa -> iso", lambda: a_iso("04-05-2026"), lambda r: r == "2026-05-04")
     check("fecha: 8 digitos sin guiones -> iso", lambda: a_iso("04052026"), lambda r: r == "2026-05-04")
@@ -730,7 +725,6 @@ def pruebas_panel_helpers():
     check("fecha: mascara parcial", lambda: mask("0405"), lambda r: r == "04-05")
     check("fecha: iso invalido -> '' (display)", lambda: a_disp("no-fecha"), lambda r: r == "")
     # validacion al vuelo mientras se teclea
-    filt = ns4["filtrar_fecha_digitos"]
     check("fecha viva: fecha valida pasa entera", lambda: filt("04052026"), lambda r: r == "04052026")
     check("fecha viva: dia 32 se corta (mantiene el 3)", lambda: filt("32"), lambda r: r == "3")
     check("fecha viva: decena de dia > 3 se rechaza", lambda: filt("4"), lambda r: r == "")
