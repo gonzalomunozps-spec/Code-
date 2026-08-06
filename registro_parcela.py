@@ -36,6 +36,15 @@ TIPOS_EVENTO = ["PRODUCTO", "SIEGA", "COSECHA", "RIEGO", "LABOREO", "SIEMBRA", "
 OBJETIVOS_PRODUCTO = ["fitosanitario (plaga)", "fungicida (enfermedad)",
                       "herbicida (malas hierbas)", "abono / nutricion", "otro"]
 
+# --- INTERRUPTOR REVERSIBLE -------------------------------------------------
+# Cuando un herbicida deja el LAI/NDVI CONSTANTE, el resultado es ambiguo. Con
+# este contexto activado, se intenta desambiguar usando la PROPIA serie:
+#   - si la dispersion intraparcela (ndvi_std) BAJA -> se limpiaron rodales de
+#     mala hierba manteniendo la cobertura del cultivo (efecto probable);
+#   - si el LAI VENIA SUBIENDO y se estanca -> el tratamiento freno vegetacion.
+# Para volver al comportamiento anterior ("sin cambio claro"), poner en False.
+HERBICIDA_CONTEXTO_ACTIVO = True
+
 # eventos que, si estan registrados, EXPLICAN una caida brusca del NDVI
 EVENTOS_QUE_BAJAN_NDVI = {"SIEGA", "COSECHA"}
 
@@ -108,11 +117,14 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
         return None
     serie = sorted(serie, key=lambda r: r.get("fecha", ""))
 
-    # baseline: ultima pasada en o antes de la aplicacion
+    # baseline: ultima pasada en o antes de la aplicacion (y la anterior, para la tendencia)
     base = None
-    for r in serie:
+    base_idx = -1
+    for i, r in enumerate(serie):
         if r.get("fecha") and r["fecha"] <= f_ap and r.get("ndvi") is not None:
             base = r
+            base_idx = i
+    base_prev = serie[base_idx - 1] if base_idx > 0 else None
 
     # pasadas validas posteriores a la aplicacion (candidatas a "dia del informe")
     posteriores = [r for r in serie
@@ -148,6 +160,14 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
     if base.get("lai") is not None and resp.get("lai") is not None:
         d_lai = round(resp["lai"] - base["lai"], 3)
 
+    # dispersion intraparcela y tendencia previa del LAI (para desambiguar el LAI plano)
+    d_std = None
+    if base.get("ndvi_std") is not None and resp.get("ndvi_std") is not None:
+        d_std = round(resp["ndvi_std"] - base["ndvi_std"], 3)
+    lai_subia_antes = bool(base.get("lai") is not None and base_prev
+                           and base_prev.get("lai") is not None
+                           and base["lai"] - base_prev["lai"] > 0.1)
+
     es_herbicida = "herbicida" in (evento.get("objetivo", "") or "").lower()
     if es_herbicida:
         # el herbicida ACTUA si baja el area foliar (LAI) y/o el verdor (NDVI)
@@ -159,8 +179,15 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
                         "herbicida (reduccion de vegetacion)")
         elif (d_lai is not None and d_lai > 0.15) or d_ndvi > 0.05:
             verdicto = "sin efecto herbicida visible: el area foliar y el verdor siguen al alza"
+        elif HERBICIDA_CONTEXTO_ACTIVO and d_std is not None and d_std < -0.02:
+            verdicto = (f"efecto probable: el area foliar se mantiene pero la parcela se HOMOGENEIZA "
+                        f"(dispersion {d_std:+.3f}); compatible con limpieza de rodales de mala hierba "
+                        "conservando la cobertura del cultivo")
+        elif HERBICIDA_CONTEXTO_ACTIVO and lai_subia_antes:
+            verdicto = ("efecto probable: el LAI venia SUBIENDO y se estanca tras el herbicida; el "
+                        "tratamiento pudo frenar vegetacion (maleza controlada o fitotoxicidad)")
         else:
-            verdicto = "sin cambio claro tras el herbicida"
+            verdicto = "sin cambio claro tras el herbicida (LAI estable, sin contexto que lo aclare)"
     else:
         if d_ndvi > 0.05:
             verdicto = "respuesta positiva compatible (el verdor se recupera tras la aplicacion)"
@@ -179,6 +206,7 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
         "ndvi_antes": base["ndvi"], "ndvi_despues": resp["ndvi"], "d_ndvi": d_ndvi,
         "ndmi_antes": base.get("ndmi"), "ndmi_despues": resp.get("ndmi"), "d_ndmi": d_ndmi,
         "lai_antes": base.get("lai"), "lai_despues": resp.get("lai"), "d_lai": d_lai,
+        "d_std": d_std,
         "dias_despues": _dias(f_ap, resp["fecha"]),
         "verdicto": verdicto,
         "aviso": ("Correlacion, no causa: el clima y la fenologia tambien mueven los indices. "

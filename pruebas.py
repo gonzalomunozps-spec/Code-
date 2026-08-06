@@ -275,6 +275,31 @@ def pruebas_cuaderno():
     serie_hn = [{"fecha": "2026-04-01", "ndvi": 0.5, "lai": 2.0}, {"fecha": "2026-04-25", "ndvi": 0.55, "lai": 2.4}]
     check("efecto herbicida: LAI sube -> sin efecto visible",
           lambda: REG.efecto_producto(serie_hn, ev_h)["verdicto"], lambda r: "sin efecto" in r)
+    # LAI CONSTANTE: desambiguacion por contexto (reversible)
+    s_homog = [{"fecha": "2026-04-01", "ndvi": 0.55, "lai": 2.2, "ndvi_std": 0.14},
+               {"fecha": "2026-04-25", "ndvi": 0.56, "lai": 2.15, "ndvi_std": 0.07}]
+    check("efecto herbicida: LAI plano + dispersion baja -> efecto probable (homogeneiza)",
+          lambda: REG.efecto_producto(s_homog, ev_h)["verdicto"],
+          lambda r: "probable" in r and "HOMOGENEIZA" in r)
+    s_estanca = [{"fecha": "2026-03-10", "ndvi": 0.4, "lai": 1.5},
+                 {"fecha": "2026-04-01", "ndvi": 0.55, "lai": 2.2},
+                 {"fecha": "2026-04-25", "ndvi": 0.56, "lai": 2.2}]
+    check("efecto herbicida: LAI plano pero venia subiendo -> efecto probable (frena)",
+          lambda: REG.efecto_producto(s_estanca, ev_h)["verdicto"],
+          lambda r: "probable" in r and "SUBIENDO" in r)
+    s_plano = [{"fecha": "2026-04-01", "ndvi": 0.55, "lai": 2.2},
+               {"fecha": "2026-04-25", "ndvi": 0.56, "lai": 2.2}]
+    check("efecto herbicida: LAI plano sin contexto -> sin cambio claro",
+          lambda: REG.efecto_producto(s_plano, ev_h)["verdicto"], lambda r: "sin cambio claro" in r)
+
+    def _reversible():
+        REG.HERBICIDA_CONTEXTO_ACTIVO = False
+        try:
+            return REG.efecto_producto(s_homog, ev_h)["verdicto"]
+        finally:
+            REG.HERBICIDA_CONTEXTO_ACTIVO = True     # restaurar para el resto de pruebas
+    check("efecto herbicida: bandera OFF revierte al comportamiento anterior",
+          _reversible, lambda r: "sin cambio claro" in r)
     check("explicacion_por_eventos: siega explica caida", lambda: REG.explicacion_por_eventos(
           [(2, {"tipo": "SIEGA", "fecha": "2026-04-18"})], -0.3), lambda r: r[0] is True)
     check("explicacion_por_eventos: dN None", lambda: REG.explicacion_por_eventos(

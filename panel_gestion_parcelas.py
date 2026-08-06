@@ -2344,6 +2344,8 @@ class DialogoEfectoProducto(tk.Toplevel):
             if ef.get("d_lai") is not None:
                 msg += f"LAI:  {ef['lai_antes']} -> {ef['lai_despues']}   ({ef['d_lai']:+.2f})"
                 msg += "   (clave en herbicidas)\n" if ef.get("es_herbicida") else "\n"
+            if ef.get("es_herbicida") and ef.get("d_std") is not None:
+                msg += f"Dispersion NDVI: {ef['d_std']:+.3f}   (baja = parcela mas homogenea)\n"
             msg += f"\nLectura: {ef['verdicto']}.\n\n{ef['aviso']}"
             self.txt.insert(tk.END, msg)
         self.txt.config(state="disabled")
