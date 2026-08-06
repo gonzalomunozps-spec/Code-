@@ -525,15 +525,9 @@ def pruebas_almacen():
 # 8. SIGPAC: parseo robusto de la respuesta GeoJSON (helpers extraidos del panel)
 # =====================================================================
 def pruebas_sigpac():
-    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel_gestion_parcelas.py")
-    src = open(ruta, encoding="utf-8").read()
-    m = re.search(r"\ndef sigpac_geometria\(.*?\n(?=\ndef spec_de\()", src, re.S)
-    if not m:
-        _FALLA.append(("sigpac", "no se localizan los helpers en el panel"))
-        return
-    ns = {}
-    exec(m.group(0), ns)
-    geo, ani, ll = ns["sigpac_geometria"], ns["sigpac_anillo"], ns["sigpac_a_lonlat"]
+    # los helpers SIGPAC viven en sigpac.py (modulo puro): se importan directamente
+    import sigpac as _SG
+    geo, ani, ll = _SG.sigpac_geometria, _SG.sigpac_anillo, _SG.sigpac_a_lonlat
     anillo = [[-4.78, 37.88], [-4.77, 37.88], [-4.77, 37.89], [-4.78, 37.89]]
     check("sigpac: FeatureCollection", lambda: ani(geo(
         {"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [anillo]}}]})),
@@ -554,7 +548,7 @@ def pruebas_sigpac():
     check("sigpac: UTM sin pyproj -> error claro (no coloca mal en silencio)", _utm,
           lambda r: r in ("error-claro", "sin-error"))   # con pyproj convierte; sin el, avisa
     # --- consulta con varios endpoints y mensajes de error claros ---
-    consultar = ns["sigpac_consultar"]; urls = ns["sigpac_urls"]; SigErr = ns["SigpacError"]
+    consultar = _SG.sigpac_consultar; urls = _SG.sigpac_urls; SigErr = _SG.SigpacError
     V = {"Prov": "14", "Mun": "21", "Agr": "0", "Zona": "0", "Pol": "5", "Par": "12", "Rec": "1"}
     poly = {"type": "FeatureCollection",
             "features": [{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [anillo]}}]}
