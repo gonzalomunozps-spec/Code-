@@ -33,11 +33,9 @@ import almacen as DB       # los datos van ahora a SQLite (parcelas.db)
 
 
 # ---------------------------------------------------------------------------
-# Helpers puros (replicados del panel para no depender de tkinter)
+# Helpers puros (compartidos con el panel via modulos sin tkinter)
 # ---------------------------------------------------------------------------
-def campana_actual(fecha=None):
-    d = fecha or datetime.now()
-    return f"{d.year}-{d.year + 1}" if d.month >= 9 else f"{d.year - 1}-{d.year}"
+from campanas import campana_actual   # misma logica de campana que usa el panel
 
 
 def superficie_ha(coords):

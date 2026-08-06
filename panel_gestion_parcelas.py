@@ -76,6 +76,7 @@ import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al 
 from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
                     filtrar_fecha_digitos)
 from geo import superficie_ha    # area de la parcela (shoelace), logica compartida
+from campanas import campana_actual, rango_campana, campanas_entre   # logica de campana
 
 # Modulo OPCIONAL y desacoplado: informe anual en PDF. Si se borra el fichero
 # informe_anual.py, esto queda en None y el boton no aparece (ver su cabecera).
@@ -650,32 +651,10 @@ NOMBRE_CULTIVO = {
 
 
 # =====================================================================
-# HELPERS CAMPANA / GEOMETRIA / GEE
+# HELPERS GEOMETRIA / GEE
 # =====================================================================
-def campana_actual(fecha=None):
-    d = fecha or datetime.now()
-    return f"{d.year}-{d.year + 1}" if d.month >= 9 else f"{d.year - 1}-{d.year}"
-
-
-def rango_campana(campana):
-    a0, a1 = [int(x) for x in campana.split("-")]
-    return f"{a0}-09-01", f"{a1}-08-31"
-
-
-def campanas_entre(inicio, fin):
-    """Lista de campanas 'A-B' desde `inicio` hasta `fin` (inclusive), mas reciente
-    primero. Tolera entradas mal formadas devolviendo al menos `fin`."""
-    try:
-        a0 = int(str(inicio).split("-")[0])
-        a1 = int(str(fin).split("-")[0])
-    except (ValueError, TypeError, AttributeError):
-        return [fin]
-    if a0 > a1:
-        a0, a1 = a1, a0
-    return [f"{y}-{y + 1}" for y in range(a1, a0 - 1, -1)]
-
-
-# superficie_ha vive ahora en geo.py (se importa arriba): misma logica compartida.
+# campana_actual, rango_campana y campanas_entre viven ahora en campanas.py
+# (se importan arriba). superficie_ha vive en geo.py.
 
 
 def clave_cultivo(tipo, subtipo):

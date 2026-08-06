@@ -678,14 +678,8 @@ def pruebas_panel_helpers():
           lambda: tip({"fecha": "2026-05-05", "ndvi": 0.5}), lambda r: "Fiabilidad" not in r)
     check("tooltip: registro vacio -> cadena vacia", lambda: tip({}), lambda r: r == "" or "None" not in r)
 
-    # campanas_entre (para sincronizar anos anteriores)
-    m2 = re.search(r"\ndef campanas_entre\(.*?\n(?=\ndef clave_cultivo)", src, re.S)
-    if not m2:
-        _FALLA.append(("panel", "no se localiza campanas_entre en el panel"))
-        return
-    ns2 = {}
-    exec(m2.group(0), ns2)
-    ce = ns2["campanas_entre"]
+    # campanas_entre (para sincronizar anos anteriores): vive en campanas.py (modulo puro)
+    from campanas import campanas_entre as ce
     check("campanas_entre: rango descendente inclusive",
           lambda: ce("2022-2023", "2025-2026"),
           lambda r: r == ["2025-2026", "2024-2025", "2023-2024", "2022-2023"])
@@ -695,6 +689,14 @@ def pruebas_panel_helpers():
           lambda: ce("2025-2026", "2023-2024"), lambda r: r[0] == "2025-2026" and len(r) == 3)
     check("campanas_entre: entrada mal formada no revienta",
           lambda: ce(None, "2025-2026"), lambda r: r == ["2025-2026"])
+    from datetime import datetime as _dtc
+    from campanas import campana_actual as _ca, rango_campana as _rc
+    check("campana_actual: octubre -> anio-anio+1",
+          lambda: _ca(_dtc(2025, 10, 1)), lambda r: r == "2025-2026")
+    check("campana_actual: marzo -> anio-1-anio",
+          lambda: _ca(_dtc(2026, 3, 1)), lambda r: r == "2025-2026")
+    check("rango_campana: 1-sep a 31-ago",
+          lambda: _rc("2025-2026"), lambda r: r == ("2025-09-01", "2026-08-31"))
 
     # ruta_cache_mapa: ficha y comparador deben usar la MISMA ruta de cache
     m3 = re.search(r"\ndef ruta_cache_mapa\(.*?\n(?=\n)", src, re.S)
