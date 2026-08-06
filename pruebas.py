@@ -720,10 +720,62 @@ def pruebas_panel_helpers():
 
 
 # =====================================================================
+# 11. INFORME ANUAL (modulo OPCIONAL informe_anual; se omite si se borra)
+# =====================================================================
+def pruebas_informe_anual():
+    """El informe anual vive en un modulo aparte y extraible. Si el fichero no
+    existe, o falta reportlab, estas pruebas se OMITEN y la suite sigue verde."""
+    try:
+        import informe_anual as IA
+    except Exception:
+        return                                   # modulo borrado -> nada que probar
+    if not getattr(IA, "DISPONIBLE", False):
+        return                                   # sin reportlab -> se omite (no es un fallo)
+
+    ficha = {"propietario": "Prueba", "coordenadas":
+             [[-4.10, 41.65], [-4.093, 41.65], [-4.093, 41.654], [-4.10, 41.654], [-4.10, 41.65]]}
+    cultivo = {"tipo": "EXTENSIVO", "especie": "TRIGO", "fecha_siembra": "2025-11-10"}
+    serie = [{"fecha": "2025-12-05", "ndvi": 0.22, "lai": 0.6, "ndmi": 0.18},
+             {"fecha": "2026-02-12", "ndvi": 0.55, "lai": 2.1, "ndmi": 0.30},
+             {"fecha": "2026-04-15", "ndvi": 0.80, "lai": 3.8, "ndmi": 0.30},
+             {"fecha": "2026-06-12", "ndvi": 0.34, "lai": 1.3, "ndmi": 0.06}]
+    d = tempfile.mkdtemp(); out = os.path.join(d, "inf.pdf")
+    check("informe anual: genera un PDF no vacio",
+          lambda: (IA.generar_informe_anual("Prueba_Parcela", "2025-2026", ficha, cultivo,
+                                            serie, ruta_salida=out),
+                   os.path.getsize(out))[1],
+          lambda r: r > 1000)
+    # el helper de superficie es puro y no depende del PDF
+    check("informe anual: superficie_ha coherente (>0)",
+          lambda: IA._superficie_ha(ficha["coordenadas"]), lambda r: r and r > 0)
+
+
+# la comprobacion de "debe lanzar" se maneja aparte: check marca fallo si NO revienta,
+# asi que la envolvemos para invertir la logica.
+def _informe_anual_error():
+    try:
+        import informe_anual as IA
+    except Exception:
+        return
+    if not getattr(IA, "DISPONIBLE", False):
+        return
+    ficha = {"propietario": "P", "coordenadas": [[0, 0], [0, 1], [1, 1]]}
+    cultivo = {"tipo": "EXTENSIVO", "especie": "TRIGO"}
+    d = tempfile.mkdtemp(); out = os.path.join(d, "x.pdf")
+    lanzo = False
+    try:
+        IA.generar_informe_anual("P", "2025-2026", ficha, cultivo, [], ruta_salida=out)
+    except Exception:
+        lanzo = True
+    check("informe anual: serie vacia lanza RuntimeError", lambda: lanzo, lambda r: r is True)
+
+
+# =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
-              pruebas_sigpac, pruebas_radar, pruebas_panel_helpers):
+              pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
+              pruebas_informe_anual, _informe_anual_error):
         try:
             f()
         except Exception as e:

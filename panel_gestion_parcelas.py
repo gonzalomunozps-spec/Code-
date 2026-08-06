@@ -72,6 +72,29 @@ import credenciales as CRED
 import almacen as DB          # capa de datos (SQLite): parcelas, historico y eventos
 import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al optico
 
+# Modulo OPCIONAL y desacoplado: informe anual en PDF. Si se borra el fichero
+# informe_anual.py, esto queda en None y el boton no aparece (ver su cabecera).
+try:
+    import informe_anual as _INFORME
+except Exception:
+    _INFORME = None
+
+
+def _abrir_archivo(ruta):
+    """Abre un fichero con la aplicacion por defecto del sistema (multiplataforma)."""
+    import platform
+    import subprocess
+    try:
+        sistema = platform.system()
+        if sistema == "Windows":
+            os.startfile(ruta)                                   # noqa: solo en Windows
+        elif sistema == "Darwin":
+            subprocess.Popen(["open", ruta])
+        else:
+            subprocess.Popen(["xdg-open", ruta])
+    except Exception:
+        pass
+
 
 # =====================================================================
 # TEMA / SISTEMA DE DISENO
@@ -2543,6 +2566,9 @@ class FichaParcela:
                    command=self.sincronizar).pack(side="right", padx=(0, 12), pady=10)
         ttk.Button(cab, text="  \uD83D\uDCE1 Sentinel-1 (radar)  ", style="Ghost.TButton",
                    command=self._sincronizar_radar).pack(side="right", padx=(0, 4), pady=10)
+        if _INFORME is not None:      # boton solo si el modulo opcional esta presente
+            ttk.Button(cab, text="  \uD83D\uDCC4 Informe anual (PDF)  ", style="Ghost.TButton",
+                       command=self._informe_anual).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u23F2 Campanas anteriores  ", style="Ghost.TButton",
                    command=self._sincronizar_anteriores).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u270E Editar parcela  ", style="Ghost.TButton",
@@ -3164,6 +3190,49 @@ class FichaParcela:
             info = S1.interpretar_radar(optica, self._radar, diag)
             VentanaRadar(self.master, self.nombre, self.campana, self._radar, info, n, msg)
         self.master.after(0, fin)
+
+    def _informe_anual(self):
+        """Genera el informe anual (PDF) de la parcela. Delegado al modulo opcional
+        informe_anual; si ese fichero se borra, este boton no existe."""
+        if _INFORME is None:
+            return
+        if not getattr(_INFORME, "DISPONIBLE", False):
+            return messagebox.showwarning(
+                "Informe anual", getattr(_INFORME, "MOTIVO_NO_DISPONIBLE",
+                                         "El modulo del informe anual no esta disponible."),
+                parent=self.master)
+        serie = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
+        if not serie:
+            return messagebox.showinfo(
+                "Informe anual", "Esta parcela aun no tiene pasadas de satelite que resumir.",
+                parent=self.master)
+        ficha = DB.ficha(self.nombre) or {}
+        cultivo = (ficha.get("cultivos_por_campana", {}) or {}).get(self.campana, {})
+        radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
+        eventos = REG.eventos_de(self.nombre, self.campana)
+        destino = filedialog.asksaveasfilename(
+            parent=self.master, title="Guardar informe anual", defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")], initialfile=f"Informe_{self.nombre}_{self.campana}.pdf")
+        if not destino:
+            return
+
+        def worker():
+            try:
+                ruta = _INFORME.generar_informe_anual(
+                    self.nombre, self.campana, ficha, cultivo, serie,
+                    radar=radar, eventos=eventos, ruta_salida=destino)
+            except Exception as e:
+                self.master.after(0, lambda err=e: messagebox.showerror(
+                    "Informe anual", f"No se pudo generar el informe:\n\n{err}", parent=self.master))
+                return
+
+            def ok():
+                if messagebox.askyesno("Informe anual",
+                                       f"Informe generado:\n{ruta}\n\n¿Abrirlo ahora?",
+                                       parent=self.master):
+                    _abrir_archivo(ruta)
+            self.master.after(0, ok)
+        threading.Thread(target=worker, daemon=True).start()
 
     def sincronizar(self):
         if not _EE:
