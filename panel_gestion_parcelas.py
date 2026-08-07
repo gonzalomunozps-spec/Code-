@@ -325,6 +325,8 @@ class LienzoMapa:
         self._drag = None
         self._im = None                        # imagen PIL cacheada (no reabrir en cada arrastre)
         self._im_path = None
+        self._escalada = None                  # (png, ancho, alto) de la imagen YA escalada
+        self._item = None                      # id del item del canvas, para moverlo al arrastrar
         c = self.canvas
         c.bind("<Configure>", lambda e: self.redibujar())
         c.bind("<MouseWheel>", lambda e: self.zoom_rel(1.25 if e.delta > 0 else 1 / 1.25))
@@ -352,7 +354,9 @@ class LienzoMapa:
         # (redibujar() ya hace esta misma comprobacion, por eso set_png esta cubierto.)
         if not self.canvas.winfo_exists():
             return
-        self.canvas.delete("all")
+        self.canvas.delete("all")          # esto destruye tambien la imagen cacheada...
+        self._item = None                  # ...asi que se invalida su id y su escala
+        self._escalada = None
         self.canvas.create_text(20, 20, anchor="nw", fill=color or TEMA["text_muted"], text=texto)
 
     def ajustar(self):
@@ -385,6 +389,7 @@ class LienzoMapa:
             except Exception:
                 return
             self._im_path = self.png
+            self._escalada = None              # imagen distinta: hay que reescalar
         base = self._im
         ow, oh = base.size
         cw = max(c.winfo_width(), 50)
@@ -395,10 +400,20 @@ class LienzoMapa:
         else:
             escala *= self.zoom
         nw, nh = max(1, int(ow * escala)), max(1, int(oh * escala))
-        im = base.resize((nw, nh), Image.NEAREST if escala > 1 else Image.LANCZOS)
-        self.img_tk = ImageTk.PhotoImage(im)
-        c.delete("all")
-        c.create_image(cw // 2 + self.offset[0], ch // 2 + self.offset[1], image=self.img_tk)
+        x, y = cw // 2 + self.offset[0], ch // 2 + self.offset[1]
+
+        # AL ARRASTRAR solo cambia la POSICION: si la imagen escalada es la misma
+        # (mismo PNG, mismo zoom y mismo tamano de lienzo), basta con mover el item.
+        # Reescalar en cada movimiento del raton costaba decenas de ms por evento y
+        # era lo que hacia que el arrastre fuera a tirones.
+        if self._escalada == (self._im_path, nw, nh) and self._item is not None:
+            c.coords(self._item, x, y)
+        else:
+            im = base.resize((nw, nh), Image.NEAREST if escala > 1 else Image.LANCZOS)
+            self.img_tk = ImageTk.PhotoImage(im)
+            c.delete("all")
+            self._item = c.create_image(x, y, image=self.img_tk)
+            self._escalada = (self._im_path, nw, nh)
         c.config(scrollregion=c.bbox("all"))
         if self.on_info:
             z = "ajuste" if self.zoom is None else f"{self.zoom:.2f}x"
@@ -1216,8 +1231,7 @@ class PanelGestionParcelas(ttk.Frame):
         self._refrescar()
 
     def _refrescar(self):
-        for i in self.tree.get_children():
-            self.tree.delete(i)
+        self.tree.delete(*self.tree.get_children())   # vaciado en UNA llamada a Tk
         texto = self.entry_buscar.get().lower() if hasattr(self, "entry_buscar") else ""
         orden = self.cb_orden.get() if hasattr(self, "cb_orden") else "nombre"
         parcelas = DB.parcelas_dict()
@@ -2560,8 +2574,7 @@ class FichaParcela:
     def refrescar(self):
         regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
         self._radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
-        for i in self.tv.get_children():
-            self.tv.delete(i)
+        self.tv.delete(*self.tv.get_children())       # vaciado en UNA llamada a Tk
         for k, r in enumerate(regs):
             tag = ("ult",) if k == len(regs) - 1 else ()
             self.tv.insert("", tk.END, tags=tag, values=[r.get("fecha", "")] +
@@ -2937,8 +2950,7 @@ class FichaParcela:
         self.refrescar()   # el evento puede cambiar el diagnostico (siega/cosecha)
 
     def _refrescar_eventos(self):
-        for i in self.tv_ev.get_children():
-            self.tv_ev.delete(i)
+        self.tv_ev.delete(*self.tv_ev.get_children())  # vaciado en UNA llamada a Tk
         regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
         for e in REG.eventos_de(self.nombre, self.campana):
             if e.get("tipo") == "PRODUCTO":
