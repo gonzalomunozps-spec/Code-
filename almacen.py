@@ -128,7 +128,8 @@ def _migrar_desde_json():
     # --- parcelas + cultivos ---
     if os.path.exists(_JSON_PARCELAS) and not _CONN.execute("SELECT 1 FROM parcelas LIMIT 1").fetchone():
         try:
-            data = json.load(open(_JSON_PARCELAS, encoding="utf-8"))
+            with open(_JSON_PARCELAS, encoding="utf-8") as f:
+                data = json.load(f)
             for nombre, ficha in (data or {}).items():
                 guardar_ficha(nombre, ficha)
             _backup(_JSON_PARCELAS)
@@ -137,7 +138,8 @@ def _migrar_desde_json():
     # --- historico (pasadas) ---
     if os.path.exists(_JSON_HISTORICO) and not _CONN.execute("SELECT 1 FROM pasadas LIMIT 1").fetchone():
         try:
-            data = json.load(open(_JSON_HISTORICO, encoding="utf-8"))
+            with open(_JSON_HISTORICO, encoding="utf-8") as f:
+                data = json.load(f)
             for nombre, camps in (data or {}).items():
                 for campana, lista in (camps or {}).items():
                     anadir_pasadas(nombre, campana, lista)
@@ -147,7 +149,8 @@ def _migrar_desde_json():
     # --- eventos ---
     if os.path.exists(_JSON_EVENTOS) and not _CONN.execute("SELECT 1 FROM eventos LIMIT 1").fetchone():
         try:
-            data = json.load(open(_JSON_EVENTOS, encoding="utf-8"))
+            with open(_JSON_EVENTOS, encoding="utf-8") as f:
+                data = json.load(f)
             for parcela, camps in (data or {}).items():
                 for campana, lista in (camps or {}).items():
                     for ev in lista:
