@@ -533,6 +533,25 @@ def pruebas_almacen():
     DB.eliminar_parcela("Olivar")
     check("almacen: borrado en cascada", lambda: (DB.nombres(), DB.pasadas("Olivar", "2025-2026")),
           lambda r: r == ([], []))
+
+    # Borrado COMPLETO: si queda alguna fila huerfana, una parcela nueva con el
+    # mismo nombre heredaria radar/validaciones de la anterior.
+    def _borrado_completo():
+        DB.guardar_ficha("Efimera", {"propietario": "x", "coordenadas": [[0, 0], [0, 1], [1, 1]]})
+        DB.anadir_pasadas("Efimera", "2025-2026", [{"fecha": "2026-03-01", "ndvi": 0.4}])
+        DB.anadir_radar("Efimera", "2025-2026", [{"fecha": "2026-03-02", "vv": -9.0, "vh": -15.0}])
+        DB.registrar_evento("Efimera", "2025-2026", {"fecha": "2026-03-03", "tipo": "SIEGA"})
+        DB.guardar_validacion("Efimera", "2025-2026", "2026-03-01", "ahijado",
+                              "EXTENSIVO//TRIGO", "Revisar", "incorrecto", estado_real="OK")
+        DB.eliminar_parcela("Efimera")
+        c = DB._c()
+        with DB._LOCK:                     # se consulta la BD directamente, sin filtros
+            return {t: c.execute(f"SELECT COUNT(*) FROM {t} WHERE nombre=?",
+                                 ("Efimera",)).fetchone()[0]
+                    for t in ("parcelas", "cultivos", "pasadas", "pasadas_radar",
+                              "eventos", "validaciones")}
+    check("almacen: eliminar_parcela no deja filas huerfanas en NINGUNA tabla",
+          _borrado_completo, lambda r: all(n == 0 for n in r.values()))
     # migracion desde JSON antiguos
     d2 = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(d2)
     try:

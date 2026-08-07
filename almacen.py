@@ -247,7 +247,11 @@ def set_cultivo(nombre, campana, cultivo):
 def eliminar_parcela(nombre):
     c = _c()
     with _LOCK:
-        for t in ("pasadas", "cultivos", "eventos", "parcelas"):
+        # TODAS las tablas que referencian la parcela. Si se olvida alguna, sus filas
+        # quedan huerfanas y una parcela nueva con el mismo nombre heredaria los datos
+        # de la anterior (le pasaba a pasadas_radar y a validaciones).
+        for t in ("pasadas", "pasadas_radar", "cultivos", "eventos",
+                  "validaciones", "parcelas"):
             c.execute(f"DELETE FROM {t} WHERE nombre=?", (nombre,))
         c.commit()
 
