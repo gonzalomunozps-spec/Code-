@@ -415,6 +415,24 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     elif hetero and hetero.get("patron") == "deterioro GENERALIZADO":
         motivo += (" [Deterioro GENERALIZADO y homogeneo: apunta a causa general "
                    "(sequia, helada, senescencia), no a un foco localizado.]")
+    elif hetero and (hetero.get("patron") == "heterogeneidad creciente"
+                     or hetero.get("rodal_sospechoso")):
+        # AVISO TEMPRANO: el foco AUN NO ha movido la media, pero la parcela ya se
+        # esta desigualando (o hay un 10 % claramente hundido). Se avisa antes de
+        # que el problema sea visible en el promedio.
+        senales = []
+        if hetero.get("patron") == "heterogeneidad creciente":
+            senales.append(f"la dispersion interna crece (std {hetero['d_std']:+.3f}) "
+                           "aunque la media aguanta")
+        if hetero.get("rodal_sospechoso"):
+            senales.append(f"el 10 % peor esta {hetero['hundimiento']:.2f} puntos por debajo "
+                           "de la mediana (rodal hundido)")
+        motivo += (" [AVISO TEMPRANO: " + " y ".join(senales) + ". Puede ser el INICIO de un "
+                   "foco localizado, antes de que se note en el promedio. Conviene mirar el "
+                   "mapa y, si al revisarla esta todo bien, validar el diagnostico: se tendra "
+                   "en cuenta para las proximas pasadas.]")
+        if clave == "OK" and not esperado:
+            clave, estado = "Vigilar", "Vigilar"
 
     return {"estado": estado, "clave": clave, "fase": fase, "rango_fase": (lo, hi),
             "motivo": motivo, "deltas": deltas, "cubierta": cubierta, "copa": copa,

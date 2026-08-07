@@ -112,6 +112,52 @@ def pruebas_motor():
           lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE", seg_ago, "2026-08-05")["estado"],
           lambda r: r != "Segado")
 
+    # --- AVISO TEMPRANO de foco: la dispersion crece antes que caiga la media ---
+    _sp = {"especie": "ALMENDRO", "marco_calle": 6.0, "marco_pie": 5.0}
+    def _serie(std2, p10_2, media2=0.59):
+        return [{"fecha": "2026-03-01", "ndvi": 0.60, "ndvi_std": 0.05,
+                 "ndvi_p10": 0.55, "ndvi_p50": 0.60, "ndvi_p90": 0.65, "n_pixeles": 800},
+                {"fecha": "2026-03-20", "ndvi": media2, "ndvi_std": std2,
+                 "ndvi_p10": p10_2, "ndvi_p50": 0.61, "ndvi_p90": 0.72, "n_pixeles": 800}]
+    check("foco temprano: dispersion creciente -> Vigilar con aviso",
+          lambda: evaluar_parcela("LENOSO", "", _serie(0.13, 0.38), spec=_sp),
+          lambda d: d["estado"] == "Vigilar" and "AVISO TEMPRANO" in d["motivo"])
+    check("foco temprano: nombra el rodal hundido (p50-p10)",
+          lambda: evaluar_parcela("LENOSO", "", _serie(0.13, 0.38), spec=_sp)["motivo"],
+          lambda m: "rodal hundido" in m)
+    check("foco temprano: parcela uniforme y estable NO avisa",
+          lambda: evaluar_parcela("LENOSO", "", _serie(0.05, 0.56), spec=_sp),
+          lambda d: d["estado"] == "OK" and "AVISO" not in d["motivo"])
+    check("foco temprano: invita a validar tras revisar la parcela",
+          lambda: evaluar_parcela("LENOSO", "", _serie(0.13, 0.38), spec=_sp)["motivo"],
+          lambda m: "validar el diagnostico" in m)
+    # el foco YA confirmado (media cae + dispersion sube) manda: no se duplica el aviso
+    _loc = [{"fecha": "2026-03-01", "ndvi": 0.60, "ndvi_std": 0.05, "ndvi_p10": 0.55,
+             "ndvi_p50": 0.60, "ndvi_p90": 0.65, "n_pixeles": 800},
+            {"fecha": "2026-03-20", "ndvi": 0.50, "ndvi_std": 0.14, "ndvi_p10": 0.30,
+             "ndvi_p50": 0.52, "ndvi_p90": 0.70, "n_pixeles": 800}]
+    check("foco temprano: no se solapa con el deterioro LOCALIZADO",
+          lambda: evaluar_parcela("LENOSO", "", _loc, spec=_sp)["motivo"],
+          lambda m: "LOCALIZADO" in m and "AVISO TEMPRANO" not in m)
+    # una caida propia de la fase (senescencia) no debe convertirse en aviso de foco
+    _sen = [{"fecha": "2026-05-14", "ndvi": 0.66, "ndvi_std": 0.05, "ndvi_p10": 0.60,
+             "ndvi_p50": 0.66, "ndvi_p90": 0.72, "n_pixeles": 800},
+            {"fecha": "2026-06-12", "ndvi": 0.34, "ndvi_std": 0.12, "ndvi_p10": 0.18,
+             "ndvi_p50": 0.36, "ndvi_p90": 0.55, "n_pixeles": 800}]
+    check("foco temprano: no pisa una caida esperada por la fase (senescencia)",
+          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", _sen,
+                                  spec={"especie": "TRIGO", "fecha_siembra": "2025-11-10"}),
+          lambda d: d["esperado"] is True and "AVISO TEMPRANO" not in d["motivo"])
+    # y el usuario puede quitarlo: dos correcciones suyas ajustan el estado
+    def _usuario_manda():
+        from interpretacion_fenologica import ajuste_por_validaciones as _aj
+        d = evaluar_parcela("LENOSO", "", _serie(0.13, 0.38), spec=_sp)
+        vals = [{"cultivo": "LENOSO//ALMENDRO", "fase": d["fase"], "estado_sistema": "Vigilar",
+                 "veredicto": "incorrecto", "estado_real": "OK"}] * 2
+        return _aj("LENOSO//ALMENDRO", d["fase"], d["estado"], vals)
+    check("foco temprano: el usuario puede corregirlo y se aprende",
+          _usuario_manda, lambda r: r.get("corregido") == "OK")
+
     # --- APRENDIZAJE: las validaciones pasadas se resumen para la IA ---
     from interpretacion_fenologica import contexto_aprendizaje
     apr = [{"fase": "rebrote / cortes", "cultivo": "EXTENSIVO/SIEGA_VERDE", "estado_sistema": "Revisar",
