@@ -34,6 +34,13 @@ try:
 except Exception:
     _OPENAI = False
 
+# Tiempo maximo de espera de la llamada a ChatGPT, en segundos.
+# Sin esto el SDK espera su valor por defecto (600 s) y ademas reintenta, con lo
+# que la interpretacion podia tardar decenas de minutos en aparecer. Al agotarse,
+# se usa el respaldo por reglas, que es el comportamiento ya previsto cuando la IA
+# no esta disponible (el texto que ve el usuario no cambia).
+TIMEOUT_IA_S = 30.0
+
 
 # =====================================================================
 # 1. FENOLOGIA: fase estimada por cultivo y fecha
@@ -597,7 +604,8 @@ def texto_interpretacion(tipo, subtipo, serie, fecha_iso=None, modelo="gpt-4o-mi
             mensajes.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
             client = OpenAI()
             r = client.chat.completions.create(
-                model=modelo, messages=mensajes, temperature=0.3, max_tokens=420)
+                model=modelo, messages=mensajes, temperature=0.3, max_tokens=420,
+                timeout=TIMEOUT_IA_S)
             return r.choices[0].message.content.strip(), diag
         except Exception as e:
             return _texto_reglas(diag) + f"  (IA no disponible: {e})", diag
