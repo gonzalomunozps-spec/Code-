@@ -13,8 +13,10 @@ Comportamiento identico al que tenian dentro de panel_gestion_parcelas; se
 centralizan aqui para no duplicarlos (spec_de estaba repetido en informe_anual).
 """
 
+from typing import Any, Dict, Optional
 
-def spec_de(cultivo):
+
+def spec_de(cultivo: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Extrae el modelo por especie del registro de cultivo (o None si es antiguo)."""
     if not cultivo or not cultivo.get("especie"):
         return None
@@ -24,6 +26,6 @@ def spec_de(cultivo):
             "marco_pie": cultivo.get("marco_pie")}
 
 
-def clave_cultivo(tipo, subtipo):
+def clave_cultivo(tipo: str, subtipo: str) -> str:
     """Clave estable del cultivo: 'TIPO_SUBTIPO' (o solo 'BARBECHO')."""
     return tipo if tipo == "BARBECHO" else f"{tipo}_{subtipo}"

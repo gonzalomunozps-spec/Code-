@@ -15,9 +15,10 @@ se cambia el comportamiento observable de ninguno).
 """
 
 import math
+from typing import Optional, Sequence
 
 
-def superficie_ha(coords):
+def superficie_ha(coords: Optional[Sequence[Sequence[float]]]) -> float:
     """Superficie de la parcela en hectareas (sin redondear). 0.0 si el poligono
     no es valido (vacio o < 3 vertices). coords = [[lon, lat], ...]."""
     if not coords or len(coords) < 3:

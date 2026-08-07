@@ -13,18 +13,20 @@ El comportamiento es identico al que tenian dentro de panel_gestion_parcelas.
 
 import re
 from datetime import datetime
+from typing import Optional
 
 
 # --- conversion de fechas: el programa usa ISO (aaaa-mm-dd); el usuario ve dd-mm-aaaa ---
-def iso_a_ddmmaaaa(iso):
+def iso_a_ddmmaaaa(iso: Optional[str]) -> str:
     """'2026-05-04' -> '04-05-2026' (o '' si no es una fecha valida)."""
     try:
-        return datetime.strptime(iso, "%Y-%m-%d").strftime("%d-%m-%Y")
+        # se acepta None a proposito: strptime lanza TypeError y se devuelve ""
+        return datetime.strptime(iso, "%Y-%m-%d").strftime("%d-%m-%Y")  # type: ignore[arg-type]
     except (ValueError, TypeError):
         return ""
 
 
-def ddmmaaaa_a_iso(texto):
+def ddmmaaaa_a_iso(texto: Optional[str]) -> str:
     """'04-05-2026' (o '04052026') -> '2026-05-04'. '' si esta incompleta o no existe."""
     digs = re.sub(r"\D", "", texto or "")[:8]
     if len(digs) != 8:
@@ -37,7 +39,7 @@ def ddmmaaaa_a_iso(texto):
     return f"{y}-{m}-{d}"
 
 
-def enmascarar_fecha(texto):
+def enmascarar_fecha(texto: Optional[str]) -> str:
     """Formatea los digitos tecleados como dd-mm-aaaa (los guiones salen solos)."""
     digs = re.sub(r"\D", "", texto or "")[:8]
     out = digs[:2]
@@ -48,7 +50,7 @@ def enmascarar_fecha(texto):
     return out
 
 
-def filtrar_fecha_digitos(digs):
+def filtrar_fecha_digitos(digs: Optional[str]) -> str:
     """Acepta los digitos mientras formen una fecha posible y descarta el primero
     que la haga imposible (dia 1-31, mes 1-12). Valida al vuelo segun se teclea."""
     digs = re.sub(r"\D", "", digs or "")

@@ -14,10 +14,12 @@ Comportamiento identico al que tenia dentro de panel_gestion_parcelas:
   - los fallos se traducen a un mensaje ya redactado para el usuario.
 """
 
+from typing import Any, Callable, Dict, List, Optional
+
 import requests
 
 
-def sigpac_geometria(data):
+def sigpac_geometria(data: Any) -> Optional[Dict[str, Any]]:
     """Extrae la geometria de una respuesta SIGPAC sea Feature, FeatureCollection
     o geometria suelta. Devuelve el dict de geometria o None."""
     if not isinstance(data, dict):
@@ -33,7 +35,7 @@ def sigpac_geometria(data):
     return data.get("geometry")
 
 
-def sigpac_anillo(geom):
+def sigpac_anillo(geom: Optional[Dict[str, Any]]) -> Optional[List[Any]]:
     """Anillo exterior [[x,y],...] de un Polygon o MultiPolygon."""
     if not geom:
         return None
@@ -45,7 +47,7 @@ def sigpac_anillo(geom):
     return None
 
 
-def sigpac_a_lonlat(coords):
+def sigpac_a_lonlat(coords: Optional[List[Any]]) -> Optional[List[List[float]]]:
     """Devuelve las coordenadas como [lon,lat]. Si vienen en UTM (EPSG:25830,
     valores grandes) intenta convertirlas; si no puede, lanza un error claro en
     vez de colocar la parcela en un sitio equivocado en silencio."""
@@ -78,14 +80,14 @@ SIGPAC_ENDPOINTS = [
 ]
 
 
-def sigpac_urls(v):
+def sigpac_urls(v: Dict[str, Any]) -> List[str]:
     """Lista de URLs candidatas para los codigos dados (Agr/Zona -> 0 si faltan)."""
     d = {"prov": v["Prov"], "mun": v["Mun"], "agr": v.get("Agr") or "0",
          "zona": v.get("Zona") or "0", "pol": v["Pol"], "par": v["Par"], "rec": v["Rec"]}
     return [u.format(**d) for u in SIGPAC_ENDPOINTS]
 
 
-def _sigpac_mensaje(ultimo):
+def _sigpac_mensaje(ultimo: Optional[tuple]) -> str:
     """Traduce el ultimo fallo (clase, url, detalle) a un mensaje claro."""
     if not ultimo:
         return "No se pudo consultar SIGPAC."
@@ -112,7 +114,7 @@ def _sigpac_mensaje(ultimo):
     return "No se pudo consultar SIGPAC."
 
 
-def sigpac_consultar(v, get):
+def sigpac_consultar(v: Dict[str, Any], get: Callable[[str], Any]) -> List[List[float]]:
     """Consulta SIGPAC probando los endpoints conocidos.
 
     `get(url)` debe devolver un objeto tipo respuesta (con `.status_code`,
@@ -120,7 +122,7 @@ def sigpac_consultar(v, get):
     exterior. Si ninguno responde con un recinto valido, lanza `SigpacError` con
     un mensaje ya redactado para el usuario.
     """
-    ultimo = None
+    ultimo: Optional[tuple] = None     # (clase, url, detalle); el detalle varia de tipo
     for url in sigpac_urls(v):
         try:
             r = get(url)
@@ -143,6 +145,6 @@ def sigpac_consultar(v, get):
     raise SigpacError(_sigpac_mensaje(ultimo))
 
 
-def _sigpac_get(url):
+def _sigpac_get(url: str):
     """Getter real basado en requests (separado para poder testear sin red)."""
     return requests.get(url, timeout=15, headers={"User-Agent": "GestorParcelas/1.0"})

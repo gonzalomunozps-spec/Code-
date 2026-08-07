@@ -11,21 +11,22 @@ Comportamiento identico al que tenian dentro de panel_gestion_parcelas.
 """
 
 from datetime import datetime
+from typing import Any, List, Optional, Tuple
 
 
-def campana_actual(fecha=None):
+def campana_actual(fecha: Optional[datetime] = None) -> str:
     """Campana agricola de una fecha (o de hoy). Sep-Dic -> 'anio-anio+1'."""
     d = fecha or datetime.now()
     return f"{d.year}-{d.year + 1}" if d.month >= 9 else f"{d.year - 1}-{d.year}"
 
 
-def rango_campana(campana):
+def rango_campana(campana: str) -> Tuple[str, str]:
     """Devuelve (inicio, fin) ISO de una campana: 1-sep a 31-ago."""
     a0, a1 = [int(x) for x in campana.split("-")]
     return f"{a0}-09-01", f"{a1}-08-31"
 
 
-def campanas_entre(inicio, fin):
+def campanas_entre(inicio: Any, fin: str) -> List[str]:
     """Lista de campanas 'A-B' desde `inicio` hasta `fin` (inclusive), mas reciente
     primero. Tolera entradas mal formadas devolviendo al menos `fin`."""
     try:
