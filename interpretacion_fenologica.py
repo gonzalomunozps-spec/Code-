@@ -112,25 +112,36 @@ INDICES_ABSOLUTOS = {"NDMI"}     # va de -1 a +1: el % no tiene sentido cerca de
 
 
 def delta(idx, actual, previo):
-    """Devuelve (texto_legible, valor_delta, es_porcentaje)."""
+    """Devuelve (texto_legible, delta_pts, delta_pct).
+
+    Exactamente UNO de los dos valores trae dato y el otro es None, para que el
+    llamador nunca tenga que consultar una bandera y adivinar la unidad:
+
+      - delta_pts: variacion en PUNTOS del indice. Se usa en los indices que
+        cruzan el cero (NDMI) y cuando el valor previo es casi cero, donde el
+        porcentaje se dispara y deja de significar nada.
+      - delta_pct: variacion en PORCENTAJE, para el resto de casos.
+
+    Si no hay dato actual o no hay referencia previa, ambos son None.
+    """
     if actual is None:
-        return ("sin dato", None, False)
+        return ("sin dato", None, None)
     if previo in (None, 0):
-        return ("primer dato", None, False)
+        return ("primer dato", None, None)
 
     d = actual - previo
     if idx in INDICES_ABSOLUTOS or abs(previo) < 0.08:
-        # delta absoluto (en puntos del indice)
+        # variacion en puntos del indice
         if abs(d) < 0.02:
-            return (f"estable ({d:+.3f} pts)", d, False)
+            return (f"estable ({d:+.3f} pts)", d, None)
         verbo = "sube" if d > 0 else "baja"
-        return (f"{verbo} {abs(d):.3f} pts", d, False)
+        return (f"{verbo} {abs(d):.3f} pts", d, None)
 
     p = d / abs(previo) * 100.0
     if abs(p) < 2:
-        return (f"estable ({p:+.1f} %)", p, True)
+        return (f"estable ({p:+.1f} %)", None, p)
     verbo = "sube" if p > 0 else "baja"
-    return (f"{verbo} {abs(p):.1f} %", p, True)
+    return (f"{verbo} {abs(p):.1f} %", None, p)
 
 
 # =====================================================================
@@ -261,8 +272,11 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     for K in ("NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"):
         k = K.lower()
         if act.get(k) is not None:
-            txt, val, es_pct = delta(K, act.get(k), (prev or {}).get(k))
-            deltas[K] = {"valor": act[k], "texto": txt, "delta": val, "pct": es_pct}
+            txt, d_pts, d_pct = delta(K, act.get(k), (prev or {}).get(k))
+            # dos claves explicitas: una trae dato y la otra None (nunca hay que
+            # mirar una bandera para saber si 'delta' eran puntos o porcentaje)
+            deltas[K] = {"valor": act[k], "texto": txt,
+                         "delta_pts": d_pts, "delta_pct": d_pct}
 
     ndvi = act.get("ndvi")
     ndmi = act.get("ndmi")

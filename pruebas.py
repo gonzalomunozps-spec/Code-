@@ -194,9 +194,39 @@ def pruebas_motor():
           lambda r: r.get("corregido") == "Vigilar" and r.get("ambito") == "cultivo")
 
     # deltas
-    check("delta: previo=0 -> None", lambda: delta("NDVI", 0.5, 0), lambda r: r[1] is None)
-    check("delta: previo None -> None", lambda: delta("NDVI", 0.5, None), lambda r: r[1] is None)
-    check("delta: NDMI absoluto (cruza 0)", lambda: delta("NDMI", -0.05, 0.05), lambda r: r[2] is False)
+    # delta devuelve (texto, delta_pts, delta_pct): uno con dato y el otro None
+    check("delta: previo=0 -> sin variacion en ninguna unidad",
+          lambda: delta("NDVI", 0.5, 0), lambda r: r[1] is None and r[2] is None)
+    check("delta: previo None -> sin variacion en ninguna unidad",
+          lambda: delta("NDVI", 0.5, None), lambda r: r[1] is None and r[2] is None)
+    check("delta: NDMI se mide en PUNTOS (cruza 0), no en %",
+          lambda: delta("NDMI", -0.05, 0.05),
+          lambda r: r[1] is not None and r[2] is None and abs(r[1] + 0.10) < 1e-9)
+    check("delta: NDVI se mide en PORCENTAJE",
+          lambda: delta("NDVI", 0.60, 0.50),
+          lambda r: r[2] is not None and r[1] is None and abs(r[2] - 20.0) < 1e-9)
+    check("delta: previo casi cero -> se fuerza a PUNTOS (el % se dispararia)",
+          lambda: delta("NDVI", 0.30, 0.05), lambda r: r[1] is not None and r[2] is None)
+    def _exclusivos():
+        casos = [("NDVI", 0.6, 0.5), ("NDMI", -0.05, 0.05), ("NDVI", 0.5, 0),
+                 ("NDVI", None, 0.5), ("NDVI", 0.51, 0.50), ("NDVI", 0.30, 0.05)]
+        return all((r[1] is None) or (r[2] is None) for r in (delta(*c) for c in casos))
+    check("delta: nunca devuelve puntos y porcentaje a la vez", _exclusivos, lambda r: r is True)
+    # el diagnostico expone las dos claves separadas
+    def _claves():
+        s = [{"fecha": "2026-04-01", "ndvi": 0.50, "ndmi": 0.05},
+             {"fecha": "2026-04-20", "ndvi": 0.60, "ndmi": -0.05}]
+        d = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", s,
+                            spec={"especie": "TRIGO", "fecha_siembra": "2025-11-10"})
+        return d["deltas"]
+    check("evaluar_parcela: deltas trae delta_pts y delta_pct (sin la bandera 'pct')",
+          _claves,
+          lambda r: ("delta_pts" in r["NDVI"] and "delta_pct" in r["NDVI"]
+                     and "pct" not in r["NDVI"] and "delta" not in r["NDVI"]))
+    check("evaluar_parcela: NDMI en puntos y NDVI en porcentaje",
+          _claves,
+          lambda r: (r["NDMI"]["delta_pts"] is not None and r["NDMI"]["delta_pct"] is None
+                     and r["NDVI"]["delta_pct"] is not None and r["NDVI"]["delta_pts"] is None))
 
     # texto por reglas (sin OPENAI_API_KEY)
     check("texto: respaldo por reglas", lambda: texto_interpretacion("EXTENSIVO", "COSECHA_GRANO",
