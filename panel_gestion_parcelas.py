@@ -1836,7 +1836,7 @@ class DialogoRelevoCampana(tk.Toplevel):
 
 class DialogoCorreccion(tk.Toplevel):
     """Pide el estado real y una nota para corregir un diagnostico (aprendizaje)."""
-    def __init__(self, master, ficha, ctx, nota_inicial=""):
+    def __init__(self, master, ficha, ctx):
         super().__init__(master)
         self.ficha = ficha
         self.title("Corregir diagnostico")
@@ -1862,8 +1862,6 @@ class DialogoCorreccion(tk.Toplevel):
         self.txt = tk.Text(self, width=44, height=4, bd=1, relief="solid",
                            font=FUENTES["body"], highlightthickness=0)
         self.txt.pack(padx=16, pady=(2, 0))
-        if nota_inicial:
-            self.txt.insert("1.0", nota_inicial)
         bar = tk.Frame(self, bg=TEMA["surface"])
         bar.pack(fill="x", padx=16, pady=14)
         ttk.Button(bar, text="Cancelar", style="Ghost.TButton", command=self.destroy).pack(side="right")
@@ -2548,16 +2546,12 @@ class FichaParcela:
         self.lbl_val = tk.Label(val, text="¿El diagnostico es correcto?", bg=TEMA["surface"],
                                 fg=TEMA["text_sec"], font=FUENTES["small"])
         self.lbl_val.pack(anchor="w")
-        # observacion libre: el programa aprende de lo que TU escribas aqui
-        self.ent_obs = ttk.Entry(val)
-        self.ent_obs.pack(fill="x", pady=(4, 0))
-        tk.Label(val, text="Escribe lo que observas y valida: el programa lo aprende.",
-                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w")
+        # La observacion escrita se pide en el dialogo de "Corregir", no aqui: tener
+        # ademas una caja de texto en la ficha era redundante.
         botones = tk.Frame(val, bg=TEMA["surface"])
-        botones.pack(fill="x", pady=(2, 0))
+        botones.pack(fill="x", pady=(4, 0))
         self.btn_val_ok = ttk.Button(botones, text="  ✓ Correcto  ", style="Ghost.TButton",
-                                     command=lambda: self._validar("correcto",
-                                                                   nota=self.ent_obs.get().strip()))
+                                     command=lambda: self._validar("correcto"))
         self.btn_val_ok.pack(side="left")
         self.btn_val_no = ttk.Button(botones, text="  ✗ Corregir…  ", style="Ghost.TButton",
                                      command=self._abrir_correccion)
@@ -2835,8 +2829,6 @@ class FichaParcela:
                 for r in regs:
                     if r.get("fecha") == ctx["fecha"]:
                         r["interpretacion"] = None
-        if hasattr(self, "ent_obs") and self.ent_obs.winfo_exists():
-            self.ent_obs.delete(0, "end")
         if regs:
             self._pintar_interp(regs)
         else:
@@ -2846,8 +2838,7 @@ class FichaParcela:
         ctx = getattr(self, "_val_ctx", None)
         if not ctx or not ctx.get("fecha"):
             return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.", parent=self.master)
-        nota_ini = self.ent_obs.get().strip() if hasattr(self, "ent_obs") else ""
-        DialogoCorreccion(self.master, self, ctx, nota_inicial=nota_ini)
+        DialogoCorreccion(self.master, self, ctx)
 
     # ================= CUADERNO DE CAMPO =================
     def _build_cuaderno(self, parent):
