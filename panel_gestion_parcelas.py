@@ -346,6 +346,12 @@ class LienzoMapa:
         self.redibujar()
 
     def mensaje(self, texto, color=None):
+        # Puede llegar desde un after() cuando el usuario ya cerro la ventana (las
+        # descargas de GEE tardan segundos): si el canvas ya no existe, no hay nada
+        # que pintar. Sin esta guarda, Tk lanzaria 'invalid command name'.
+        # (redibujar() ya hace esta misma comprobacion, por eso set_png esta cubierto.)
+        if not self.canvas.winfo_exists():
+            return
         self.canvas.delete("all")
         self.canvas.create_text(20, 20, anchor="nw", fill=color or TEMA["text_muted"], text=texto)
 
@@ -704,6 +710,15 @@ def construir_indice(img, indice):
     return img.normalizedDifference(["B8", "B4"]).rename("IDX")
 
 
+# Sesion HTTP compartida para las descargas de mapas. Reutiliza la conexion TCP/TLS
+# con el servidor de Google en vez de renegociarla en cada peticion (cada mapa hace
+# dos: fondo + capa del indice), asi el mapa aparece antes.
+# CONTRATO: se configura aqui una sola vez y despues SOLO se llama a .get(); no se
+# muta desde ningun sitio, que es lo que permite usarla desde varios hilos.
+_HTTP = requests.Session()
+_HTTP.headers.update({"User-Agent": "GestorParcelas/1.0"})
+
+
 def descargar_mapa_indice(coords, iso, idx, metros, png_destino):
     """Descarga de GEE el mapa de un indice para un dia y lo guarda como PNG
     (fondo RGB natural + capa de color del indice). Devuelve el lado en pixeles.
@@ -716,12 +731,12 @@ def descargar_mapa_indice(coords, iso, idx, metros, png_destino):
            .filterBounds(geom).filterDate(iso, d1).first())
     fondo = img.visualize(bands=["B4", "B3", "B2"], min=0, max=3000).getThumbURL(
         {"region": region, "dimensions": dim, "format": "png"})
-    fondo = Image.open(io.BytesIO(requests.get(fondo, timeout=90).content)).convert("RGBA")
+    fondo = Image.open(io.BytesIO(_HTTP.get(fondo, timeout=90).content)).convert("RGBA")
     rng = INDICES[idx]["rango"]
     ov = construir_indice(img, idx).clip(geom).visualize(
         min=rng[0], max=rng[1], palette=INDICES[idx]["paleta"]).getThumbURL(
         {"region": region, "dimensions": dim, "format": "png"})
-    ov = Image.open(io.BytesIO(requests.get(ov, timeout=90).content)).convert("RGBA")
+    ov = Image.open(io.BytesIO(_HTTP.get(ov, timeout=90).content)).convert("RGBA")
     Image.alpha_composite(fondo, ov).save(png_destino)
     return dim
 
@@ -768,7 +783,7 @@ def descargar_mapa_radar(coords, iso, param, metros, png_destino):
     ov = imagen_param_radar(img, param).clip(geom).visualize(
         min=vis["rango"][0], max=vis["rango"][1], palette=vis["paleta"]).getThumbURL(
         {"region": region, "dimensions": dim, "format": "png"})
-    Image.open(io.BytesIO(requests.get(ov, timeout=90).content)).convert("RGBA").save(png_destino)
+    Image.open(io.BytesIO(_HTTP.get(ov, timeout=90).content)).convert("RGBA").save(png_destino)
     return dim
 
 
@@ -2591,8 +2606,9 @@ class FichaParcela:
             # el texto del tooltip se calcula UNA vez por pasada (no en cada movimiento del raton)
             self._hover_datos = [(mdates.date2num(f), r, tooltip_pasada(r))
                                  for f, r in zip(fechas, validos)]
-            if hasattr(self, "idx_vars"):
-                seleccion = [K for K in INDICES_ORDEN if self.idx_vars[K].get()]
+            idx_vars = getattr(self, "idx_vars", None)   # una sola lectura, coherente abajo
+            if idx_vars:
+                seleccion = [K for K in INDICES_ORDEN if idx_vars[K].get()]
             else:
                 seleccion = INDICES_GRAFICA_DEF
             for K in seleccion:
@@ -2601,7 +2617,8 @@ class FichaParcela:
                     ax.plot(fechas, [v if v is not None else float("nan") for v in ys],
                             marker="o", ms=3, lw=1.8, label=K, color=COLOR_INDICE.get(K, "#666"))
             # RVI de Sentinel-1 (radar): serie propia, con sus fechas, si existe y esta marcada
-            if (self.idx_vars.get("RVI") and self.idx_vars["RVI"].get() and getattr(self, "_radar", None)):
+            if (idx_vars and idx_vars.get("RVI") and idx_vars["RVI"].get()
+                    and getattr(self, "_radar", None)):
                 # se parsea CADA fecha de radar una sola vez (antes se hacia hasta 3 veces)
                 rad = []
                 for r in self._radar:
