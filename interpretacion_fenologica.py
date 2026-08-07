@@ -27,6 +27,7 @@ import json
 from datetime import datetime
 
 from contraste_indices import analizar_por_contraste, heterogeneidad
+from bitacora import log
 
 try:
     from openai import OpenAI
@@ -380,7 +381,10 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                 motivo = txt_ev
                 evento_explica = True
         except Exception:
-            pass
+            # importante: si esto falla, una siega/cosecha REGISTRADA deja de
+            # explicar la caida del NDVI y saltaria como falsa alarma.
+            log.warning("no se pudo aplicar la explicacion por eventos del cuaderno",
+                        exc_info=True)
 
     cubierta = detectar_cubierta(tipo, subtipo, serie, fecha)
     hetero = heterogeneidad(serie)

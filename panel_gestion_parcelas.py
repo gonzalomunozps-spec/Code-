@@ -73,6 +73,7 @@ import fenologia_especies as FEN
 import credenciales as CRED
 import almacen as DB          # capa de datos (SQLite): parcelas, historico y eventos
 import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al optico
+from bitacora import log      # registro de incidencias (nunca escribe en consola)
 # utilidades puras de fecha (dd-mm-aaaa <-> ISO, mascara y validacion al vuelo)
 from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
                     filtrar_fecha_digitos)
@@ -102,7 +103,7 @@ def _abrir_archivo(ruta):
         else:
             subprocess.Popen(["xdg-open", ruta])
     except Exception:
-        pass
+        log.warning("no se pudo abrir %s con la aplicacion del sistema", ruta, exc_info=True)
 
 
 # =====================================================================
@@ -153,7 +154,7 @@ def aplicar_tema(root):
     try:
         st.theme_use("clam")
     except Exception:
-        pass
+        pass    # silencio deliberado: si no hay tema "clam", vale el que traiga el sistema
 
     st.configure(".", background=TEMA["page"], foreground=TEMA["text"],
                  font=FUENTES["body"], borderwidth=0)
@@ -229,7 +230,7 @@ def centrar_sobre(win, parent):
         y = top.winfo_rooty() + max(0, (ph - h) // 2)
         win.geometry(f"+{x}+{y}")
     except Exception:
-        pass
+        pass    # silencio deliberado: centrar es cosmetico; si falla, el gestor la coloca
 
 
 def marco_scroll(parent, bg=None, rueda_global=False):
@@ -302,7 +303,7 @@ def enlazar_rueda(widget, handler):
             widget.bind("<Button-4>", handler, add="+")
             widget.bind("<Button-5>", handler, add="+")
     except Exception:
-        pass
+        pass    # silencio deliberado: hay widgets que no aceptan estos eventos de rueda
     try:
         hijos = widget.winfo_children()
     except Exception:
@@ -451,14 +452,14 @@ class PopupCalendario(tk.Toplevel):
             self.update_idletasks()
             self.geometry(f"+{anchor.winfo_rootx()}+{anchor.winfo_rooty() + anchor.winfo_height() + 2}")
         except Exception:
-            pass
+            pass    # silencio deliberado: posicionar el calendario es cosmetico
         self.after(60, self._grab)
 
     def _grab(self):
         try:
             self.grab_set()
         except Exception:
-            pass
+            pass    # silencio deliberado: otro modal puede tener el grab; no es un error
 
     def _build(self):
         cab = tk.Frame(self, bg=TEMA["surface"])
@@ -845,7 +846,7 @@ def _save(path, data):
             try:
                 os.remove(tmp)
             except OSError:
-                pass
+                log.warning("no se pudo borrar el temporal %s", tmp, exc_info=True)
             raise
 
 
@@ -2681,7 +2682,7 @@ class FichaParcela:
                 try:
                     self.cv.mpl_disconnect(self._hover_cid)
                 except Exception:
-                    pass
+                    pass    # silencio deliberado: el callback ya no existe tras redibujar
             self._hover_cid = self.cv.mpl_connect("motion_notify_event", self._on_hover)
         self.fig.tight_layout()
         self.cv.draw()
@@ -3327,7 +3328,7 @@ class PanelCredenciales(ttk.Frame):
         try:
             webbrowser.open(CRED.URL_OPENAI_KEYS)
         except Exception:
-            pass
+            log.warning("no se pudo abrir el navegador en %s", CRED.URL_OPENAI_KEYS, exc_info=True)
 
     def _elegir_key(self):
         ruta = filedialog.askopenfilename(title="Clave de cuenta de servicio",
@@ -3375,7 +3376,8 @@ class PanelCredenciales(ttk.Frame):
             try:
                 self.al_cambiar()
             except Exception:
-                pass
+                # si falla, el resto de la app no se entera del cambio de credenciales
+                log.warning("fallo el aviso de cambio de credenciales", exc_info=True)
         messagebox.showinfo("Credenciales", "Credenciales guardadas. Probando conexiones…")
 
 
