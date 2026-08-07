@@ -73,6 +73,7 @@ import fenologia_especies as FEN
 import credenciales as CRED
 import almacen as DB          # capa de datos (SQLite): parcelas, historico y eventos
 import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al optico
+import contraste_indices as CI  # estadistica espacial por pasada (solo lectura)
 from bitacora import log      # registro de incidencias (nunca escribe en consola)
 # utilidades puras de fecha (dd-mm-aaaa <-> ISO, mascara y validacion al vuelo)
 from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
@@ -2450,6 +2451,12 @@ class FichaParcela:
         inf2.pack_propagate(False)
         self._build_cuaderno(inf2)
 
+        # estadistica espacial por pasada, bajo el cuaderno de campo
+        inf3 = tk.Frame(cuerpo, bg=TEMA["page"], height=240)
+        inf3.pack(fill="x", pady=(14, 0))
+        inf3.pack_propagate(False)
+        self._build_estadisticas(inf3)
+
         # la rueda del raton desplaza la ficha sobre marcos, etiquetas y botones
         # (el mapa conserva su zoom y las tablas su propio scroll)
         enlazar_rueda(cuerpo, scroll.rueda)
@@ -2472,6 +2479,61 @@ class FichaParcela:
                            anchor="w" if c == "fecha" else "center")
         self.tv.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.tv.tag_configure("ult", background="#fffaf0")
+
+    # Columnas de la tabla de estadistica espacial: (clave, titulo, ancho, decimales)
+    COLS_ESTAD = [("fecha", "FECHA", 88, None), ("media", "MEDIA", 62, 3),
+                  ("std", "DESV.", 62, 3), ("cv", "CV", 56, 2),
+                  ("p10", "P10", 56, 2), ("p25", "P25", 56, 2), ("p50", "MEDIANA", 66, 2),
+                  ("p75", "P75", 56, 2), ("p90", "P90", 56, 2),
+                  ("amplitud", "P90-P10", 66, 2), ("n_pixeles", "PIXELES", 62, 0),
+                  ("cobertura_valida", "COB.%", 56, "pct")]
+
+    def _build_estadisticas(self, parent):
+        card = tarjeta(parent)
+        card.pack(fill="both", expand=True)
+        self._titulo(card, "Estadistica dentro de la parcela (distribucion del NDVI)")
+        self.lbl_estad = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                  font=FUENTES["small"], justify="left", anchor="w")
+        self.lbl_estad.pack(fill="x", padx=12, pady=(0, 4))
+        cols = [c[0] for c in self.COLS_ESTAD]
+        self.tv_est = ttk.Treeview(card, columns=cols, show="headings", height=7)
+        for clave, titulo, ancho, _dec in self.COLS_ESTAD:
+            self.tv_est.heading(clave, text=titulo)
+            self.tv_est.column(clave, width=ancho,
+                               anchor="w" if clave == "fecha" else "center")
+        self.tv_est.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.tv_est.tag_configure("ult", background="#fffaf0")
+
+    def _pintar_estadisticas(self, regs):
+        """Vuelca los estadisticos espaciales de cada pasada. Los valores ya venian
+        del satelite; aqui solo se muestran (no se calcula ningun diagnostico)."""
+        if not hasattr(self, "tv_est") or not self.tv_est.winfo_exists():
+            return
+        self.tv_est.delete(*self.tv_est.get_children())
+        filas = [e for e in (CI.estadisticas_pasada(r) for r in regs) if e]
+        for k, e in enumerate(filas):
+            valores = []
+            for clave, _t, _a, dec in self.COLS_ESTAD:
+                v = e.get(clave)
+                if v is None:
+                    valores.append("-")
+                elif dec == "pct":
+                    valores.append(f"{v * 100:.0f}" if v <= 1 else f"{v:.0f}")
+                elif dec is None:
+                    valores.append(str(v))
+                else:
+                    valores.append(f"{v:.{dec}f}")
+            tag = ("ult",) if k == len(filas) - 1 else ()
+            self.tv_est.insert("", tk.END, tags=tag, values=valores)
+        if filas:
+            self.lbl_estad.config(
+                text="MEDIA/DESV. del NDVI entre los pixeles de la parcela · CV = desv./media "
+                     "(dispersion relativa) · P90-P10 = distancia entre el mejor y el peor 10 % · "
+                     "COB.% = pixeles validos tras descartar nubes.")
+        else:
+            self.lbl_estad.config(
+                text="Las pasadas de esta parcela no traen estadistica espacial (son anteriores "
+                     "al enmascarado por SCL). Al sincronizar pasadas nuevas apareceran aqui.")
 
     def _build_mapa(self, parent):
         card = tarjeta(parent)
@@ -2601,6 +2663,7 @@ class FichaParcela:
         self._pintar_leyenda()
         self._pintar_graficas(regs)
         self._pintar_interp(regs)
+        self._pintar_estadisticas(regs)
         self._pintar_mapa()
 
     @staticmethod
@@ -2782,6 +2845,10 @@ class FichaParcela:
         if c and c["señales"] >= 2:
             cab += f"  ·  Cubierta: {c['hipotesis_preliminar']} ({c['señales']}/4)"
         lineas = [cab]
+        # estadistica espacial de la pasada (ya venia del satelite; aqui se muestra)
+        txt_est = CI.texto_estadisticas(actual, diag.get("heterogeneidad"))
+        if txt_est:
+            lineas.append("📊 " + txt_est)
         if aj.get("nota"):
             lineas.append("🧠 " + aj["nota"])
         if nota_usuario:

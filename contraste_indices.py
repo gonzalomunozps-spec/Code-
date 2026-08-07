@@ -393,3 +393,67 @@ def heterogeneidad(serie):
             r["lectura"] = "La distribucion interna de la parcela se mantiene estable."
 
     return r
+
+
+# =====================================================================
+# ESTADISTICA DE UNA PASADA (lectura, no diagnostico)
+# =====================================================================
+def estadisticas_pasada(reg):
+    """Estadisticos de la distribucion del NDVI DENTRO de la parcela en UNA pasada.
+
+    Los valores ya venian del satelite (media, desviacion, percentiles, numero de
+    pixeles y cobertura valida); esta funcion solo los normaliza y anade los dos
+    derivados habituales, para poder mostrarlos:
+
+      - amplitud  = p90 - p10  -> cuanto separan el mejor 10 % del peor 10 %
+      - cv        = desviacion / media -> dispersion relativa, comparable entre fechas
+
+    No juzga nada (de eso se ocupa `heterogeneidad`, que ademas mira la evolucion).
+    Devuelve None si la pasada no trae estadistica espacial.
+    """
+    if not reg:
+        return None
+    media, std = _g(reg, "ndvi"), _g(reg, "ndvi_std")
+    if media is None or std is None:
+        return None
+    p10, p25 = _g(reg, "ndvi_p10"), _g(reg, "ndvi_p25")
+    p50, p75, p90 = _g(reg, "ndvi_p50"), _g(reg, "ndvi_p75"), _g(reg, "ndvi_p90")
+    out = {"fecha": reg.get("fecha"), "media": round(media, 3), "std": round(std, 3),
+           "p10": p10, "p25": p25, "p50": p50, "p75": p75, "p90": p90,
+           "n_pixeles": reg.get("n_pixeles"), "cobertura_valida": reg.get("cobertura_valida")}
+    if p10 is not None and p90 is not None:
+        out["amplitud"] = round(p90 - p10, 3)
+    if media > 0.05:
+        out["cv"] = round(std / media, 3)
+    return out
+
+
+def texto_estadisticas(reg, hetero=None):
+    """Resumen legible de la estadistica espacial de una pasada, para mostrarlo
+    junto a la interpretacion. Devuelve None si la pasada no trae estadistica.
+
+    `hetero` (opcional, salida de `heterogeneidad`) aporta la lectura de
+    uniformidad ya calculada, para no repetir criterio aqui."""
+    e = estadisticas_pasada(reg)
+    if not e:
+        return None
+    p = [f"Distribucion del NDVI en la parcela: media {e['media']:.3f}, "
+         f"desviacion {e['std']:.3f}"]
+    if e.get("cv") is not None:
+        p[0] += f" (CV {e['cv']:.2f})"
+    p[0] += "."
+    # se muestran los percentiles DISPONIBLES: las pasadas antiguas solo traen
+    # p10/p50/p90, y exigirlos todos dejaba la linea fuera sin necesidad
+    pcts = [(k, e.get(k)) for k in ("p10", "p25", "p50", "p75", "p90") if e.get(k) is not None]
+    if pcts:
+        p.append("Percentiles: " + " · ".join(
+            f"{'mediana' if k == 'p50' else k.upper()} {v:.2f}" for k, v in pcts) + ".")
+    if e.get("amplitud") is not None:
+        p.append(f"Entre el peor y el mejor 10 % hay {e['amplitud']:.2f} puntos de NDVI.")
+    if e.get("n_pixeles"):
+        cob = e.get("cobertura_valida")
+        extra = f", {cob * 100:.0f} % validos" if isinstance(cob, (int, float)) and cob <= 1 else ""
+        p.append(f"Medido sobre {e['n_pixeles']} pixeles{extra}.")
+    if hetero and hetero.get("uniformidad"):
+        p.append(f"Lectura: {hetero['uniformidad']}.")
+    return " ".join(p)

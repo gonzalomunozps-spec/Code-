@@ -889,6 +889,47 @@ def _informe_anual_error():
 
 
 # =====================================================================
+# 14. ESTADISTICA ESPACIAL POR PASADA (lectura de lo que ya venia del satelite)
+# =====================================================================
+def pruebas_estadisticas():
+    from contraste_indices import estadisticas_pasada, texto_estadisticas
+    r = {"fecha": "2026-04-15", "ndvi": 0.66, "ndvi_std": 0.099,
+         "ndvi_p10": 0.52, "ndvi_p25": 0.58, "ndvi_p50": 0.66,
+         "ndvi_p75": 0.72, "ndvi_p90": 0.78, "n_pixeles": 820, "cobertura_valida": 0.97}
+    check("estadisticas: recoge media, desviacion y percentiles",
+          lambda: estadisticas_pasada(r),
+          lambda e: e["media"] == 0.66 and e["std"] == 0.099 and e["p50"] == 0.66)
+    check("estadisticas: amplitud = p90 - p10",
+          lambda: estadisticas_pasada(r)["amplitud"], lambda v: abs(v - 0.26) < 1e-9)
+    check("estadisticas: cv = desviacion / media",
+          lambda: estadisticas_pasada(r)["cv"], lambda v: abs(v - 0.15) < 0.01)
+    check("estadisticas: pasada sin estadistica espacial -> None",
+          lambda: estadisticas_pasada({"fecha": "x", "ndvi": 0.5}), lambda v: v is None)
+    check("estadisticas: registro vacio -> None (no revienta)",
+          lambda: estadisticas_pasada({}), lambda v: v is None)
+    # no se inventan derivados si faltan los percentiles
+    check("estadisticas: sin percentiles no hay amplitud",
+          lambda: estadisticas_pasada({"ndvi": 0.5, "ndvi_std": 0.1}),
+          lambda e: e is not None and "amplitud" not in e)
+    # texto para la interpretacion
+    check("texto estadistico: nombra media, desviacion y percentiles",
+          lambda: texto_estadisticas(r),
+          lambda t: "media 0.660" in t and "desviacion 0.099" in t and "mediana 0.66" in t)
+    check("texto estadistico: incluye la lectura de uniformidad si se le pasa",
+          lambda: texto_estadisticas(r, {"uniformidad": "parcela uniforme"}),
+          lambda t: "parcela uniforme" in t)
+    check("texto estadistico: sin estadistica -> None",
+          lambda: texto_estadisticas({"ndvi": 0.5}), lambda t: t is None)
+    # pasadas antiguas: solo p10/p50/p90; deben salir igualmente los que haya
+    r3 = {"ndvi": 0.44, "ndvi_std": 0.16, "ndvi_p10": 0.22, "ndvi_p50": 0.47,
+          "ndvi_p90": 0.62, "n_pixeles": 820}
+    check("texto estadistico: muestra los percentiles disponibles (sin P25/P75)",
+          lambda: texto_estadisticas(r3),
+          lambda t: "P10 0.22" in t and "mediana 0.47" in t and "P90 0.62" in t
+                    and "P25" not in t and "P75" not in t)
+
+
+# =====================================================================
 # 13. BITACORA: registra sin molestar y sin poder tumbar el programa
 # =====================================================================
 def pruebas_bitacora():
@@ -959,7 +1000,7 @@ def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
-              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora):
+              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas):
         try:
             f()
         except Exception as e:
