@@ -1048,6 +1048,39 @@ def pruebas_rutas():
           lambda: _mudanza(True),
           lambda r: (r["parcelas"] == "De_La_Nueva" and r["queda_en_cwd"] == "True"))
 
+    # --- purga de la cache de mapas: borra PNG viejos, NUNCA datos ---
+    import rutas as R
+    import time as _t
+    def _cache():
+        c = tempfile.mkdtemp()
+        viejo, nuevo = _t.time() - 60 * 86400, _t.time() - 2 * 86400
+        for n, ts in (("mapa_viejo.png", viejo), ("MAPA_VIEJO2.PNG", viejo),
+                      ("mapa_reciente.png", nuevo), ("parcelas.db", viejo),
+                      ("config_credenciales.json", viejo), ("parcelas.log", viejo),
+                      ("parcelas.db-wal", viejo)):
+            f = os.path.join(c, n)
+            open(f, "w").write("x")
+            os.utime(f, (ts, ts))
+        return c
+    def _purgado():
+        c = _cache()
+        n = R.purgar_png_antiguos(c, dias=30)
+        return n, sorted(os.listdir(c))
+    check("cache: borra los PNG con mas dias de la cuenta (tambien .PNG)",
+          _purgado, lambda r: r[0] == 2 and "mapa_viejo.png" not in r[1]
+                              and "MAPA_VIEJO2.PNG" not in r[1])
+    check("cache: conserva los PNG recientes",
+          _purgado, lambda r: "mapa_reciente.png" in r[1])
+    check("cache: NO borra datos aunque sean mas viejos (db, json, log, wal)",
+          _purgado,
+          lambda r: all(f in r[1] for f in ("parcelas.db", "config_credenciales.json",
+                                            "parcelas.log", "parcelas.db-wal")))
+    check("cache: dias=0 desactiva la purga",
+          lambda: R.purgar_png_antiguos(_cache(), dias=0), lambda n: n == 0)
+    check("cache: directorio inexistente -> 0 (no revienta)",
+          lambda: R.purgar_png_antiguos(os.path.join(tempfile.mkdtemp(), "nada"), dias=30),
+          lambda n: n == 0)
+
     check("rutas: bitacora y credenciales tambien cuelgan de ahi",
           lambda: _en_subproceso(
               "import bitacora, credenciales; print(bitacora.RUTA_LOG); "

@@ -890,6 +890,10 @@ def _toca_sincronizar(ultima_iso, intervalo_ms, ahora=None):
 # falta mirar a menudo. Ademas se sincroniza al abrir la app y se puede forzar a
 # mano en cualquier momento (boton "Sincronizar ahora" o desde cada ficha).
 DIAS_AUTOSYNC = 1                            # pon 2 para comprobar cada dos dias
+# Dias que se conservan los PNG de la cache de mapas. Se purgan al arrancar, en
+# segundo plano. Son imagenes RECUPERABLES: se vuelven a descargar al pedirlas.
+# Pon 0 para no purgar nunca.
+DIAS_CACHE_MAPAS = 30
 INTERVALO_AUTOSYNC_MS = DIAS_AUTOSYNC * 24 * 60 * 60 * 1000
 
 # Resultado de la ultima sincronizacion (la automatica es silenciosa; esto deja
@@ -1033,6 +1037,10 @@ class PanelGestionParcelas(ttk.Frame):
         self._build_lista()
         self.mostrar_lista()
 
+        # limpieza de PNG viejos de la cache, en un hilo aparte para NO retrasar
+        # la apertura de la ventana (borra imagenes, nunca datos)
+        threading.Thread(target=self._purgar_cache, daemon=True).start()
+
         # Relevo de campana (1 de septiembre) + import automatico periodico
         self.after(400, self._comprobar_relevo_campana)
         self.after(1500, self._auto_sync)
@@ -1062,6 +1070,21 @@ class PanelGestionParcelas(ttk.Frame):
         self._refrescar()
 
     # ---------------------------------------------------------- import automatico
+    def _purgar_cache(self):
+        """Borra los PNG de mapas mas viejos que DIAS_CACHE_MAPAS.
+
+        Corre en un hilo aparte para no retrasar la apertura de la ventana, y no
+        toca la interfaz. Solo borra imagenes, que se vuelven a descargar solas
+        cuando se piden; los datos no se tocan (ver rutas.purgar_png_antiguos).
+        """
+        try:
+            n = rutas.purgar_png_antiguos(DIR_MAPAS, DIAS_CACHE_MAPAS)
+            if n:
+                log.warning("cache de mapas: %s PNG con mas de %s dias borrados",
+                            n, DIAS_CACHE_MAPAS)
+        except Exception:
+            log.warning("no se pudo purgar la cache de mapas", exc_info=True)
+
     def _auto_sync(self):
         """Se ejecuta al ARRANCAR y luego de forma periodica. Solo sincroniza si
         toca (nunca se sincronizo o ya paso el intervalo desde el ultimo sync);

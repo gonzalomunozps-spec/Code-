@@ -12,3 +12,4 @@ requests             # peticiones HTTP (SIGPAC, descarga de tiles)
 openai               # OPCIONAL: interpretacion con ChatGPT (sin clave, va por reglas)
 reportlab            # OPCIONAL: informes en PDF (balance y tecnico) del modulo informe_anual.py
 openpyxl             # OPCIONAL: exportacion a Excel (indices por mes + graficas) del mismo modulo
+platformdirs         # OPCIONAL: ubica los datos en la carpeta estandar del sistema (si falta, ~/.gestor_parcelas)

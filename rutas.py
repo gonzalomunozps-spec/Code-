@@ -66,3 +66,37 @@ def ruta(nombre):
 def es_forzado():
     """True si el directorio viene impuesto por la variable de entorno."""
     return bool(os.environ.get(VAR_ENTORNO))
+
+
+def purgar_png_antiguos(directorio, dias=30, ahora=None):
+    """Borra de la cache los PNG con mas de `dias` dias. Devuelve cuantos borro.
+
+    SEGURIDAD: solo se borran ficheros con extension .png, que son imagenes
+    RECUPERABLES (se vuelven a descargar solas cuando hacen falta). Nunca se toca
+    nada mas: ni la base de datos, ni las credenciales, ni la bitacora, ni ningun
+    otro fichero del directorio, aunque sea antiguo.
+
+    `dias <= 0` desactiva la purga. `ahora` (marca de tiempo) es para las pruebas.
+    Los errores de borrado se ignoran: es una limpieza oportunista, no una tarea
+    critica.
+    """
+    if not dias or dias <= 0 or not os.path.isdir(directorio):
+        return 0
+    import time
+    limite = (ahora if ahora is not None else time.time()) - dias * 86400
+    borrados = 0
+    try:
+        nombres = os.listdir(directorio)
+    except OSError:
+        return 0
+    for nombre in nombres:
+        if not nombre.lower().endswith(".png"):
+            continue                      # jamas se toca lo que no sea un PNG
+        f = os.path.join(directorio, nombre)
+        try:
+            if os.path.isfile(f) and os.path.getmtime(f) < limite:
+                os.remove(f)
+                borrados += 1
+        except OSError:
+            pass    # silencio deliberado: limpieza oportunista, no critica
+    return borrados

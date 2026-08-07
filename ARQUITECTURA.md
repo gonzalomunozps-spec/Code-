@@ -18,11 +18,13 @@ a través de Google Earth Engine. Para cada parcela calcula índices de vegetaci
 estima la **fase fenológica** según especie y fecha de siembra, y emite un
 diagnóstico (`OK` / `Vigilar` / `Revisar`) coherente con esa fase.
 
-Todo se guarda en un único fichero **SQLite** (`parcelas.db`).
+Todo se guarda en un único fichero **SQLite** (`parcelas.db`), dentro del
+**directorio de datos del usuario** (ver `rutas.py`): así el programa encuentra
+siempre sus datos, se arranque desde donde se arranque.
 
 ---
 
-## 2. Mapa de módulos (18 ficheros, ~8.700 líneas)
+## 2. Mapa de módulos (19 ficheros. ~9.200 líneas)
 
 El grafo de dependencias **no tiene ciclos**. Las capas van de abajo arriba:
 
@@ -31,7 +33,7 @@ CAPA 3  ENTREGA        panel_gestion_parcelas.py   informe_anual.py*
            │                     │                        │
 CAPA 2  DOMINIO        interpretacion_fenologica.py  registro_parcela.py  sentinel1.py
            │                     │                        │
-CAPA 1  DATOS                        almacen.py  ──►  bitacora.py
+CAPA 1  DATOS                 almacen.py ──► bitacora.py ──► rutas.py
            │
 CAPA 0  HOJAS PURAS    fechas  geo  campanas  cultivo  sigpac
                        contraste_indices  fenologia_especies  herbicida_contexto*
@@ -57,6 +59,7 @@ Son la base testeable. Ninguno importa a otro.
 |---|---|
 | `almacen.py` | **Único** punto de acceso a SQLite: parcelas, pasadas, radar, eventos, validaciones. WAL + `RLock`; conexión compartida con *double-checked locking*. Migra los JSON antiguos una sola vez. |
 | `bitacora.py` | Registro de incidencias a `parcelas.log`. Nunca escribe en consola; si no puede escribir, degrada a `NullHandler`. |
+| `rutas.py` | **Dónde viven los datos**: `GESTOR_PARCELAS_DIR` → `platformdirs` (opcional) → `~/.gestor_parcelas`. También purga los PNG viejos de la caché. |
 | `credenciales.py` | Config y clave de OpenAI (ofuscada, fichero 0600, escritura atómica). |
 
 ### Capa 2 — Dominio
@@ -72,7 +75,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Toda la interfaz (~3.400 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 203 pruebas sin pantalla ni red. |
+| `pruebas.py` | 243 pruebas sin pantalla ni red. |
 
 ---
 
@@ -121,7 +124,13 @@ todas las parcelas.
    antes de pintar: una descarga puede terminar después de cerrar la ventana.
 5. **`except ... as e` + lambda diferida:** hay que fijar la excepción como
    argumento por defecto (`lambda err=e:`). Python borra `e` al salir del `except`.
-6. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
+6. **Ninguna ruta de datos es relativa al directorio de trabajo.** Todo se pide a
+   `rutas.ruta(...)`. Si al arrancar hay un `parcelas.db` en el directorio actual
+   y no en el de datos, se traslada una vez y queda anotado en la bitácora.
+7. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
+   cambiarlo hay que subir `ESQUEMA_VERSION` y añadir su migración a
+   `_MIGRACIONES` (receta completa en el docstring de `almacen.py`).
+8. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
    registros antiguos sin campos nuevos. Convertirlas a `dataclass` cambiaría el
    formato de datos.
 
@@ -160,7 +169,7 @@ Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 203 pruebas, sin pantalla ni red
+python pruebas.py          # 243 pruebas, sin pantalla ni red
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
 ```
