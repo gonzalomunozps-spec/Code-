@@ -21,9 +21,7 @@ Uso:
 No necesita earthengine-api, tkinter ni matplotlib.
 """
 
-import os
 import sys
-import json
 from datetime import datetime
 
 from interpretacion_fenologica import evaluar_parcela, texto_interpretacion

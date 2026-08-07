@@ -36,7 +36,7 @@ from datetime import datetime
 
 # --- motor real del programa (nucleo; estos modulos siempre estan) ---
 from interpretacion_fenologica import evaluar_parcela
-from contraste_indices import heterogeneidad, contrastes
+from contraste_indices import heterogeneidad
 import registro_parcela as REG
 try:
     import sentinel1 as S1
@@ -580,9 +580,8 @@ def _construir_pdf_tecnico(ruta, ctx):
 
     serie = ctx["serie"]; radar = ctx["radar"]; nombre = ctx["nombre"]; campana = ctx["campana"]
     especie = ctx["especie"]; propietario = ctx["propietario"]; superficie = ctx["superficie"]
-    cultivo = ctx["cultivo"]; mensual = ctx["mensual"]; estad = ctx["estadisticos"]
+    mensual = ctx["mensual"]; estad = ctx["estadisticos"]
     recorrido = ctx["recorrido"]; hetero = ctx["hetero"]; diag_final = ctx["diag_final"]
-    tipo = ctx["tipo"]; sub = ctx["sub"]
 
     def esc(s): return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -829,7 +828,7 @@ def _construir_excel(ruta, ctx):
     nombre = ctx["nombre"]; campana = ctx["campana"]; especie = ctx["especie"]
     propietario = ctx["propietario"]; superficie = ctx["superficie"]; cultivo = ctx["cultivo"]
 
-    VERDE = "2F855A"; CAB = "276749"; GRIS = "F4F8F5"
+    CAB = "276749"
     f_cab = Font(bold=True, color="FFFFFF"); relleno_cab = PatternFill("solid", fgColor=CAB)
     f_tit = Font(bold=True, size=14, color="1E3A2B")
     centro = Alignment(horizontal="center")

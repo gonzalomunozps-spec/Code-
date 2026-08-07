@@ -26,7 +26,7 @@ import os
 import json
 from datetime import datetime
 
-from contraste_indices import analizar_por_contraste, contrastes, heterogeneidad
+from contraste_indices import analizar_por_contraste, heterogeneidad
 
 try:
     from openai import OpenAI

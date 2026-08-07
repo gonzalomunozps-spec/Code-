@@ -17,7 +17,7 @@ Dos funcionalidades que se apoyan en el diagnostico existente:
 Persistencia en JSON (misma carpeta que el resto de datos).
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import almacen as DB     # el almacen (SQLite) guarda ahora los eventos
 

@@ -2042,7 +2042,11 @@ class PanelMapaComparado:
             dim = descargar_mapa_indice(self.coords, iso, idx, metros, png)
             self.canvas.after(0, lambda: self.lienzo.set_png(png, f"{dim}x{dim} px  ·  {metros} m/pixel"))
         except Exception as e:
-            self.canvas.after(0, lambda: self.lienzo.mensaje(f"Error mapa: {e}", TEMA["danger_fg"]))
+            # `e` se borra al salir del except: hay que fijarlo como argumento por
+            # defecto o la lambda (que corre despues, via after) lanzaria NameError
+            # y el usuario nunca veria el motivo del fallo.
+            self.canvas.after(0, lambda err=e: self.lienzo.mensaje(f"Error mapa: {err}",
+                                                                   TEMA["danger_fg"]))
 
     def _leyenda(self):
         self.fig_ley.clear()
@@ -2346,7 +2350,9 @@ class VentanaRadar(tk.Toplevel):
             dim = descargar_mapa_radar(self.coords, iso, param, metros, png)
             self.after(0, lambda: self.lienzo.set_png(png, f"S1 {param} · {dim}x{dim} px · {metros} m/pixel"))
         except Exception as e:
-            self.after(0, lambda: self.lienzo.mensaje(f"Error mapa radar: {e}", TEMA["danger_fg"]))
+            # ver nota en PanelMapaComparado._descargar: `e` debe fijarse por defecto
+            self.after(0, lambda err=e: self.lienzo.mensaje(f"Error mapa radar: {err}",
+                                                            TEMA["danger_fg"]))
 
 
 # =====================================================================
@@ -2997,7 +3003,9 @@ class FichaParcela:
             dim = descargar_mapa_indice(coords, iso, idx, metros, png)
             self.master.after(0, lambda: self.lienzo.set_png(png, f"{dim}x{dim} px  ·  {metros} m/pixel"))
         except Exception as e:
-            self.master.after(0, lambda: self.lienzo.mensaje(f"Error mapa: {e}", TEMA["danger_fg"]))
+            # ver nota en PanelMapaComparado._descargar: `e` debe fijarse por defecto
+            self.master.after(0, lambda err=e: self.lienzo.mensaje(f"Error mapa: {err}",
+                                                                   TEMA["danger_fg"]))
 
     def _comparar_mapas(self):
         if not self._map_fechas:
