@@ -24,16 +24,18 @@ import os
 import json
 import uuid
 
+import rutas
 from bitacora import log   # registro de incidencias (no cambia nada visible)
 import sqlite3
 import threading
 from datetime import datetime
 
-RUTA_DB = "parcelas.db"
+RUTA_DB = rutas.ruta("parcelas.db")   # en el directorio de datos del usuario
 _CONN = None
 _LOCK = threading.RLock()
 
-# JSON antiguos a importar la primera vez
+# JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
+# a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
 _JSON_PARCELAS = "parcelas.json"
 _JSON_HISTORICO = "historico_reportes.json"
 _JSON_EVENTOS = "eventos_parcela.json"
@@ -42,6 +44,41 @@ _JSON_EVENTOS = "eventos_parcela.json"
 # ---------------------------------------------------------------------------
 # Conexion / esquema / migracion
 # ---------------------------------------------------------------------------
+def _rescatar_bd_del_cwd(destino):
+    """Traslada UNA sola vez la base de datos de una version anterior.
+
+    Hasta ahora `parcelas.db` se creaba en el directorio de trabajo. Si el usuario
+    tiene ahi su base y todavia no hay ninguna en el directorio de datos, se mueve
+    (con sus ficheros -wal y -shm) para que no "pierda" sus parcelas al arrancar
+    el programa desde otra carpeta.
+
+    Solo actua si: existe en el cwd, NO existe en el destino y no son el mismo
+    fichero. Si el traslado falla, se deja donde estaba y se sigue usando: nunca
+    se borra ni se pisa nada.
+    """
+    origen = os.path.abspath("parcelas.db")
+    destino = os.path.abspath(destino)
+    if origen == destino or not os.path.exists(origen) or os.path.exists(destino):
+        return destino
+    try:
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        os.replace(origen, destino)
+        for suf in ("-wal", "-shm"):        # ficheros auxiliares del modo WAL
+            if os.path.exists(origen + suf):
+                try:
+                    os.replace(origen + suf, destino + suf)
+                except OSError:
+                    pass                    # silencio deliberado: se regeneran solos
+        log.warning("base de datos trasladada de %s a %s (nueva ubicacion de datos)",
+                    origen, destino)
+        return destino
+    except Exception:
+        # no se pudo mover: se sigue usando la de siempre, sin perder nada
+        log.warning("no se pudo trasladar %s a %s; se seguira usando la del "
+                    "directorio de trabajo", origen, destino, exc_info=True)
+        return origen
+
+
 def conectar(ruta=None):
     """Abre (o reutiliza) la conexion. Con `ruta` distinta, reconecta (util en tests)."""
     global _CONN, RUTA_DB
@@ -49,6 +86,9 @@ def conectar(ruta=None):
         if ruta and ruta != RUTA_DB:
             cerrar()
             RUTA_DB = ruta
+        elif _CONN is None and not ruta:
+            # solo en el arranque normal (sin ruta explicita, como en las pruebas)
+            RUTA_DB = _rescatar_bd_del_cwd(RUTA_DB)
         if _CONN is None:
             _CONN = sqlite3.connect(RUTA_DB, check_same_thread=False)
             _CONN.row_factory = sqlite3.Row

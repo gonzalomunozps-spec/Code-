@@ -74,6 +74,7 @@ import credenciales as CRED
 import almacen as DB          # capa de datos (SQLite): parcelas, historico y eventos
 import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al optico
 import contraste_indices as CI  # estadistica espacial por pasada (solo lectura)
+import rutas                    # directorio de datos del usuario (no el de trabajo)
 from bitacora import log      # registro de incidencias (nunca escribe en consola)
 # utilidades puras de fecha (dd-mm-aaaa <-> ISO, mascara y validacion al vuelo)
 from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
@@ -611,8 +612,8 @@ def _colores_estado(clave):
 # Los DATOS (parcelas, historico y eventos) viven en SQLite via el modulo
 # `almacen` (DB). Aqui solo queda como JSON la marca del ultimo sync, que es
 # estado, no datos.
-ARCHIVO_ESTADO    = "estado_sync.json"        # marca del ultimo sync (para el arranque)
-DIR_MAPAS         = "cache_mapas"
+ARCHIVO_ESTADO    = rutas.ruta("estado_sync.json")   # marca del ultimo sync (para el arranque)
+DIR_MAPAS         = rutas.ruta("cache_mapas")
 
 os.makedirs(DIR_MAPAS, exist_ok=True)
 

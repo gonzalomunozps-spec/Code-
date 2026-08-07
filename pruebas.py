@@ -935,6 +935,84 @@ def _informe_anual_error():
 
 
 # =====================================================================
+# 15. RUTAS: los datos viven en el perfil del usuario, no en el cwd
+# =====================================================================
+def pruebas_rutas():
+    import subprocess
+    base = os.path.dirname(os.path.abspath(__file__))
+
+    def _en_subproceso(codigo, entorno=None, cwd=None):
+        env = dict(os.environ)
+        env.pop("GESTOR_PARCELAS_DIR", None)
+        env.update(entorno or {})
+        r = subprocess.run([sys.executable, "-c",
+                            f"import sys; sys.path.insert(0, {base!r})\n" + codigo],
+                           capture_output=True, text=True, env=env, cwd=cwd or base)
+        return r.stdout.strip()
+
+    d = tempfile.mkdtemp()
+    check("rutas: la variable de entorno manda",
+          lambda: _en_subproceso("import rutas; print(rutas.directorio_datos())",
+                                 {"GESTOR_PARCELAS_DIR": d}),
+          lambda r: r == os.path.abspath(d))
+    check("rutas: sin variable, cae en el perfil del usuario (no en el cwd)",
+          lambda: _en_subproceso("import rutas, os; print(rutas.directorio_datos())"),
+          lambda r: os.path.isabs(r) and r != os.getcwd())
+    check("rutas: crea el directorio si no existe",
+          lambda: _en_subproceso("import rutas, os; print(os.path.isdir(rutas.directorio_datos()))",
+                                 {"GESTOR_PARCELAS_DIR": os.path.join(d, "nuevo", "hondo")}),
+          lambda r: r == "True")
+    check("rutas: ruta() cuelga del directorio de datos",
+          lambda: _en_subproceso("import rutas; print(rutas.ruta('parcelas.db'))",
+                                 {"GESTOR_PARCELAS_DIR": d}),
+          lambda r: r == os.path.join(os.path.abspath(d), "parcelas.db"))
+    # lo importante: el mismo fichero SE ENCUENTRA desde cualquier directorio
+    d2 = tempfile.mkdtemp()
+    otro = tempfile.mkdtemp()
+    check("rutas: la BD es la MISMA arrancando desde otra carpeta",
+          lambda: (_en_subproceso("import almacen; print(almacen.RUTA_DB)",
+                                  {"GESTOR_PARCELAS_DIR": d2}, cwd=base),
+                   _en_subproceso("import almacen; print(almacen.RUTA_DB)",
+                                  {"GESTOR_PARCELAS_DIR": d2}, cwd=otro)),
+          lambda r: r[0] == r[1] and r[0].startswith(os.path.abspath(d2)))
+    # --- traslado, UNA sola vez, de la BD que estaba en el directorio de trabajo ---
+    def _mudanza(preexiste_destino):
+        viejo, nuevo = tempfile.mkdtemp(), tempfile.mkdtemp()
+        prep = ("import almacen as DB\n"
+                "DB.conectar('parcelas.db')\n"
+                "DB.guardar_ficha('De_La_Vieja', {'propietario':'A','coordenadas':[[0,0],[0,1],[1,1]]})\n"
+                "DB.cerrar()\n")
+        if preexiste_destino:
+            prep += (f"DB.conectar(os.path.join({nuevo!r}, 'parcelas.db'))\n"
+                     "DB.guardar_ficha('De_La_Nueva', {'propietario':'B','coordenadas':[[0,0],[0,1],[1,1]]})\n"
+                     "DB.cerrar()\n")
+        _en_subproceso("import os\n" + prep + "print('ok')", cwd=viejo)
+        salida = _en_subproceso(
+            "import os, almacen as DB\n"
+            "DB.conectar()\n"
+            "print(DB.RUTA_DB)\n"
+            "print(','.join(DB.nombres()))\n"
+            "print(os.path.exists('parcelas.db'))\n",
+            {"GESTOR_PARCELAS_DIR": nuevo}, cwd=viejo).splitlines()
+        return {"bd": salida[0], "parcelas": salida[1], "queda_en_cwd": salida[2],
+                "nuevo": os.path.abspath(nuevo)}
+
+    check("mudanza: la BD del cwd se traslada y conserva los datos",
+          lambda: _mudanza(False),
+          lambda r: (r["bd"].startswith(r["nuevo"]) and r["parcelas"] == "De_La_Vieja"
+                     and r["queda_en_cwd"] == "False"))
+    check("mudanza: si ya hay BD en destino NO se pisa y la antigua se conserva",
+          lambda: _mudanza(True),
+          lambda r: (r["parcelas"] == "De_La_Nueva" and r["queda_en_cwd"] == "True"))
+
+    check("rutas: bitacora y credenciales tambien cuelgan de ahi",
+          lambda: _en_subproceso(
+              "import bitacora, credenciales; print(bitacora.RUTA_LOG); "
+              "print(credenciales.ARCHIVO_CRED)", {"GESTOR_PARCELAS_DIR": d2}),
+          lambda r: all(l.startswith(os.path.abspath(d2)) for l in r.splitlines()))
+
+
+# =====================================================================
 # 14. ESTADISTICA ESPACIAL POR PASADA (lectura de lo que ya venia del satelite)
 # =====================================================================
 def pruebas_estadisticas():
@@ -986,8 +1064,10 @@ def pruebas_bitacora():
     codigo = ("import sys; sys.path.insert(0, %r)\n"
               "import bitacora\n"
               "bitacora.log.warning('incidencia de prueba')\n") % base
+    # el directorio de datos se fuerza con la variable de entorno (ver rutas.py)
+    entorno = dict(os.environ, GESTOR_PARCELAS_DIR=d)
     r = subprocess.run([sys.executable, "-c", codigo], cwd=d,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=entorno)
     check("bitacora: no escribe nada en la consola del usuario",
           lambda: (r.stdout + r.stderr).strip(), lambda x: x == "")
     check("bitacora: deja la incidencia en parcelas.log",
@@ -1001,7 +1081,8 @@ def pruebas_bitacora():
                "bitacora.log.warning('no debe romper')\n"
                "print(type(bitacora.log.handlers[0]).__name__)\n") % base
     r2 = subprocess.run([sys.executable, "-c", codigo2], cwd=d2,
-                        capture_output=True, text=True)
+                        capture_output=True, text=True,
+                        env=dict(os.environ, GESTOR_PARCELAS_DIR=d2))
     check("bitacora: sin poder escribir usa manejador nulo y no falla",
           lambda: (r2.returncode, r2.stdout.strip()),
           lambda x: x[0] == 0 and x[1] == "NullHandler")
@@ -1046,7 +1127,7 @@ def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
-              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas):
+              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas):
         try:
             f()
         except Exception as e:

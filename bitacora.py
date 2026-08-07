@@ -23,7 +23,10 @@ Uso:
 
 import logging
 
-RUTA_LOG = "parcelas.log"
+import rutas
+
+# En el directorio de datos del usuario, no en el de trabajo (ver rutas.py)
+RUTA_LOG = rutas.ruta("parcelas.log")
 
 log = logging.getLogger("parcelas")
 

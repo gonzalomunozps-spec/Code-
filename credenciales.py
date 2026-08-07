@@ -34,9 +34,10 @@ import os
 import json
 import base64
 import tempfile
+import rutas
 from bitacora import log   # registro de incidencias
 
-ARCHIVO_CRED = "config_credenciales.json"
+ARCHIVO_CRED = rutas.ruta("config_credenciales.json")
 
 
 # ---------------------------------------------------------------------------
