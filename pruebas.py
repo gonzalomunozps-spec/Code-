@@ -606,6 +606,49 @@ def pruebas_almacen():
     check("almacen: validaciones_recientes prioriza el mismo cultivo",
           lambda: DB.validaciones_recientes(5, cultivo="LENOSO/INTENSIVO"),
           lambda r: len(r) == 1 and r[0]["cultivo"] == "LENOSO/INTENSIVO")
+    # --- version del esquema (PRAGMA user_version) ---
+    import sqlite3 as _sq
+    def _uv(p):
+        c = _sq.connect(p)
+        try:
+            return c.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            c.close()
+    d_e = tempfile.mkdtemp()
+    p_nueva = os.path.join(d_e, "nueva.db")
+    DB.conectar(p_nueva); DB.cerrar()
+    check("esquema: una base nueva queda marcada con la version actual",
+          lambda: _uv(p_nueva), lambda v: v == DB.ESQUEMA_VERSION)
+    # base "antigua": las de hoy tienen user_version = 0
+    p_vieja = os.path.join(d_e, "vieja.db")
+    _c0 = _sq.connect(p_vieja); _c0.execute("PRAGMA user_version=0"); _c0.commit(); _c0.close()
+    DB.conectar(p_vieja); DB.cerrar()
+    check("esquema: una base antigua se pone al dia al abrirla",
+          lambda: _uv(p_vieja), lambda v: v == DB.ESQUEMA_VERSION)
+    # el mecanismo aplica de verdad una migracion futura, y solo una vez
+    def _migracion_futura():
+        orig_v, orig_m = DB.ESQUEMA_VERSION, DB._MIGRACIONES
+        try:
+            DB.ESQUEMA_VERSION = orig_v + 1
+            DB._MIGRACIONES = {orig_v + 1:
+                               lambda conn: conn.execute("ALTER TABLE parcelas ADD COLUMN riego TEXT")}
+            DB.conectar(p_vieja); DB.cerrar()
+            cols = [r[1] for r in _sq.connect(p_vieja).execute("PRAGMA table_info(parcelas)")]
+            v1 = _uv(p_vieja)
+            DB.conectar(p_vieja); DB.cerrar()          # reabrir NO debe reaplicarla
+            return ("riego" in cols, v1, _uv(p_vieja))
+        finally:
+            DB.ESQUEMA_VERSION, DB._MIGRACIONES = orig_v, orig_m
+    check("esquema: aplica una migracion pendiente y no la repite",
+          _migracion_futura, lambda r: r[0] is True and r[1] == r[2] == 2)
+    # una base de una version MAS NUEVA no se toca
+    p_futura = os.path.join(d_e, "futura.db")
+    _c9 = _sq.connect(p_futura); _c9.execute("PRAGMA user_version=99"); _c9.commit(); _c9.close()
+    DB.conectar(p_futura); DB.cerrar()
+    check("esquema: una base de un programa mas nuevo se abre sin tocarla",
+          lambda: _uv(p_futura), lambda v: v == 99)
+    DB.conectar(os.path.join(d, "t.db"))       # se restaura la base de las pruebas
+
     DB.eliminar_parcela("Olivar")
     check("almacen: borrado en cascada", lambda: (DB.nombres(), DB.pasadas("Olivar", "2025-2026")),
           lambda r: r == ([], []))

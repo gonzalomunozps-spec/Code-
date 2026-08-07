@@ -34,6 +34,29 @@ RUTA_DB = rutas.ruta("parcelas.db")   # en el directorio de datos del usuario
 _CONN = None
 _LOCK = threading.RLock()
 
+# =====================================================================
+# VERSION DEL ESQUEMA (PRAGMA user_version)
+# =====================================================================
+# La base guarda su propia version. Al abrirla, `_migrar_esquema` aplica en orden
+# las migraciones que le falten, de una en una, hasta ESQUEMA_VERSION.
+#
+# COMO ANADIR UNA MIGRACION EN EL FUTURO (ejemplo: pasar de la 1 a la 2)
+#   1. Sube la constante:            ESQUEMA_VERSION = 2
+#   2. Escribe la funcion del paso:
+#          def _migracion_2(c):
+#              \"\"\"Anade la columna 'riego' a parcelas.\"\"\"
+#              c.execute("ALTER TABLE parcelas ADD COLUMN riego TEXT")
+#   3. Registrala en el diccionario:  _MIGRACIONES = {2: _migracion_2, ...}
+#
+# Reglas para que una base de 10 anos siga abriendose sin sustos:
+#   - Cada migracion debe ser IDEMPOTENTE en la practica y no destruir datos:
+#     anadir columnas o tablas, si; renombrar o borrar, solo con mucho cuidado.
+#   - Nunca cambies una migracion ya publicada: escribe la siguiente.
+#   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
+#     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
+#     poner al dia las bases que ya existian.
+ESQUEMA_VERSION = 1
+
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
 _JSON_PARCELAS = "parcelas.json"
@@ -97,6 +120,7 @@ def conectar(ruta=None):
             except sqlite3.Error:
                 log.warning("no se pudo activar WAL en SQLite", exc_info=True)
             _crear_tablas()
+            _migrar_esquema()      # pone al dia el esquema si la base es antigua
             _migrar_desde_json()
         return _CONN
 
@@ -156,6 +180,36 @@ def _crear_tablas():
         CREATE INDEX IF NOT EXISTS ix_valida_ts  ON validaciones(ts);
     """)
     _CONN.commit()
+
+
+# Migraciones por version de destino: {version: funcion(conexion)}.
+# La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
+_MIGRACIONES = {}
+
+
+def _migrar_esquema():
+    """Pone la base al dia aplicando en orden las migraciones que le falten.
+
+    La version vive en la propia base (PRAGMA user_version), asi que el programa
+    sabe con que esquema se creo aunque el fichero venga de otro equipo.
+    """
+    actual = _CONN.execute("PRAGMA user_version").fetchone()[0]
+    if actual == ESQUEMA_VERSION:
+        return actual
+    if actual > ESQUEMA_VERSION:
+        # base creada por una version MAS NUEVA del programa: no se toca
+        log.warning("la base es de un esquema mas nuevo (v%s) que este programa (v%s); "
+                    "se abre tal cual, pero conviene actualizar el programa",
+                    actual, ESQUEMA_VERSION)
+        return actual
+    for version in range(actual + 1, ESQUEMA_VERSION + 1):
+        paso = _MIGRACIONES.get(version)
+        if paso is not None:
+            paso(_CONN)                      # cada paso, en su propia transaccion
+            log.warning("esquema migrado a la version %s", version)
+        _CONN.execute(f"PRAGMA user_version = {version}")
+        _CONN.commit()
+    return ESQUEMA_VERSION
 
 
 def _backup(path):
