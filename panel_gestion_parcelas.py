@@ -66,7 +66,8 @@ import matplotlib.dates as mdates
 
 # Modulo de interpretacion fenologica + deteccion de cubierta vegetal (IA)
 from interpretacion_fenologica import (evaluar_parcela, texto_interpretacion,
-                                       ajuste_por_validaciones, observaciones_del_agricultor)
+                                       ajuste_por_validaciones, observaciones_del_agricultor,
+                                       ambito_parcela)
 import registro_parcela as REG
 import fenologia_especies as FEN
 import credenciales as CRED
@@ -1871,6 +1872,17 @@ class DialogoCorreccion(tk.Toplevel):
         self.cb = ttk.Combobox(self, state="readonly", values=FichaParcela.ESTADOS_VALIDABLES, width=18)
         self.cb.set(ctx.get("estado", "OK"))
         self.cb.pack(anchor="w", padx=16, pady=(2, 0))
+        # --- AMBITO de la correccion: solo esta finca o todo el cultivo ---
+        tk.Label(self, text="¿A que debe aplicarse esta correccion?", bg=TEMA["surface"],
+                 fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(12, 0))
+        self.ambito = tk.StringVar(value="cultivo")
+        _cult = (ctx.get("cultivo", "") or "").split("/")[-1] or "este cultivo"
+        _parc = ficha.nombre.replace("_", " ")
+        ttk.Radiobutton(self, variable=self.ambito, value="cultivo",
+                        text=f"A todas mis parcelas de {_cult}").pack(anchor="w", padx=24)
+        ttk.Radiobutton(self, variable=self.ambito, value="parcela",
+                        text=f"Solo a «{_parc}» (esta finca es especial)").pack(anchor="w", padx=24)
+
         tk.Label(self, text="Observacion (opcional):", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(10, 0))
         self.txt = tk.Text(self, width=44, height=4, bd=1, relief="solid",
@@ -1885,7 +1897,8 @@ class DialogoCorreccion(tk.Toplevel):
     def _guardar(self):
         estado_real = self.cb.get()
         nota = self.txt.get("1.0", tk.END).strip()
-        self.ficha._validar("incorrecto", estado_real=estado_real, nota=nota)
+        self.ficha._validar("incorrecto", estado_real=estado_real, nota=nota,
+                            solo_parcela=(self.ambito.get() == "parcela"))
         self.destroy()
 
 
@@ -2735,7 +2748,9 @@ class FichaParcela:
 
         historial = DB.validaciones_recientes(limite=300)
         # --- APRENDIZAJE de campanas anteriores (ajuste del estado por historial) ---
-        aj = ajuste_por_validaciones(cultivo_id, diag.get("fase"), estado_bruto, historial)
+        # lo aprendido en ESTA parcela manda; si no hay, se usa lo del cultivo
+        aj = ajuste_por_validaciones(cultivo_id, diag.get("fase"), estado_bruto, historial,
+                                     parcela=self.nombre)
         if aj.get("corregido"):
             diag["estado"] = aj["corregido"]   # la prediccion se afina con el historial
 
@@ -2771,7 +2786,8 @@ class FichaParcela:
         if nota_usuario:
             lineas.append("🧠 " + nota_usuario)
         # lo que la PERSONA dijo antes en este cultivo/fase (se muestra haya o no ChatGPT)
-        obs_prev = [o for o in observaciones_del_agricultor(cultivo_id, diag.get("fase"), historial)
+        obs_prev = [o for o in observaciones_del_agricultor(cultivo_id, diag.get("fase"), historial,
+                                                            parcela=self.nombre)
                     if o.get("fecha") != actual.get("fecha")]
         if obs_prev:
             lineas.append("🗣️ Segun tus validaciones anteriores:")
@@ -2825,12 +2841,17 @@ class FichaParcela:
         else:
             self.lbl_val.config(text=f"✗ Corregido a: {v.get('estado_real','?')}.", fg=TEMA["danger_fg"])
 
-    def _validar(self, veredicto, estado_real=None, nota=""):
+    def _validar(self, veredicto, estado_real=None, nota="", solo_parcela=False):
         ctx = getattr(self, "_val_ctx", None)
         if not ctx or not ctx.get("fecha"):
             return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.", parent=self.master)
+        # AMBITO: si el usuario marca "solo esta parcela", la correccion se guarda con
+        # la clave acotada y no afectara al resto de sus parcelas del mismo cultivo.
+        clave = ctx.get("cultivo")
+        if solo_parcela:
+            clave = ambito_parcela(clave, self.nombre)
         DB.guardar_validacion(self.nombre, self.campana, ctx["fecha"], ctx.get("fase"),
-                              ctx.get("cultivo"), ctx.get("estado"), veredicto,
+                              clave, ctx.get("estado"), veredicto,
                               estado_real=estado_real, nota=nota)
         # APRENDER AL MOMENTO: si corriges o escribes una observacion, se descarta la
         # interpretacion cacheada de esta pasada para que se regenere teniendo en cuenta

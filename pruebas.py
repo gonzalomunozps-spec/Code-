@@ -163,6 +163,36 @@ def pruebas_motor():
     check("observaciones: cultivo distinto no se mezcla",
           lambda: observaciones_del_agricultor("Z", "llenado", obs), lambda r: r == [])
 
+    # --- AMBITO: correccion solo para una parcela vs para todo el cultivo ---
+    from interpretacion_fenologica import ambito_parcela
+    C, F = "EXTENSIVO/COSECHA_GRANO/TRIGO", "llenado de grano"
+    def _v(clave, real="OK"):
+        return {"cultivo": clave, "fase": F, "estado_sistema": "Revisar",
+                "veredicto": "incorrecto", "estado_real": real, "fecha": "2026-05-14", "nota": ""}
+    check("ambito: la clave de parcela lleva '@'",
+          lambda: ambito_parcela(C, "Finca_Pobre"), lambda r: r == C + "@Finca_Pobre")
+    solo_a = [_v(ambito_parcela(C, "Finca_Pobre"))] * 2
+    check("ambito: 2 correcciones SOLO de una parcela ajustan esa parcela",
+          lambda: ajuste_por_validaciones(C, F, "Revisar", solo_a, parcela="Finca_Pobre"),
+          lambda r: r.get("corregido") == "OK" and r.get("ambito") == "parcela")
+    check("ambito: NO contagian a otra parcela del mismo cultivo",
+          lambda: ajuste_por_validaciones(C, F, "Revisar", solo_a, parcela="Otra_Finca"),
+          lambda r: r == {})
+    check("ambito: ni al cultivo en general (sin parcela)",
+          lambda: ajuste_por_validaciones(C, F, "Revisar", solo_a), lambda r: r == {})
+    generales = [_v(C)] * 2
+    check("ambito: las generales SI llegan a cualquier parcela",
+          lambda: ajuste_por_validaciones(C, F, "Revisar", generales, parcela="Otra_Finca"),
+          lambda r: r.get("corregido") == "OK" and r.get("ambito") == "cultivo")
+    # precedencia: lo propio de la parcela manda sobre lo general
+    mixto = [_v(C, "Vigilar")] * 2 + [_v(ambito_parcela(C, "Finca_Pobre"), "OK")] * 2
+    check("ambito: lo propio de la parcela MANDA sobre lo del cultivo",
+          lambda: ajuste_por_validaciones(C, F, "Revisar", mixto, parcela="Finca_Pobre"),
+          lambda r: r.get("corregido") == "OK" and r.get("ambito") == "parcela")
+    check("ambito: sin historial propio, hereda el del cultivo",
+          lambda: ajuste_por_validaciones(C, F, "Revisar", mixto, parcela="Finca_Normal"),
+          lambda r: r.get("corregido") == "Vigilar" and r.get("ambito") == "cultivo")
+
     # deltas
     check("delta: previo=0 -> None", lambda: delta("NDVI", 0.5, 0), lambda r: r[1] is None)
     check("delta: previo None -> None", lambda: delta("NDVI", 0.5, None), lambda r: r[1] is None)

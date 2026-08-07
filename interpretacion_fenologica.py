@@ -453,7 +453,17 @@ def contexto_aprendizaje(aprendizaje):
             + "\n".join(lineas[:8]))
 
 
-def ajuste_por_validaciones(cultivo, fase, estado_sistema, validaciones):
+def ambito_parcela(cultivo, parcela):
+    """Clave de aprendizaje acotada a UNA parcela: 'CULTIVO@Parcela'.
+
+    Las validaciones guardadas con esta clave solo afectan a esa parcela (util
+    cuando la finca es especial: suelo pobre, microclima...). Las guardadas con la
+    clave del cultivo a secas siguen valiendo para todas sus parcelas, que es el
+    comportamiento de siempre (y el de los registros antiguos, sin '@')."""
+    return f"{cultivo}@{parcela}" if parcela else cultivo
+
+
+def _ajuste_en_ambito(cultivo, fase, estado_sistema, validaciones):
     """
     APRENDE de campanas anteriores usando las validaciones del usuario.
 
@@ -500,7 +510,29 @@ def ajuste_por_validaciones(cultivo, fase, estado_sistema, validaciones):
                      "cuenta (aun sin suficiente historial para ajustar automaticamente).")}
 
 
-def observaciones_del_agricultor(cultivo, fase, validaciones, limite=3):
+def ajuste_por_validaciones(cultivo, fase, estado_sistema, validaciones, parcela=None):
+    """APRENDE de las validaciones del usuario, con DOS ambitos:
+
+      1. lo corregido SOLO para esta parcela ('CULTIVO@Parcela'), que MANDA, y
+      2. lo corregido para todo el cultivo, que se usa como respaldo.
+
+    Asi una finca especial (suelo pobre, microclima) puede tener su propio criterio
+    sin arrastrar al resto, y si no tiene historial propio hereda el del cultivo.
+    Sin `parcela` se comporta exactamente como antes."""
+    if parcela:
+        propio = _ajuste_en_ambito(ambito_parcela(cultivo, parcela), fase,
+                                   estado_sistema, validaciones)
+        if propio:
+            propio["ambito"] = "parcela"
+            propio["nota"] = "(solo esta parcela) " + propio.get("nota", "")
+            return propio
+    general = _ajuste_en_ambito(cultivo, fase, estado_sistema, validaciones)
+    if general:
+        general["ambito"] = "cultivo"
+    return general
+
+
+def observaciones_del_agricultor(cultivo, fase, validaciones, limite=3, parcela=None):
     """Devuelve lo que la PERSONA escribio al validar, para el MISMO cultivo y fase.
 
     El programa aprende de lo que se le dice: estas notas de texto se muestran tal
@@ -510,11 +542,15 @@ def observaciones_del_agricultor(cultivo, fase, validaciones, limite=3):
     if not validaciones or not cultivo:
         return []
     fase_l = (fase or "").lower()
+    # se aceptan las notas del cultivo y, si se indica parcela, tambien las suyas
+    ambitos = {cultivo}
+    if parcela:
+        ambitos.add(ambito_parcela(cultivo, parcela))
     out, vistos = [], set()
     for v in validaciones:
         if not isinstance(v, dict):
             continue
-        if v.get("cultivo") != cultivo or (v.get("fase") or "").lower() != fase_l:
+        if v.get("cultivo") not in ambitos or (v.get("fase") or "").lower() != fase_l:
             continue
         nota = (v.get("nota") or "").strip()
         if not nota or nota in vistos:
