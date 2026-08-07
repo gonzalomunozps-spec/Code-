@@ -840,6 +840,38 @@ def _informe_anual_error():
 
 
 # =====================================================================
+# 13. BITACORA: registra sin molestar y sin poder tumbar el programa
+# =====================================================================
+def pruebas_bitacora():
+    import subprocess
+    base = os.path.dirname(os.path.abspath(__file__))
+    # a) registra en fichero y NO escribe en consola
+    d = tempfile.mkdtemp()
+    codigo = ("import sys; sys.path.insert(0, %r)\n"
+              "import bitacora\n"
+              "bitacora.log.warning('incidencia de prueba')\n") % base
+    r = subprocess.run([sys.executable, "-c", codigo], cwd=d,
+                       capture_output=True, text=True)
+    check("bitacora: no escribe nada en la consola del usuario",
+          lambda: (r.stdout + r.stderr).strip(), lambda x: x == "")
+    check("bitacora: deja la incidencia en parcelas.log",
+          lambda: open(os.path.join(d, "parcelas.log"), encoding="utf-8").read(),
+          lambda x: "incidencia de prueba" in x and "WARNING" in x)
+    # b) si el log NO se puede escribir, el programa sigue (manejador nulo)
+    d2 = tempfile.mkdtemp()
+    os.mkdir(os.path.join(d2, "parcelas.log"))      # ocupar el nombre con una carpeta
+    codigo2 = ("import sys; sys.path.insert(0, %r)\n"
+               "import bitacora, logging\n"
+               "bitacora.log.warning('no debe romper')\n"
+               "print(type(bitacora.log.handlers[0]).__name__)\n") % base
+    r2 = subprocess.run([sys.executable, "-c", codigo2], cwd=d2,
+                        capture_output=True, text=True)
+    check("bitacora: sin poder escribir usa manejador nulo y no falla",
+          lambda: (r2.returncode, r2.stdout.strip()),
+          lambda x: x[0] == 0 and x[1] == "NullHandler")
+
+
+# =====================================================================
 # 12. GEOMETRIA (geo.py) y contratos de superficie_ha en cada llamador
 # =====================================================================
 def pruebas_geo():
@@ -878,7 +910,7 @@ def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
-              pruebas_informe_anual, _informe_anual_error, pruebas_geo):
+              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora):
         try:
             f()
         except Exception as e:

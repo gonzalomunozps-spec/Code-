@@ -23,6 +23,8 @@ siendo JSON aparte: son configuracion/estado, no datos.
 import os
 import json
 import uuid
+
+from bitacora import log   # registro de incidencias (no cambia nada visible)
 import sqlite3
 import threading
 from datetime import datetime
@@ -53,7 +55,7 @@ def conectar(ruta=None):
             try:
                 _CONN.execute("PRAGMA journal_mode=WAL")
             except sqlite3.Error:
-                pass
+                log.warning("no se pudo activar WAL en SQLite", exc_info=True)
             _crear_tablas()
             _migrar_desde_json()
         return _CONN
@@ -120,7 +122,7 @@ def _backup(path):
     try:
         os.replace(path, path + ".bak")
     except OSError:
-        pass
+        log.warning("no se pudo renombrar %s a .bak tras migrarlo", path, exc_info=True)
 
 
 def _migrar_desde_json():
@@ -134,7 +136,8 @@ def _migrar_desde_json():
                 guardar_ficha(nombre, ficha)
             _backup(_JSON_PARCELAS)
         except Exception:
-            pass
+            log.warning("fallo al importar %s: las parcelas no se han migrado",
+                        _JSON_PARCELAS, exc_info=True)
     # --- historico (pasadas) ---
     if os.path.exists(_JSON_HISTORICO) and not _CONN.execute("SELECT 1 FROM pasadas LIMIT 1").fetchone():
         try:
@@ -145,7 +148,8 @@ def _migrar_desde_json():
                     anadir_pasadas(nombre, campana, lista)
             _backup(_JSON_HISTORICO)
         except Exception:
-            pass
+            log.warning("fallo al importar %s: el historico no se ha migrado",
+                        _JSON_HISTORICO, exc_info=True)
     # --- eventos ---
     if os.path.exists(_JSON_EVENTOS) and not _CONN.execute("SELECT 1 FROM eventos LIMIT 1").fetchone():
         try:
@@ -161,7 +165,8 @@ def _migrar_desde_json():
             _CONN.commit()
             _backup(_JSON_EVENTOS)
         except Exception:
-            pass
+            log.warning("fallo al importar %s: los eventos no se han migrado",
+                        _JSON_EVENTOS, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

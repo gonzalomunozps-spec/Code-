@@ -15,3 +15,6 @@ eventos_parcela.json
 estado_sync.json
 config_credenciales.json
 cache_mapas/
+
+# registro de incidencias
+parcelas.log

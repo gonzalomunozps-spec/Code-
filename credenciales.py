@@ -34,6 +34,7 @@ import os
 import json
 import base64
 import tempfile
+from bitacora import log   # registro de incidencias
 
 ARCHIVO_CRED = "config_credenciales.json"
 
@@ -52,7 +53,8 @@ def cargar():
         try:
             cfg["openai_api_key"] = base64.b64decode(cfg["openai_api_key_b64"].encode()).decode()
         except Exception:
-            pass
+            log.warning("no se pudo descifrar la clave de OpenAI guardada; se ignora",
+                        exc_info=True)
     return cfg
 
 
@@ -77,7 +79,7 @@ def guardar(cfg, recordar_openai=True):
         try:
             os.remove(tmp)
         except OSError:
-            pass
+            log.warning("no se pudo borrar el temporal de credenciales", exc_info=True)
         raise
 
 
