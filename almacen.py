@@ -407,9 +407,13 @@ def eventos_de(parcela, campana):
 
 
 def eliminar_evento(parcela, campana, evento_id):
+    # Se acota por parcela y campana ademas de por id: el id deberia bastar, pero
+    # sin acotar un id repetido o mal formado podria borrar el evento de OTRA
+    # parcela. Los tres criterios juntos hacen imposible ese borrado cruzado.
     c = _c()
     with _LOCK:
-        c.execute("DELETE FROM eventos WHERE id=?", (evento_id,))
+        c.execute("DELETE FROM eventos WHERE id=? AND nombre=? AND campana=?",
+                  (evento_id, parcela, campana))
         c.commit()
 
 
