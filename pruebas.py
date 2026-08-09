@@ -497,16 +497,8 @@ def pruebas_persistencia():
     if not os.path.exists(ruta):
         _FALLA.append(("persistencia", "no se encuentra panel_gestion_parcelas.py"))
         return
-    src = open(ruta, encoding="utf-8").read()
-    try:
-        ini = src.index("_IO_LOCK = threading.RLock()")
-        fin = src.index("INTERVALO_AUTOSYNC_MS")
-    except ValueError:
-        _FALLA.append(("persistencia", "no se localiza el bloque de persistencia"))
-        return
-    ns = {"json": json, "os": os, "tempfile": tempfile, "threading": threading}
-    exec(src[ini:fin], ns)
-    _load, _save, _actualizar = ns["_load"], ns["_save"], ns["_actualizar"]
+    # la persistencia atomica vive en sincronizacion.py: se importa, no se extrae
+    from sincronizacion import _load, _save, _actualizar
 
     d = tempfile.mkdtemp(); p = os.path.join(d, "hist.json")
     check("persistencia: cargar inexistente -> {}", lambda: _load(p), lambda r: r == {})
@@ -528,15 +520,10 @@ def pruebas_persistencia():
           lambda: _load(p)["n"], lambda r: r == 1000)
     check("persistencia: fichero final es JSON valido", lambda: json.load(open(p)), lambda r: True)
 
-    # helper del arranque: _toca_sincronizar (funcion pura)
+    # ritmo del arranque: funcion pura de sincronizacion.py
     from datetime import datetime, timedelta
-    m = re.search(r"\ndef _toca_sincronizar\(.*?\n(?=\n\n|\ndef |\nclass |\n# )", src, re.S)
-    if not m:
-        _FALLA.append(("_toca_sincronizar", "no se localiza la funcion en el panel"))
-        return
-    ns2 = {"datetime": datetime}
-    exec(m.group(0), ns2)
-    toca = ns2["_toca_sincronizar"]
+    from sincronizacion import toca_sincronizar as toca
+
     UN_DIA = 24 * 3600 * 1000
     ahora = datetime(2026, 7, 21, 12, 0, 0)
     check("arranque: sin marca -> toca sincronizar", lambda: toca(None, UN_DIA, ahora), lambda r: r is True)
@@ -548,19 +535,14 @@ def pruebas_persistencia():
     check("arranque: intervalo 2 dias, hace 1 dia -> NO toca",
           lambda: toca((ahora - timedelta(days=1)).isoformat(), 2 * UN_DIA, ahora), lambda r: r is False)
 
-    # nombre_seguro: no debe dejar pasar caracteres de ruta
-    m2 = re.search(r"\ndef nombre_seguro\(.*?\n(?=\n\n|\ndef |\nclass |\n# )", src, re.S)
-    if m2:
-        ns3 = {"re": re}
-        exec(m2.group(0), ns3)
-        seguro = ns3["nombre_seguro"]
-        check("nombre_seguro: quita separadores de ruta",
-              lambda: seguro("../a/b:c*?"), lambda r: "/" not in r and "\\" not in r and ":" not in r and ".." not in r)
-        check("nombre_seguro: espacios a _ y conserva acentos",
-              lambda: seguro("Olivar del Ñú"), lambda r: r == "Olivar_del_Ñú")
-        check("nombre_seguro: vacio -> 'parcela'", lambda: seguro("   "), lambda r: r == "parcela")
-    else:
-        _FALLA.append(("nombre_seguro", "no se localiza la funcion en el panel"))
+    # nombre_seguro vive en mapas_cache.py
+    from mapas_cache import nombre_seguro as seguro
+    check("nombre_seguro: quita separadores de ruta",
+          lambda: seguro("../a/b:c*?"),
+          lambda r: "/" not in r and "\\" not in r and ":" not in r and ".." not in r)
+    check("nombre_seguro: espacios a _ y conserva acentos",
+          lambda: seguro("Olivar del Ñú"), lambda r: r == "Olivar_del_Ñú")
+    check("nombre_seguro: vacio -> 'parcela'", lambda: seguro("   "), lambda r: r == "parcela")
 
 
 # =====================================================================
@@ -860,20 +842,20 @@ def pruebas_panel_helpers():
     check("rango_campana: 1-sep a 31-ago",
           lambda: _rc("2025-2026"), lambda r: r == ("2025-09-01", "2026-08-31"))
 
-    # ruta_cache_mapa: ficha y comparador deben usar la MISMA ruta de cache
-    m3 = re.search(r"\ndef ruta_cache_mapa\(.*?\n(?=\n)", src, re.S)
-    if not m3:
-        _FALLA.append(("panel", "no se localiza ruta_cache_mapa en el panel"))
-        return
-    ns3 = {"DIR_MAPAS": "cache_mapas", "nombre_seguro": lambda s: s,
-           "os": __import__("os")}
-    exec(m3.group(0), ns3)
-    rc = ns3["ruta_cache_mapa"]
+    # ruta_cache_mapa: ficha y comparador deben usar la MISMA ruta de cache.
+    # Vive en mapas_cache.py: se importa, no se extrae del panel.
+    from mapas_cache import ruta_cache_mapa as rc, ruta_cache_radar as rcr
     check("ruta_cache_mapa: formato parcela_indice_dia_resolucion",
           lambda: rc("Olivar", "NDVI", "2026-05-05", 10),
           lambda r: r.endswith(os.path.join("cache_mapas", "Olivar_NDVI_2026-05-05_10m.png")))
     check("ruta_cache_mapa: distinto indice -> distinta ruta (no colisiona)",
           lambda: rc("Olivar", "NDVI", "2026-05-05", 10) != rc("Olivar", "NDMI", "2026-05-05", 10),
+          lambda r: r is True)
+    check("ruta_cache_mapa: nombre con espacios/barras se sanea",
+          lambda: rc("../Olivar del Sur", "NDVI", "2026-05-05", 10),
+          lambda r: ".." not in os.path.basename(r) and "Olivar_del_Sur" in r)
+    check("ruta_cache_radar: no colisiona con la del optico",
+          lambda: rcr("Olivar", "VV", "2026-05-05", 10) != rc("Olivar", "VV", "2026-05-05", 10),
           lambda r: r is True)
 
     # conversores de fecha: el usuario ve dd-mm-aaaa, el programa guarda ISO.
@@ -975,6 +957,89 @@ def _informe_anual_error():
     except Exception:
         lanzo = True
     check("informe anual: serie vacia lanza RuntimeError", lambda: lanzo, lambda r: r is True)
+
+
+# =====================================================================
+# 16. CLIENTE DE EARTH ENGINE con un `ee` FALSO (descarga probada sin red)
+# =====================================================================
+class _EeFalso:
+    """Doble de `ee` para probar la descarga SIN RED.
+
+    Cualquier atributo o llamada devuelve el propio objeto, de modo que toda la
+    cadena de Earth Engine (`ee.Geometry.Polygon(...)`, `ee.ImageCollection(...)
+    .filterBounds(...).filterDate(...).map(...)`) se recorre sin hacer nada. Lo
+    unico que responde de verdad es `getInfo`, que entrega las pasadas indicadas:
+    asi se puede comprobar el FILTRADO posterior, que es la logica del programa.
+    """
+    def __init__(self, features):
+        object.__setattr__(self, "_features", features)
+
+    def __getattr__(self, _nombre):
+        return self                  # ee.Geometry, .Reducer, .Filter, .mean...
+
+    def __call__(self, *a, **k):
+        return self                  # ...y todas ellas son llamables
+
+    def getInfo(self):
+        return {"features": object.__getattribute__(self, "_features")}
+
+
+def pruebas_gee_cliente():
+    import gee_cliente as G
+    import almacen as DB
+
+    def _pasada(fecha, cobertura, ndvi=0.55):
+        return {"properties": {"fecha": fecha, "cobertura_valida": cobertura,
+                               "ndvi": ndvi, "evi": 0.3, "savi": 0.4, "gndvi": 0.4,
+                               "lai": 2.0, "msavi": 0.4, "ndmi": 0.2,
+                               "ndvi_std": 0.05, "n_pixeles": 800}}
+
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "gee.db"))
+    DB.guardar_ficha("Parcela_EE", {"propietario": "x",
+                                    "coordenadas": [[-4.1, 41.65], [-4.09, 41.65],
+                                                    [-4.09, 41.66], [-4.1, 41.66]]})
+    # dos pasadas: una con cobertura suficiente y otra por DEBAJO del umbral (0.80)
+    falso = _EeFalso([_pasada("2026-03-01", 0.97), _pasada("2026-03-11", 0.42)])
+    real_ee = G.ee
+    try:
+        G.ee = falso
+        check("gee: con ee inyectado, hay_ee() es True", lambda: G.hay_ee(), lambda r: r is True)
+        n, msg = G.sincronizar_parcela("Parcela_EE", "2025-2026")
+        check("gee: solo se guarda la pasada con cobertura suficiente",
+              lambda: (n, [p["fecha"] for p in DB.pasadas("Parcela_EE", "2025-2026")]),
+              lambda r: r[0] == 1 and r[1] == ["2026-03-01"])
+        check("gee: la pasada bajo el umbral se descarta y se dice por que",
+              lambda: DB.pasadas("Parcela_EE", "2025-2026"),
+              lambda ps: all(p["fecha"] != "2026-03-11" for p in ps))
+        check("gee: la cobertura guardada se redondea a 3 decimales",
+              lambda: DB.pasadas("Parcela_EE", "2025-2026")[0]["cobertura_valida"],
+              lambda v: v == 0.97)
+        # segunda vuelta: no duplica lo ya guardado
+        check("gee: repetir la sincronizacion no duplica pasadas",
+              lambda: (G.sincronizar_parcela("Parcela_EE", "2025-2026")[0],
+                       len(DB.pasadas("Parcela_EE", "2025-2026"))),
+              lambda r: r[0] == 0 and r[1] == 1)
+        # sin geometria no se intenta nada
+        DB.guardar_ficha("Sin_Geo", {"propietario": "x", "coordenadas": []})
+        check("gee: parcela sin geometria -> no descarga",
+              lambda: G.sincronizar_parcela("Sin_Geo", "2025-2026"),
+              lambda r: r[0] == 0 and "geometria" in r[1])
+    finally:
+        G.ee = real_ee
+    check("gee: sin ee disponible lo dice y no revienta",
+          lambda: (setattr(G, "ee", None), G.sincronizar_parcela("Parcela_EE", "2025-2026"),
+                   setattr(G, "ee", real_ee))[1],
+          lambda r: r[0] == 0 and "earthengine" in r[1])
+    # helper puro de dimensionado
+    poli = [[-4.10, 41.650], [-4.093, 41.650], [-4.093, 41.654], [-4.10, 41.654]]
+    check("gee: dimensiones_para respeta el tope de pixeles",
+          lambda: G.dimensiones_para(poli, 1), lambda v: 64 <= v <= G.MAX_PIXELES)
+    check("gee: a menos m/pixel, mas pixeles",
+          lambda: (G.dimensiones_para(poli, 1), G.dimensiones_para(poli, 60)),
+          lambda r: r[0] > r[1])
+    check("gee: nunca baja de 64 pixeles por lado",
+          lambda: G.dimensiones_para(poli, 10000), lambda v: v == 64)
 
 
 # =====================================================================
@@ -1203,7 +1268,7 @@ def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
-              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas):
+              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente):
         try:
             f()
         except Exception as e:

@@ -23,16 +23,11 @@ DEPENDENCIAS
 """
 
 import os
-import io
 import re
-import json
-import math
 import calendar as _cal
-import tempfile
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 
-import requests
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import tkinter.font as tkfont
@@ -47,11 +42,6 @@ try:
     _MAPVIEW = True
 except Exception:
     _MAPVIEW = False
-try:
-    import ee
-    _EE = True
-except Exception:
-    _EE = False
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -75,12 +65,22 @@ import almacen as DB          # capa de datos (SQLite): parcelas, historico y ev
 import sentinel1 as S1        # radar (Sentinel-1): complemento bajo demanda al optico
 import contraste_indices as CI  # estadistica espacial por pasada (solo lectura)
 import rutas                    # directorio de datos del usuario (no el de trabajo)
+# Descarga de satelite, cache de imagenes y ritmo de sincronizacion: fuera del panel
+import gee_cliente
+_EE = gee_cliente.hay_ee()      # el panel ya no importa `ee`: se lo pregunta al cliente
+from gee_cliente import (INDICES, INDICES_ORDEN, RADAR_VIS,
+                         descargar_mapa_indice, descargar_mapa_radar,
+                         sincronizar_parcela)
+from mapas_cache import DIR_MAPAS, nombre_seguro, ruta_cache_mapa, ruta_cache_radar
+import mapas_cache
+import sincronizacion
+from sincronizacion import INTERVALO_AUTOSYNC_MS, ULTIMO_SYNC
 from bitacora import log      # registro de incidencias (nunca escribe en consola)
 # utilidades puras de fecha (dd-mm-aaaa <-> ISO, mascara y validacion al vuelo)
 from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
                     filtrar_fecha_digitos)
 from geo import superficie_ha    # area de la parcela (shoelace), logica compartida
-from campanas import campana_actual, rango_campana, campanas_entre   # logica de campana
+from campanas import campana_actual, campanas_entre   # logica de campana
 from sigpac import sigpac_consultar, _sigpac_get, SigpacError         # consulta de recintos SIGPAC
 from cultivo import spec_de, clave_cultivo                            # modelo de cultivo (puro)
 
@@ -612,31 +612,15 @@ def _colores_estado(clave):
 # Los DATOS (parcelas, historico y eventos) viven en SQLite via el modulo
 # `almacen` (DB). Aqui solo queda como JSON la marca del ultimo sync, que es
 # estado, no datos.
-ARCHIVO_ESTADO    = rutas.ruta("estado_sync.json")   # marca del ultimo sync (para el arranque)
-DIR_MAPAS         = rutas.ruta("cache_mapas")
-
-os.makedirs(DIR_MAPAS, exist_ok=True)
+# ARCHIVO_ESTADO vive en sincronizacion; DIR_MAPAS en mapas_cache.
 
 
 # =====================================================================
 # INDICES (definicion, rangos y paletas)
 # =====================================================================
-PAL_VEG = ['a50026', 'd73027', 'f46d43', 'fdae61', 'fee08b',
-           'ffffbf', 'd9ef8b', 'a6d96a', '66bd63', '1a9850', '006837']
-PAL_HUM = ['8c510a', 'bf812d', 'dfc27d', 'f6e8c3', 'f7f7f7',
-           'c7eae5', '80cdc1', '35978f', '01665e']
-INDICES = {
-    "NDVI":  {"rango": (0.0, 0.9),  "paleta": PAL_VEG},
-    "EVI":   {"rango": (0.0, 1.0),  "paleta": PAL_VEG},
-    "SAVI":  {"rango": (0.0, 1.0),  "paleta": PAL_VEG},
-    "GNDVI": {"rango": (0.0, 0.9),  "paleta": PAL_VEG},
-    "LAI":   {"rango": (0.0, 6.0),  "paleta": PAL_VEG},
-    "MSAVI": {"rango": (0.0, 0.9),  "paleta": PAL_VEG},
-    "NDMI":  {"rango": (-0.5, 0.5), "paleta": PAL_HUM},
-}
-INDICES_ORDEN = ["NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"]
+# Las paletas, INDICES e INDICES_ORDEN viven en gee_cliente (los usa la descarga
+# y los reutiliza la leyenda de la interfaz).
 
-# color de cada indice en la grafica de evolucion (7 opticos + RVI de radar)
 COLOR_INDICE = {"NDVI": "#2f855a", "EVI": "#805ad5", "SAVI": "#dd6b20", "GNDVI": "#0ea5e9",
                 "LAI": "#d69e2e", "MSAVI": "#e53e3e", "NDMI": "#3182ce", "RVI": "#0d9488"}
 # indices que se muestran por defecto en la grafica (los demas, a eleccion)
@@ -651,18 +635,7 @@ RESOLUCIONES = [
     ("20 m (rapido)", 20),
     ("60 m (vista rapida)", 60),
 ]
-MAX_PIXELES = 2048          # tope por lado, para no pedir imagenes gigantes a GEE
-
-
-def dimensiones_para(coords, metros_px):
-    """Tamano en pixeles del lado mayor para servir la parcela a `metros_px` m/pixel."""
-    lons = [p[0] for p in coords]
-    lats = [p[1] for p in coords]
-    lat0 = math.radians(sum(lats) / len(lats))
-    ancho_m = (max(lons) - min(lons)) * 111320.0 * math.cos(lat0)
-    alto_m = (max(lats) - min(lats)) * 110540.0
-    lado_m = max(ancho_m, alto_m, 1.0)
-    return int(max(64, min(MAX_PIXELES, round(lado_m / max(1, metros_px)))))
+# MAX_PIXELES y dimensiones_para viven en gee_cliente.
 
 # Los umbrales de vigor ya no son fijos por cultivo: se calculan por FASE
 # fenologica en interpretacion_fenologica / fenologia_especies (rango esperado
@@ -687,12 +660,7 @@ NOMBRE_CULTIVO = {
 # clave_cultivo vive ahora en cultivo.py (se importa arriba).
 
 
-def nombre_seguro(nombre):
-    """Nombre de parcela seguro para usar como clave y en rutas de fichero:
-    espacios a '_' y se descartan caracteres problematicos (/, \\, :, etc.)."""
-    n = (nombre or "").strip().replace(" ", "_")
-    n = re.sub(r"[^0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ_\-]", "", n)
-    return n or "parcela"
+# nombre_seguro vive en mapas_cache.
 
 
 # ---------------------------------------------------------------------------
@@ -706,317 +674,15 @@ def nombre_seguro(nombre):
 # spec_de vive ahora en cultivo.py (se importa arriba).
 
 
-def construir_indice(img, indice):
-    nir, red, green, blue = img.select("B8"), img.select("B4"), img.select("B3"), img.select("B2")
-    if indice == "NDVI":
-        return img.normalizedDifference(["B8", "B4"]).rename("IDX")
-    if indice == "GNDVI":
-        return img.normalizedDifference(["B8", "B3"]).rename("IDX")
-    if indice == "NDMI":
-        return img.normalizedDifference(["B8", "B11"]).rename("IDX")
-    if indice == "SAVI":
-        return img.expression("((NIR-RED)/(NIR+RED+0.5))*1.5", {"NIR": nir, "RED": red}).rename("IDX")
-    if indice == "EVI":
-        return img.expression("2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))",
-                              {"NIR": nir, "RED": red, "BLUE": blue}).rename("IDX")
-    if indice == "MSAVI":
-        return img.expression("(2*NIR+1-sqrt((2*NIR+1)**2-8*(NIR-RED)))/2",
-                              {"NIR": nir, "RED": red}).rename("IDX")
-    if indice == "LAI":
-        evi = img.expression("2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))",
-                             {"NIR": nir, "RED": red, "BLUE": blue})
-        return evi.expression("3.618*EVI-0.118", {"EVI": evi}).rename("IDX")
-    return img.normalizedDifference(["B8", "B4"]).rename("IDX")
+# construir_indice vive ahora en gee_cliente.
 
 
-# Sesion HTTP compartida para las descargas de mapas. Reutiliza la conexion TCP/TLS
-# con el servidor de Google en vez de renegociarla en cada peticion (cada mapa hace
-# dos: fondo + capa del indice), asi el mapa aparece antes.
-# CONTRATO: se configura aqui una sola vez y despues SOLO se llama a .get(); no se
-# muta desde ningun sitio, que es lo que permite usarla desde varios hilos.
-_HTTP = requests.Session()
-_HTTP.headers.update({"User-Agent": "GestorParcelas/1.0"})
+# La sesion HTTP, construir_indice, los mapas (indice y radar), RADAR_VIS y
+# ruta_cache_* viven ahora en gee_cliente y mapas_cache.
 
 
-def descargar_mapa_indice(coords, iso, idx, metros, png_destino):
-    """Descarga de GEE el mapa de un indice para un dia y lo guarda como PNG
-    (fondo RGB natural + capa de color del indice). Devuelve el lado en pixeles.
-    Reutilizable por la ficha y por la ventana de comparacion."""
-    geom = ee.Geometry.Polygon(coords)
-    region = geom.bounds()
-    dim = dimensiones_para(coords, metros)
-    d1 = (datetime.strptime(iso, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-    img = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-           .filterBounds(geom).filterDate(iso, d1).first())
-    fondo = img.visualize(bands=["B4", "B3", "B2"], min=0, max=3000).getThumbURL(
-        {"region": region, "dimensions": dim, "format": "png"})
-    fondo = Image.open(io.BytesIO(_HTTP.get(fondo, timeout=90).content)).convert("RGBA")
-    rng = INDICES[idx]["rango"]
-    ov = construir_indice(img, idx).clip(geom).visualize(
-        min=rng[0], max=rng[1], palette=INDICES[idx]["paleta"]).getThumbURL(
-        {"region": region, "dimensions": dim, "format": "png"})
-    ov = Image.open(io.BytesIO(_HTTP.get(ov, timeout=90).content)).convert("RGBA")
-    Image.alpha_composite(fondo, ov).save(png_destino)
-    return dim
-
-
-def ruta_cache_mapa(nombre, idx, iso, metros):
-    """Ruta del PNG cacheado para (parcela, indice, dia, resolucion)."""
-    return os.path.join(DIR_MAPAS, f"{nombre_seguro(nombre)}_{idx}_{iso}_{metros}m.png")
-
-
-# --- MAPA DE RADAR (Sentinel-1): VV, VH o RVI ---
-RADAR_VIS = {
-    "VV":  {"rango": (-25, 0),  "paleta": ["000000", "8a8a8a", "ffffff"]},
-    "VH":  {"rango": (-30, -5), "paleta": ["000000", "8a8a8a", "ffffff"]},
-    "RVI": {"rango": (0, 1),    "paleta": ["9c6b30", "d9d59b", "3a9d23", "0b6623"]},
-}
-
-
-def imagen_param_radar(img, param):
-    """Banda del parametro de radar pedido (VV, VH en dB, o RVI en lineal)."""
-    vv, vh = img.select("VV"), img.select("VH")
-    if param == "VH":
-        return vh
-    if param == "RVI":
-        vvl = ee.Image(10).pow(vv.divide(10))
-        vhl = ee.Image(10).pow(vh.divide(10))
-        return vhl.multiply(4).divide(vvl.add(vhl)).rename("RVI")
-    return vv
-
-
-def descargar_mapa_radar(coords, iso, param, metros, png_destino):
-    """Descarga de GEE el mapa de un parametro de Sentinel-1 para un dia y lo guarda
-    como PNG. Devuelve el lado en pixeles."""
-    geom = ee.Geometry.Polygon(coords)
-    region = geom.bounds()
-    dim = dimensiones_para(coords, metros)
-    d1 = (datetime.strptime(iso, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-    img = (ee.ImageCollection("COPERNICUS/S1_GRD")
-           .filterBounds(geom).filterDate(iso, d1)
-           .filter(ee.Filter.eq("instrumentMode", "IW"))
-           .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
-           .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
-           .first())
-    vis = RADAR_VIS.get(param, RADAR_VIS["RVI"])
-    ov = imagen_param_radar(img, param).clip(geom).visualize(
-        min=vis["rango"][0], max=vis["rango"][1], palette=vis["paleta"]).getThumbURL(
-        {"region": region, "dimensions": dim, "format": "png"})
-    Image.open(io.BytesIO(_HTTP.get(ov, timeout=90).content)).convert("RGBA").save(png_destino)
-    return dim
-
-
-def ruta_cache_radar(nombre, param, iso, metros):
-    return os.path.join(DIR_MAPAS, f"{nombre_seguro(nombre)}_S1_{param}_{iso}_{metros}m.png")
-
-
-# =====================================================================
-# PERSISTENCIA JSON (atomica y tolerante)
-# =====================================================================
-# El estado y la interpretacion se calculan en interpretacion_fenologica
-# (evaluar_parcela / texto_interpretacion). Aqui solo se persiste y se pinta.
-
-# Un unico cerrojo para todas las lecturas/escrituras de los JSON: el auto-sync
-# y el worker de interpretacion corren en hilos aparte y tocan los mismos
-# ficheros; sin esto podrian pisarse y perder datos.
-_IO_LOCK = threading.RLock()
-
-
-def _load(path):
-    """Lectura tolerante: si el fichero falta o esta corrupto, devuelve {} en vez
-    de reventar (p. ej. un JSON a medio escribir por un corte anterior)."""
-    with _IO_LOCK:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (FileNotFoundError, ValueError):
-            return {}
-
-
-def _save(path, data):
-    """Escritura ATOMICA: se vuelca a un temporal y se reemplaza de golpe con
-    os.replace. Asi un corte a mitad nunca deja el JSON corrupto (o esta el
-    fichero viejo intacto, o el nuevo completo)."""
-    with _IO_LOCK:
-        carpeta = os.path.dirname(os.path.abspath(path)) or "."
-        fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=carpeta)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-            os.replace(tmp, path)
-        except Exception:
-            try:
-                os.remove(tmp)
-            except OSError:
-                log.warning("no se pudo borrar el temporal %s", tmp, exc_info=True)
-            raise
-
-
-def _actualizar(path, mutador):
-    """Read-modify-write serializado: relee el fichero MAS RECIENTE bajo cerrojo,
-    aplica el cambio y lo guarda. Evita que dos hilos que cargaron el JSON en
-    momentos distintos se pisen al guardar (auto-sync vs. worker de IA)."""
-    with _IO_LOCK:
-        data = _load(path)
-        mutador(data)
-        _save(path, data)
-
-
-# --- marca de tiempo del ultimo sync (persistente, para decidir en el arranque) ---
-def _marca_sync_leer():
-    """Devuelve el ISO del ultimo sync realizado, o None si no hay."""
-    return _load(ARCHIVO_ESTADO).get("ultima_comprobacion")
-
-
-def _marca_sync_guardar():
-    _save(ARCHIVO_ESTADO, {"ultima_comprobacion": datetime.now().isoformat(timespec="seconds")})
-
-
-def _toca_sincronizar(ultima_iso, intervalo_ms, ahora=None):
-    """True si nunca se sincronizo o si ya ha pasado el intervalo desde entonces.
-    Funcion pura (sin ficheros): asi el arranque solo sincroniza cuando toca."""
-    if not ultima_iso:
-        return True
-    try:
-        ult = datetime.fromisoformat(ultima_iso)
-    except (TypeError, ValueError):
-        return True
-    ahora = ahora or datetime.now()
-    return (ahora - ult).total_seconds() * 1000.0 >= intervalo_ms
-
-
-# Cada cuanto se comprueba AUTOMATICAMENTE si hay pasadas nuevas del satelite.
-# Sentinel-2 repite orbita cada ~5 dias (menos aun con nubes), asi que no hace
-# falta mirar a menudo. Ademas se sincroniza al abrir la app y se puede forzar a
-# mano en cualquier momento (boton "Sincronizar ahora" o desde cada ficha).
-DIAS_AUTOSYNC = 1                            # pon 2 para comprobar cada dos dias
-# Dias que se conservan los PNG de la cache de mapas. Se purgan al arrancar, en
-# segundo plano. Son imagenes RECUPERABLES: se vuelven a descargar al pedirlas.
-# Pon 0 para no purgar nunca.
-DIAS_CACHE_MAPAS = 30
-INTERVALO_AUTOSYNC_MS = DIAS_AUTOSYNC * 24 * 60 * 60 * 1000
-
-# Resultado de la ultima sincronizacion (la automatica es silenciosa; esto deja
-# constancia de si fallo, para poder mostrarlo en la pestana de Credenciales).
-ULTIMO_SYNC = {"estado": None, "msg": "aun no se ha sincronizado"}
-
-
-def sincronizar_parcela(nombre, campana, silencioso=True):
-    """
-    Sincronizacion INCREMENTAL: mira hasta que fecha hay datos guardados y solo
-    descarga las pasadas nuevas del satelite con nubosidad < 20 %, sin sobrescribir.
-    Devuelve (n_nuevos, mensaje).
-    """
-    if not _EE:
-        ULTIMO_SYNC.update(estado="fallo", msg="earthengine-api no disponible")
-        return (0, "earthengine-api no disponible")
-    try:
-        ficha = DB.ficha(nombre)
-        if not ficha or not ficha.get("coordenadas"):
-            return (0, "parcela sin geometria")
-
-        geom = ee.Geometry.Polygon(ficha["coordenadas"])
-        ini_camp, fin_camp = rango_campana(campana)
-
-        ultima = DB.ultima_fecha(nombre, campana)      # MAX(fecha) via SQLite (indexado)
-        fechas_existentes = {p["fecha"] for p in DB.pasadas(nombre, campana) if p.get("fecha")}
-
-        # ventana incremental: desde el dia siguiente a la ultima fecha guardada
-        try:
-            inicio = ((datetime.strptime(ultima, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-                      if ultima else ini_camp)
-        except ValueError:                    # fecha guardada mal formada: re-escanea la campana
-            inicio = ini_camp
-        hoy = datetime.now().strftime("%Y-%m-%d")
-        fin = min(fin_camp, hoy)
-        if inicio > fin:
-            return (0, "ya esta al dia")
-
-        col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-               .filterBounds(geom).filterDate(inicio, fin)
-               .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))   # prefiltro amplio;
-               .sort("system:time_start", True))                       # el SCL decide de verdad
-
-        def feat(img):
-            # --- 1. ENMASCARADO DE NUBES CON SCL (por pixel, no por escena) ---
-            # La banda SCL clasifica cada pixel. Nos quedamos solo con lo utilizable:
-            #   4 = vegetacion, 5 = suelo desnudo, 6 = agua, 7 = nube baja probabilidad,
-            #   11 = nieve/hielo.  Se DESCARTAN:
-            #   0 = sin dato, 1 = saturado/defectuoso, 2 = sombra oscura, 3 = sombra de nube,
-            #   8 = nube media prob., 9 = nube alta prob., 10 = cirros.
-            scl = img.select("SCL")
-            valido = (scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7)))
-            img_m = img.updateMask(valido)
-
-            comp = img_m
-            for k in INDICES_ORDEN:
-                comp = comp.addBands(construir_indice(img_m, k).rename(k))
-
-            # --- 2. COBERTURA VALIDA DENTRO DE LA PARCELA ---
-            # Fraccion de pixeles de la parcela que sobreviven al enmascarado.
-            # Es la nubosidad REAL sobre la finca, no la de la escena entera.
-            cobertura = (valido.rename("OK").unmask(0)
-                         .reduceRegion(ee.Reducer.mean(), geom, scale=10, bestEffort=True)
-                         .get("OK"))
-
-            # --- 3. ESTADISTICA INTRAPARCELA: media + desviacion + percentiles ---
-            # La media sola oculta la heterogeneidad. Con la desviacion y los percentiles
-            # se detecta si una PARTE de la parcela va mucho peor que el resto.
-            reductor = (ee.Reducer.mean()
-                        .combine(ee.Reducer.stdDev(), sharedInputs=True)
-                        .combine(ee.Reducer.percentile([10, 25, 50, 75, 90]), sharedInputs=True)
-                        .combine(ee.Reducer.count(), sharedInputs=True))
-            m = comp.reduceRegion(reductor, geom, scale=10, bestEffort=True)
-
-            props = {"fecha": img.date().format("yyyy-MM-dd"),
-                     "cobertura_valida": cobertura}
-            for k in INDICES_ORDEN:
-                props[k.lower()] = m.get(k + "_mean")
-            # estadistica espacial completa solo del NDVI (es el indice de referencia)
-            props["ndvi_std"] = m.get("NDVI_stdDev")
-            props["ndvi_p10"] = m.get("NDVI_p10")
-            props["ndvi_p25"] = m.get("NDVI_p25")
-            props["ndvi_p50"] = m.get("NDVI_p50")
-            props["ndvi_p75"] = m.get("NDVI_p75")
-            props["ndvi_p90"] = m.get("NDVI_p90")
-            props["n_pixeles"] = m.get("NDVI_count")
-            return ee.Feature(None, props)
-
-        data = col.map(feat).getInfo()["features"]
-        # el getInfo ha ido bien -> la conexion con GEE funciona
-        ULTIMO_SYNC.update(estado="ok", msg="conexion con GEE correcta")
-
-        # --- 4. FILTRO DE VALIDEZ POR PARCELA (no por escena) ---
-        # Se acepta la pasada solo si al menos el 80 % de los pixeles de la parcela
-        # son validos tras el SCL (es decir, <20 % de nube/sombra SOBRE LA FINCA).
-        nuevos, descartadas = [], 0
-        for f in data:
-            p = f["properties"]
-            fecha = p.get("fecha")
-            cob = p.get("cobertura_valida")
-            if not fecha or fecha in fechas_existentes:
-                continue
-            if cob is None or cob < 0.80 or not p.get("ndvi"):
-                descartadas += 1
-                continue
-            p["cobertura_valida"] = round(cob, 3)
-            nuevos.append(p)
-
-        if not nuevos:
-            msg = "sin pasadas nuevas fiables"
-            if descartadas:
-                msg += f" ({descartadas} descartadas por nube/sombra sobre la parcela)"
-            return (0, msg)
-
-        # INSERT OR IGNORE: anade solo las fechas nuevas y conserva las existentes
-        # (con su interpretacion). Es atomico y no pisa lo que otro hilo guardara.
-        DB.anadir_pasadas(nombre, campana, nuevos)
-        return (len(nuevos), f"anadidas {len(nuevos)} fechas nuevas")
-    except Exception as e:
-        ULTIMO_SYNC.update(estado="fallo", msg=f"{e}")
-        if not silencioso:
-            raise
-        return (0, f"error: {e}")
+# La persistencia atomica, la marca de sync, toca_sincronizar, ULTIMO_SYNC y
+# sincronizar_parcela viven ahora en sincronizacion y gee_cliente.
 
 
 # =====================================================================
@@ -1071,17 +737,17 @@ class PanelGestionParcelas(ttk.Frame):
 
     # ---------------------------------------------------------- import automatico
     def _purgar_cache(self):
-        """Borra los PNG de mapas mas viejos que DIAS_CACHE_MAPAS.
+        """Borra los PNG de mapas mas viejos que mapas_cache.DIAS_CACHE.
 
         Corre en un hilo aparte para no retrasar la apertura de la ventana, y no
         toca la interfaz. Solo borra imagenes, que se vuelven a descargar solas
         cuando se piden; los datos no se tocan (ver rutas.purgar_png_antiguos).
         """
         try:
-            n = rutas.purgar_png_antiguos(DIR_MAPAS, DIAS_CACHE_MAPAS)
+            n = rutas.purgar_png_antiguos(DIR_MAPAS, mapas_cache.DIAS_CACHE)
             if n:
                 log.warning("cache de mapas: %s PNG con mas de %s dias borrados",
-                            n, DIAS_CACHE_MAPAS)
+                            n, mapas_cache.DIAS_CACHE)
         except Exception:
             log.warning("no se pudo purgar la cache de mapas", exc_info=True)
 
@@ -1090,7 +756,7 @@ class PanelGestionParcelas(ttk.Frame):
         toca (nunca se sincronizo o ya paso el intervalo desde el ultimo sync);
         asi, abrir la app varias veces el mismo dia no repite, pero si han pasado
         los dias configurados, al iniciarse se pone al dia sola."""
-        if _EE and _toca_sincronizar(_marca_sync_leer(), INTERVALO_AUTOSYNC_MS):
+        if _EE and sincronizacion.toca_sincronizar(sincronizacion.marca_leer(), INTERVALO_AUTOSYNC_MS):
             threading.Thread(target=self._sync_todas, daemon=True).start()
         self.after(INTERVALO_AUTOSYNC_MS, self._auto_sync)
 
@@ -1100,7 +766,7 @@ class PanelGestionParcelas(ttk.Frame):
             n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
             total += n
         if ULTIMO_SYNC.get("estado") != "fallo":     # solo marca la hora si conecto
-            _marca_sync_guardar()
+            sincronizacion.marca_guardar()
         self.after(0, self._actualizar_estado_sync)   # refleja exito/fallo del auto-sync
         if total:
             self.after(0, self._refrescar)
@@ -1202,7 +868,7 @@ class PanelGestionParcelas(ttk.Frame):
             total += n
             n_par += 1
         if ULTIMO_SYNC.get("estado") != "fallo":
-            _marca_sync_guardar()
+            sincronizacion.marca_guardar()
 
         def fin():
             self.btn_sync.config(text="  ↻ Sincronizar ahora  ", state="normal")
@@ -2010,7 +1676,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
             else:
                 lineas.append(f"{camp}: {msg}")
         if ULTIMO_SYNC.get("estado") != "fallo":
-            _marca_sync_guardar()
+            sincronizacion.marca_guardar()
 
         def fin():
             if not self.btn.winfo_exists():
@@ -3261,7 +2927,7 @@ class FichaParcela:
     def _sync(self):
         n, msg = sincronizar_parcela(self.nombre, self.campana, silencioso=True)
         if ULTIMO_SYNC.get("estado") != "fallo":
-            _marca_sync_guardar()
+            sincronizacion.marca_guardar()
         self.master.after(0, self.refrescar)
         self.master.after(0, self.panel._refrescar)
         self.master.after(0, self.panel._actualizar_estado_sync)
