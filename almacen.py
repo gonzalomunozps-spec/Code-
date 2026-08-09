@@ -500,6 +500,38 @@ def eventos_de(parcela, campana):
         return out
 
 
+def rendimientos(nombre):
+    """Historico de cosecha de una parcela, campana a campana.
+
+    Devuelve la lista de eventos COSECHA de TODAS las campanas (no solo la
+    activa) que llevan algun dato de rendimiento, ordenados por campana y
+    fecha. Es un volcado literal de lo que se anoto en el cuaderno: aqui no se
+    calcula, ni se promedia, ni se corrige nada. Kg/ha sale de la bascula, no
+    de una estimacion del programa.
+
+    Cada elemento: {campana, fecha, rendimiento_kg_ha, humedad_grano_pct,
+    superficie_cosechada_ha, fuente_dato}. Las claves que no se anotaron
+    sencillamente no estan."""
+    c = _c()
+    with _LOCK:
+        filas = list(c.execute(
+            "SELECT campana,fecha,datos FROM eventos WHERE nombre=? ORDER BY campana,fecha",
+            (nombre,)))
+    out = []
+    for r in filas:
+        d = json.loads(r["datos"]) if r["datos"] else {}
+        if d.get("tipo") != "COSECHA":
+            continue
+        reg = {"campana": r["campana"], "fecha": r["fecha"]}
+        for k in ("rendimiento_kg_ha", "humedad_grano_pct",
+                  "superficie_cosechada_ha", "fuente_dato"):
+            if d.get(k) not in (None, ""):
+                reg[k] = d[k]
+        if len(reg) > 2:            # solo si trae algun dato de cosecha
+            out.append(reg)
+    return out
+
+
 def eliminar_evento(parcela, campana, evento_id):
     # Se acota por parcela y campana ademas de por id: el id deberia bastar, pero
     # sin acotar un id repetido o mal formado podria borrar el evento de OTRA

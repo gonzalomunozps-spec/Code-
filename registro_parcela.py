@@ -20,6 +20,7 @@ Persistencia en JSON (misma carpeta que el resto de datos).
 from datetime import datetime
 
 import almacen as DB     # el almacen (SQLite) guarda ahora los eventos
+from campanas import campana_actual   # logica pura de campana agricola
 
 
 def _dias(f1, f2):
@@ -35,6 +36,122 @@ def _dias(f1, f2):
 TIPOS_EVENTO = ["PRODUCTO", "SIEGA", "COSECHA", "RIEGO", "LABOREO", "SIEMBRA", "OTRO"]
 OBJETIVOS_PRODUCTO = ["fitosanitario (plaga)", "fungicida (enfermedad)",
                       "herbicida (malas hierbas)", "abono / nutricion", "otro"]
+
+# =====================================================================
+# COSECHA: el unico dato OBJETIVO del sistema
+# =====================================================================
+# Los kg/ha salen de la bascula, no de interpretar una imagen. Es el unico dato
+# que este programa no puede deducir y que se pierde para siempre si no se anota
+# en su momento. Por eso se captura tal cual, sin calcular ni estimar nada con el.
+#
+# Todos los campos son OPCIONALES: mas vale un rendimiento a secas que ninguno.
+# La humedad solo se pide donde significa algo (grano de extensivo); en el resto
+# ni se ensena, porque no hay tal dato.
+FUENTES_DATO = ["memoria", "albaran", "bascula", "parte de cosecha"]
+
+CAMPOS_COSECHA = ("rendimiento_kg_ha", "humedad_grano_pct",
+                  "superficie_cosechada_ha", "fuente_dato")
+
+
+def admite_humedad_grano(cultivo):
+    """True solo si el cultivo es grano de extensivo, que es donde la humedad del
+    grano tiene sentido (y sin ella el rendimiento no se puede comparar entre
+    campanas). En lo demas no existe ese dato y no debe pedirse.
+
+    El subtipo vacio cuenta como grano: es la misma convencion que ya aplican el
+    panel y demo_sistema al normalizar un extensivo sin finalidad declarada. Asi
+    las fichas antiguas (guardadas antes de que se escribiera el subtipo) no
+    pierden el campo."""
+    if not cultivo:
+        return False
+    return (cultivo.get("tipo") == "EXTENSIVO"
+            and (cultivo.get("subtipo") or "COSECHA_GRANO") == "COSECHA_GRANO")
+
+
+def campana_de_evento(tipo, iso, campana_vista):
+    """Campana bajo la que se archiva un evento del cuaderno.
+
+    Todo se anota en la campana que se esta viendo, SALVO la COSECHA: esa cae en
+    la campana de su propia fecha, para poder cargar el historico de anos
+    anteriores sin cambiar de campana en el panel. Una fecha ilegible no rompe
+    nada: se queda en la campana vista."""
+    if tipo != "COSECHA" or not iso:
+        return campana_vista
+    try:
+        return campana_actual(datetime.strptime(iso, "%Y-%m-%d"))
+    except (TypeError, ValueError):
+        return campana_vista
+
+
+def _num_es(v, dec=0):
+    """Numero en castellano: miles con punto, decimales con coma."""
+    return f"{v:,.{dec}f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+def linea_rendimiento(r):
+    """Una linea del historico de cosecha, tal como la devuelve `almacen.rendimientos`.
+
+    Volcado literal de lo anotado: no se convierte a humedad comercial, no se
+    normaliza por superficie y no se compara con nada."""
+    partes = [r.get("campana", "")]
+    if r.get("rendimiento_kg_ha") is not None:
+        partes.append(f"{_num_es(r['rendimiento_kg_ha'])} kg/ha")
+    if r.get("humedad_grano_pct") is not None:
+        partes.append(f"humedad {_num_es(r['humedad_grano_pct'], 1)} %")
+    if r.get("superficie_cosechada_ha") is not None:
+        partes.append(f"{_num_es(r['superficie_cosechada_ha'], 2)} ha")
+    if r.get("fuente_dato"):
+        partes.append(str(r["fuente_dato"]))
+    if r.get("fecha"):
+        partes.append(f"({r['fecha']})")
+    return "  ·  ".join(p for p in partes if p)
+
+
+def numero_opcional(texto):
+    """Texto -> numero, aceptando la coma decimal ('4,5' y '4.5' valen igual).
+
+    Devuelve None si esta vacio. Lanza ValueError si no es un numero o si es
+    negativo (un rendimiento o una superficie negativos no existen)."""
+    t = (texto or "").strip().replace(",", ".")
+    if not t:
+        return None
+    v = float(t)                      # ValueError si no es un numero
+    if v < 0:
+        raise ValueError("no puede ser negativo")
+    return v
+
+
+def datos_cosecha(rendimiento=None, humedad=None, superficie=None, fuente=None,
+                  admite_humedad=True):
+    """Normaliza los campos de una COSECHA para guardarlos en el evento.
+
+    Devuelve un dict SOLO con lo que se haya rellenado (nada de ceros ni huecos
+    inventados). Si el cultivo no admite humedad de grano, ese campo se ignora
+    aunque venga con valor. Lanza ValueError, con el nombre del campo, si algun
+    numero no es valido.
+    """
+    out = {}
+    for clave, valor, etiqueta in (("rendimiento_kg_ha", rendimiento, "rendimiento (kg/ha)"),
+                                   ("superficie_cosechada_ha", superficie, "superficie cosechada (ha)")):
+        try:
+            v = numero_opcional(valor)
+        except ValueError:
+            raise ValueError(etiqueta)
+        if v is not None:
+            out[clave] = v
+    if admite_humedad:
+        try:
+            h = numero_opcional(humedad)
+        except ValueError:
+            raise ValueError("humedad del grano (%)")
+        if h is not None:
+            if h > 100:
+                raise ValueError("humedad del grano (%)")
+            out["humedad_grano_pct"] = h
+    fuente = (fuente or "").strip()
+    if fuente:
+        out["fuente_dato"] = fuente
+    return out
 
 # Interpretacion (opcional) del herbicida con LAI constante. Vive en un modulo
 # aparte; si se borra ese fichero, se vuelve solo al comportamiento base.

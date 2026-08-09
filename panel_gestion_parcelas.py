@@ -2136,7 +2136,7 @@ class FichaParcela:
         self._build_graficas(inf)
         self._build_interp(inf)
 
-        inf2 = tk.Frame(cuerpo, bg=TEMA["page"], height=280)
+        inf2 = tk.Frame(cuerpo, bg=TEMA["page"], height=340)   # +60: lista de rendimientos
         inf2.pack(fill="x", pady=(14, 0))
         inf2.pack_propagate(False)
         self._build_cuaderno(inf2)
@@ -2649,7 +2649,11 @@ class FichaParcela:
         self.ev_tipo = ttk.Combobox(form, state="readonly", width=12, values=REG.TIPOS_EVENTO)
         self.ev_tipo.set("PRODUCTO")
         self.ev_tipo.grid(row=1, column=1, padx=(0, 8))
-        self.ev_tipo.bind("<<ComboboxSelected>>", lambda e: self._toggle_producto())
+        self.ev_tipo.bind("<<ComboboxSelected>>", lambda e: self._toggle_campos_evento())
+        # al cambiar la fecha puede cambiar la campana (y con ella el cultivo), asi
+        # que se revisa si toca ensenar la humedad. add="+" para no pisar el manejador
+        # propio de CampoFecha.
+        self.ev_fecha.entry.bind("<FocusOut>", lambda e: self._toggle_campos_evento(), add="+")
 
         # campos especificos de PRODUCTO
         self.frame_prod = tk.Frame(form, bg=TEMA["surface"])
@@ -2673,6 +2677,32 @@ class FichaParcela:
         self.ev_informe = CampoFecha(self.frame_prod, width=11)
         self.ev_informe.grid(row=0, column=7, columnspan=2, sticky="w")
 
+        # campos especificos de COSECHA. Todos OPCIONALES: son el dato de bascula,
+        # no una estimacion. Comparten celda con frame_prod (nunca se ven a la vez).
+        self.frame_cosecha = tk.Frame(form, bg=TEMA["surface"])
+        self.frame_cosecha.grid(row=1, column=2, columnspan=3, sticky="w")
+        tk.Label(self.frame_cosecha, text="Rendimiento (kg/ha)", bg=TEMA["surface"],
+                 fg=TEMA["text_sec"], font=FUENTES["small"]).grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self.ev_rend = ttk.Entry(self.frame_cosecha, width=9)
+        self.ev_rend.grid(row=0, column=1, padx=(0, 8))
+        # la humedad solo tiene sentido en grano de extensivo: en el resto no hay dato
+        self.frame_humedad = tk.Frame(self.frame_cosecha, bg=TEMA["surface"])
+        self.frame_humedad.grid(row=0, column=2, sticky="w")
+        tk.Label(self.frame_humedad, text="Humedad grano (%)", bg=TEMA["surface"],
+                 fg=TEMA["text_sec"], font=FUENTES["small"]).grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self.ev_humedad = ttk.Entry(self.frame_humedad, width=7)
+        self.ev_humedad.grid(row=0, column=1, padx=(0, 8))
+        tk.Label(self.frame_cosecha, text="Superficie (ha)", bg=TEMA["surface"],
+                 fg=TEMA["text_sec"], font=FUENTES["small"]).grid(row=0, column=3, sticky="w", padx=(0, 4))
+        self.ev_sup = ttk.Entry(self.frame_cosecha, width=8)
+        self.ev_sup.grid(row=0, column=4, padx=(0, 8))
+        tk.Label(self.frame_cosecha, text="Origen del dato", bg=TEMA["surface"],
+                 fg=TEMA["text_sec"], font=FUENTES["small"]).grid(row=0, column=5, sticky="w", padx=(0, 4))
+        self.ev_fuente = ttk.Combobox(self.frame_cosecha, state="readonly", width=15,
+                                      values=[""] + list(REG.FUENTES_DATO))
+        self.ev_fuente.set("")
+        self.ev_fuente.grid(row=0, column=6)
+
         tk.Label(form, text="Notas", bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).grid(row=0, column=5, sticky="w")
         self.ev_notas = ttk.Entry(form, width=26)
@@ -2690,21 +2720,39 @@ class FichaParcela:
         self.tv_ev.bind("<Button-3>", self._menu_evento)
         tk.Label(card, text="Doble clic en un producto: ver su efecto sobre el cultivo. "
                             "Clic derecho: eliminar.", bg=TEMA["surface"],
-                 fg=TEMA["text_muted"], font=FUENTES["small"]).pack(anchor="w", padx=12, pady=(0, 10))
-        self._toggle_producto()
+                 fg=TEMA["text_muted"], font=FUENTES["small"]).pack(anchor="w", padx=12, pady=(0, 4))
+
+        # Historico de cosecha: lo unico medido en bascula, no interpretado.
+        # Se listan TODAS las campanas, no solo la que se esta viendo.
+        tk.Label(card, text="Rendimientos registrados", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=12)
+        self.lbl_rend = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                 font=FUENTES["small"], justify="left", anchor="w")
+        self.lbl_rend.pack(fill="x", padx=12, pady=(0, 10))
+        self._toggle_campos_evento()
         self._refrescar_eventos()
 
-    def _toggle_producto(self):
-        if self.ev_tipo.get() == "PRODUCTO":
-            self.frame_prod.grid()
-        else:
-            self.frame_prod.grid_remove()
+    def _cultivo_de(self, campana):
+        return ((DB.ficha(self.nombre) or {}).get("cultivos_por_campana", {}) or {}).get(campana, {})
+
+    def _campana_evento(self, iso):
+        return REG.campana_de_evento(self.ev_tipo.get(), iso, self.campana)
+
+    def _toggle_campos_evento(self):
+        tipo = self.ev_tipo.get()
+        (self.frame_prod.grid if tipo == "PRODUCTO" else self.frame_prod.grid_remove)()
+        (self.frame_cosecha.grid if tipo == "COSECHA" else self.frame_cosecha.grid_remove)()
+        if tipo == "COSECHA":
+            cult = self._cultivo_de(self._campana_evento(self.ev_fecha.get_iso()))
+            (self.frame_humedad.grid if REG.admite_humedad_grano(cult)
+             else self.frame_humedad.grid_remove)()
 
     def _add_evento(self):
         fecha = self.ev_fecha.get_iso()
         if not fecha:
             return messagebox.showwarning("Fecha", "Elige la fecha de la intervencion (dd-mm-aaaa).")
         ev = {"fecha": fecha, "tipo": self.ev_tipo.get(), "notas": self.ev_notas.get().strip()}
+        campana = self._campana_evento(fecha)
         if ev["tipo"] == "PRODUCTO":
             if not self.ev_prod.get().strip():
                 return messagebox.showwarning("Producto", "Indica el nombre del producto.")
@@ -2717,12 +2765,38 @@ class FichaParcela:
                     return messagebox.showwarning("Dia informe", "Dia del informe: dd-mm-aaaa "
                                                   "(o dejalo vacio para el automatico).")
                 ev["fecha_informe"] = informe
-        REG.registrar_evento(self.nombre, self.campana, ev)
+        elif ev["tipo"] == "COSECHA":
+            admite = REG.admite_humedad_grano(self._cultivo_de(campana))
+            # si la fecha ha llevado el evento a una campana cuyo cultivo no es grano,
+            # se avisa en vez de tirar el dato en silencio
+            if not admite and self.ev_humedad.get().strip():
+                self._toggle_campos_evento()
+                return messagebox.showwarning(
+                    "Cosecha", f"El cultivo de la campana {campana} no es grano de "
+                    "extensivo: ahi no se anota humedad. Borra ese campo para continuar.")
+            try:
+                ev.update(REG.datos_cosecha(
+                    self.ev_rend.get(), self.ev_humedad.get(), self.ev_sup.get(),
+                    self.ev_fuente.get(), admite_humedad=admite))
+            except ValueError as e:
+                return messagebox.showwarning("Cosecha", f"Revisa el campo {e}: "
+                                              "escribe un numero (o dejalo vacio).")
+        REG.registrar_evento(self.nombre, campana, ev)
         self.ev_notas.delete(0, tk.END)
         if hasattr(self, "ev_prod"):
             self.ev_prod.delete(0, tk.END)
             self.ev_dosis.delete(0, tk.END)
             self.ev_informe.set_iso("")
+        for w in (getattr(self, "ev_rend", None), getattr(self, "ev_humedad", None),
+                  getattr(self, "ev_sup", None)):
+            if w is not None:
+                w.delete(0, tk.END)
+        if hasattr(self, "ev_fuente"):
+            self.ev_fuente.set("")
+        if campana != self.campana:
+            messagebox.showinfo("Cosecha", f"Anotada en la campana {campana}. Queda en el "
+                                "historico de rendimientos; para ver el evento, cambia a esa "
+                                "campana.", parent=self.master)
         self._refrescar_eventos()
         self._pintar_graficas(sorted(self.panel._historico(self.nombre),
                                      key=lambda r: r.get("fecha", "")))
@@ -2744,6 +2818,16 @@ class FichaParcela:
                 efec = "-"
             self.tv_ev.insert("", tk.END, values=(e.get("fecha", ""), e.get("tipo", ""),
                                                   det, efec), tags=(e.get("id", ""),))
+        self._refrescar_rendimientos()
+
+    def _refrescar_rendimientos(self):
+        if not hasattr(self, "lbl_rend") or not self.lbl_rend.winfo_exists():
+            return
+        filas = DB.rendimientos(self.nombre)
+        self.lbl_rend.config(
+            text="\n".join(REG.linea_rendimiento(r) for r in filas) if filas else
+            "Sin rendimientos anotados. Se apuntan con un evento COSECHA; admite fechas de "
+            "campanas anteriores para cargar el historico.")
 
     def _menu_evento(self, event):
         fila = self.tv_ev.identify_row(event.y)

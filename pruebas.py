@@ -452,6 +452,104 @@ def pruebas_cuaderno():
     check("cuaderno: eventos_cercanos con fecha_iso basura -> [] (no crash)",
           lambda: REG.eventos_cercanos("Q", "2025-2026", "10/2026"), lambda r: r == [])
 
+    # ---- COSECHA: captura del rendimiento (kg/ha). Dato de bascula, no estimado.
+    check("cosecha: humedad solo en grano de extensivo",
+          lambda: REG.admite_humedad_grano({"tipo": "EXTENSIVO", "subtipo": "COSECHA_GRANO"}),
+          lambda r: r is True)
+    check("cosecha: lenoso no admite humedad de grano",
+          lambda: REG.admite_humedad_grano({"tipo": "LENOSO", "subtipo": "ALMENDRO"}),
+          lambda r: r is False)
+    check("cosecha: sin cultivo no admite humedad",
+          lambda: REG.admite_humedad_grano(None), lambda r: r is False)
+    check("cosecha: siega en verde no admite humedad de grano",
+          lambda: REG.admite_humedad_grano({"tipo": "EXTENSIVO", "subtipo": "SIEGA_VERDE"}),
+          lambda r: r is False)
+    check("cosecha: extensivo sin subtipo cuenta como grano (fichas antiguas)",
+          lambda: REG.admite_humedad_grano({"tipo": "EXTENSIVO"}), lambda r: r is True)
+    check("cosecha: numero_opcional acepta coma decimal",
+          lambda: REG.numero_opcional(" 12,5 "), lambda r: r == 12.5)
+    check("cosecha: numero_opcional vacio -> None",
+          lambda: REG.numero_opcional("   "), lambda r: r is None)
+    check("cosecha: numero_opcional negativo -> error",
+          lambda: _lanza(REG.numero_opcional, ValueError, "-3"), lambda r: r is True)
+    check("cosecha: datos_cosecha completo",
+          lambda: REG.datos_cosecha("4500", "12,5", "3.2", "bascula"),
+          lambda r: r == {"rendimiento_kg_ha": 4500.0, "humedad_grano_pct": 12.5,
+                          "superficie_cosechada_ha": 3.2, "fuente_dato": "bascula"})
+    check("cosecha: todo vacio -> no se anota nada",
+          lambda: REG.datos_cosecha("", "", "", ""), lambda r: r == {})
+    check("cosecha: sin derecho a humedad, se ignora aunque venga escrita",
+          lambda: REG.datos_cosecha("4500", "12,5", None, None, admite_humedad=False),
+          lambda r: "humedad_grano_pct" not in r and r["rendimiento_kg_ha"] == 4500.0)
+    check("cosecha: humedad > 100 % -> error nombrando el campo",
+          lambda: _lanza(REG.datos_cosecha, ValueError, None, "120"), lambda r: r is True)
+    check("cosecha: texto no numerico -> error nombrando el campo",
+          lambda: _mensaje_error(REG.datos_cosecha, "cuatro mil"),
+          lambda r: "rendimiento" in r)
+    check("cosecha: fuente_dato incluye las cuatro origenes previstas",
+          lambda: REG.FUENTES_DATO,
+          lambda r: {"memoria", "bascula"} <= set(r) and len(r) == 4)
+
+    # historico por campana: incluye campanas anteriores y solo eventos COSECHA con dato
+    def _historico_rend():
+        REG.registrar_evento("R", "2023-2024", {"fecha": "2024-07-05", "tipo": "COSECHA",
+                                                "rendimiento_kg_ha": 3800.0,
+                                                "humedad_grano_pct": 11.0, "fuente_dato": "albaran"})
+        REG.registrar_evento("R", "2025-2026", {"fecha": "2026-07-01", "tipo": "COSECHA",
+                                                "rendimiento_kg_ha": 4500.0})
+        REG.registrar_evento("R", "2025-2026", {"fecha": "2026-07-02", "tipo": "COSECHA"})
+        REG.registrar_evento("R", "2025-2026", {"fecha": "2026-05-01", "tipo": "SIEGA"})
+        REG.registrar_evento("OTRA", "2025-2026", {"fecha": "2026-07-01", "tipo": "COSECHA",
+                                                   "rendimiento_kg_ha": 9999.0})
+        return DB.rendimientos("R")
+    check("almacen.rendimientos: historico de varias campanas, solo cosechas con dato",
+          _historico_rend,
+          lambda r: [x["campana"] for x in r] == ["2023-2024", "2025-2026"] and
+                    r[0]["rendimiento_kg_ha"] == 3800.0 and r[0]["fuente_dato"] == "albaran" and
+                    r[1] == {"campana": "2025-2026", "fecha": "2026-07-01",
+                             "rendimiento_kg_ha": 4500.0})
+    check("almacen.rendimientos: parcela sin cosechas -> []",
+          lambda: DB.rendimientos("SIN_COSECHA"), lambda r: r == [])
+
+    # la COSECHA se archiva en la campana de SU fecha (asi se carga historico viejo)
+    check("cosecha: fecha de julio de 2024 -> campana 2023-2024",
+          lambda: REG.campana_de_evento("COSECHA", "2024-07-05", "2025-2026"),
+          lambda r: r == "2023-2024")
+    check("cosecha: fecha de octubre -> campana que empieza ese ano",
+          lambda: REG.campana_de_evento("COSECHA", "2024-10-02", "2025-2026"),
+          lambda r: r == "2024-2025")
+    check("cuaderno: el resto de eventos se quedan en la campana vista",
+          lambda: REG.campana_de_evento("SIEGA", "2024-07-05", "2025-2026"),
+          lambda r: r == "2025-2026")
+    check("cuaderno: fecha ilegible no cambia de campana",
+          lambda: REG.campana_de_evento("COSECHA", "05/07/2024", "2025-2026"),
+          lambda r: r == "2025-2026")
+    check("cosecha: linea del historico con todos los datos",
+          lambda: REG.linea_rendimiento({"campana": "2023-2024", "fecha": "2024-07-05",
+                                         "rendimiento_kg_ha": 4500.0, "humedad_grano_pct": 12.5,
+                                         "superficie_cosechada_ha": 3.2, "fuente_dato": "bascula"}),
+          lambda r: "4.500 kg/ha" in r and "12,5 %" in r and "3,20 ha" in r and "bascula" in r)
+    check("cosecha: linea con solo el rendimiento no inventa el resto",
+          lambda: REG.linea_rendimiento({"campana": "2025-2026", "rendimiento_kg_ha": 4500.0}),
+          lambda r: r == "2025-2026  ·  4.500 kg/ha")
+
+
+def _lanza(fn, exc, *args, **kw):
+    """True si `fn` lanza `exc`. Evita repetir try/except en cada comprobacion."""
+    try:
+        fn(*args, **kw)
+    except exc:
+        return True
+    return False
+
+
+def _mensaje_error(fn, *args, **kw):
+    try:
+        fn(*args, **kw)
+    except ValueError as e:
+        return str(e)
+    return ""
+
 
 # =====================================================================
 # 5. CREDENCIALES (degradacion sin librerias externas)

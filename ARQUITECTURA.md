@@ -68,7 +68,7 @@ Son la base testeable. Ninguno importa a otro.
 | Módulo | Responsabilidad |
 |---|---|
 | `interpretacion_fenologica.py` | **El cerebro.** `evaluar_parcela` produce el diagnóstico; `texto_interpretacion` lo redacta (ChatGPT si hay clave, si no por reglas); `ajuste_por_validaciones` aprende de las correcciones del usuario. |
-| `registro_parcela.py` | Cuaderno de campo: eventos y `efecto_producto` (respuesta del cultivo tras una aplicación). |
+| `registro_parcela.py` | Cuaderno de campo: eventos, `efecto_producto` (respuesta del cultivo tras una aplicación) y captura de **cosecha** (kg/ha, humedad, superficie, origen del dato). |
 | `sentinel1.py` | Radar: VV/VH, RVI, CR, incertidumbre y fiabilidad; relación con el óptico. **Puro**: la descarga está en `gee_cliente`. |
 
 ### Capa 2b — Satélite (lo único que habla con Earth Engine)
@@ -84,7 +84,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 261 pruebas sin pantalla ni red. |
+| `pruebas.py` | 283 pruebas sin pantalla ni red. |
 
 ---
 
@@ -139,7 +139,12 @@ todas las parcelas.
 7. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
    cambiarlo hay que subir `ESQUEMA_VERSION` y añadir su migración a
    `_MIGRACIONES` (receta completa en el docstring de `almacen.py`).
-8. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
+8. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
+   superficie cosechada y el origen del dato se anotan a mano en un evento
+   `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
+   humedad comercial y no predice con ellos. Es el único dato objetivo del
+   sistema: viene de la báscula, no de una imagen.
+9. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
    registros antiguos sin campos nuevos. Convertirlas a `dataclass` cambiaría el
    formato de datos.
 
@@ -178,7 +183,7 @@ Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 261 pruebas, sin pantalla ni red
+python pruebas.py          # 283 pruebas, sin pantalla ni red
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
 ```
