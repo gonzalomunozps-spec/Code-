@@ -31,6 +31,8 @@ El grafo de dependencias **no tiene ciclos**. Las capas van de abajo arriba:
 ```
 CAPA 3  ENTREGA        panel_gestion_parcelas.py   informe_anual.py*
            │                     │                        │
+CAPA 2b SATELITE       gee_cliente.py  ──►  mapas_cache.py   sincronizacion.py
+           │            (unico modulo que habla con Earth Engine; `ee` inyectable)
 CAPA 2  DOMINIO        interpretacion_fenologica.py  registro_parcela.py  sentinel1.py
            │                     │                        │
 CAPA 1  DATOS                 almacen.py ──► bitacora.py ──► rutas.py
@@ -67,15 +69,22 @@ Son la base testeable. Ninguno importa a otro.
 |---|---|
 | `interpretacion_fenologica.py` | **El cerebro.** `evaluar_parcela` produce el diagnóstico; `texto_interpretacion` lo redacta (ChatGPT si hay clave, si no por reglas); `ajuste_por_validaciones` aprende de las correcciones del usuario. |
 | `registro_parcela.py` | Cuaderno de campo: eventos y `efecto_producto` (respuesta del cultivo tras una aplicación). |
-| `sentinel1.py` | Radar: VV/VH, RVI, CR, incertidumbre y fiabilidad; relación con el óptico. |
+| `sentinel1.py` | Radar: VV/VH, RVI, CR, incertidumbre y fiabilidad; relación con el óptico. **Puro**: la descarga está en `gee_cliente`. |
+
+### Capa 2b — Satélite (lo único que habla con Earth Engine)
+| Módulo | Responsabilidad |
+|---|---|
+| `gee_cliente.py` | Índices, sincronización incremental (óptico y radar) y descarga de mapas. El módulo `ee` es **inyectable**, por eso la descarga se prueba sin red. Tablas `INDICES`/`RADAR_VIS` y sesión HTTP compartida. |
+| `mapas_cache.py` | Nombres y rutas de los PNG cacheados, y su purga. |
+| `sincronizacion.py` | Cuándo toca sincronizar, marca del último sync y estado del último intento. |
 
 ### Capa 3 — Entrega
 | Módulo | Responsabilidad |
 |---|---|
-| `panel_gestion_parcelas.py` | Toda la interfaz (~3.400 líneas). Ver §5. |
+| `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 243 pruebas sin pantalla ni red. |
+| `pruebas.py` | 261 pruebas sin pantalla ni red. |
 
 ---
 
@@ -169,7 +178,7 @@ Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 243 pruebas, sin pantalla ni red
+python pruebas.py          # 261 pruebas, sin pantalla ni red
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
 ```
@@ -194,10 +203,7 @@ python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py 
 
 ## 8. Deuda técnica pendiente (por orden de valor)
 
-1. **`descargar_mapa_indice` / `descargar_mapa_radar` no son testeables**: mezclan
-   Earth Engine, red y composición de imagen. Separarlas permitiría probarlas; ahí
-   aparecieron dos bugs reales.
-2. **El panel sigue siendo un monolito** de ~3.400 líneas. Partirlo (ficha, radar,
+1. **El panel sigue siendo un monolito** de ~3.400 líneas. Partirlo (ficha, radar,
    diálogos, tema) es viable, pero conviene hacerlo con la aplicación abierta para
    verificar cada paso.
 3. **Arranque**: `matplotlib` cuesta ~1,6 s al importar. Diferirlo no ayuda porque

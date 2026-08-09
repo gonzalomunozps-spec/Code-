@@ -1031,6 +1031,44 @@ def pruebas_gee_cliente():
           lambda: (setattr(G, "ee", None), G.sincronizar_parcela("Parcela_EE", "2025-2026"),
                    setattr(G, "ee", real_ee))[1],
           lambda r: r[0] == 0 and "earthengine" in r[1])
+    # --- RADAR (Sentinel-1): misma descarga inyectable ---
+    def _pasada_radar(fecha, vv, vh, n=60, orbita="ASCENDING"):
+        return {"properties": {"fecha": fecha, "vv": vv, "vh": vh,
+                               "vv_std": 1.2, "vh_std": 1.3, "n": n, "orbita": orbita}}
+    DB.guardar_ficha("Radar_EE", {"propietario": "x",
+                                  "coordenadas": [[-4.1, 41.65], [-4.09, 41.65],
+                                                  [-4.09, 41.66], [-4.1, 41.66]]})
+    falso_r = _EeFalso([_pasada_radar("2026-03-02", -9.0, -15.0),
+                        _pasada_radar("2026-03-14", None, -14.0),      # sin VV: se descarta
+                        _pasada_radar("2026-03-02", -8.0, -14.5)])     # dia repetido: no duplica
+    real_ee = G.ee
+    try:
+        G.ee = falso_r
+        n, _msg = G.sincronizar_radar("Radar_EE", "2025-2026")
+        rad = DB.radar("Radar_EE", "2025-2026")
+        check("gee radar: descarta la pasada sin VV y no duplica el mismo dia",
+              lambda: (n, [p["fecha"] for p in rad]),
+              lambda r: r[0] == 1 and r[1] == ["2026-03-02"])
+        check("gee radar: guarda RVI con su rango de incertidumbre y la fiabilidad",
+              lambda: rad[0],
+              lambda p: (p["rvi"] is not None and p["rvi_lo"] <= p["rvi"] <= p["rvi_hi"]
+                         and p["fiabilidad"] in ("alta", "media", "baja")))
+        check("gee radar: conserva VV/VH redondeados y el nº de pixeles",
+              lambda: rad[0],
+              lambda p: p["vv"] == -9.0 and p["vh"] == -15.0 and p["n_pixeles"] == 60)
+        check("gee radar: repetir no anade nada",
+              lambda: G.sincronizar_radar("Radar_EE", "2025-2026")[0], lambda v: v == 0)
+    finally:
+        G.ee = real_ee
+    check("gee radar: sin ee disponible lo dice y no revienta",
+          lambda: (setattr(G, "ee", None), G.sincronizar_radar("Radar_EE", "2025-2026"),
+                   setattr(G, "ee", real_ee))[1],
+          lambda r: r[0] == 0 and "earthengine" in r[1])
+    # el modulo de radar sigue siendo PURO: interpreta sin tocar red ni base de datos
+    import sentinel1 as S1
+    check("sentinel1: sigue siendo puro (sin ee ni almacen)",
+          lambda: [n for n in ("ee", "DB") if hasattr(S1, n)], lambda r: r == [])
+
     # helper puro de dimensionado
     poli = [[-4.10, 41.650], [-4.093, 41.650], [-4.093, 41.654], [-4.10, 41.654]]
     check("gee: dimensiones_para respeta el tope de pixeles",

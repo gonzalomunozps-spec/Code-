@@ -30,6 +30,8 @@ import requests
 
 import almacen as DB
 from campanas import rango_campana
+from sentinel1 import (cross_ratio_db, error_estandar, fiabilidad_radar,
+                       rvi_incertidumbre)
 from sincronizacion import ULTIMO_SYNC
 
 try:
@@ -289,6 +291,91 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
         return (len(nuevos), f"anadidas {len(nuevos)} fechas nuevas")
     except Exception as e:
         ULTIMO_SYNC.update(estado="fallo", msg=f"{e}")
+        if not silencioso:
+            raise
+        return (0, f"error: {e}")
+
+
+# =====================================================================
+# SENTINEL-1 (RADAR): descarga incremental de pasadas
+# =====================================================================
+# El calculo y la interpretacion del radar viven en sentinel1 (modulo puro);
+# aqui solo esta la parte que habla con Earth Engine.
+# =====================================================================
+def sincronizar_radar(nombre, campana, silencioso=True):
+    """
+    Descarga INCREMENTAL de Sentinel-1 (VV/VH) sobre la parcela y guarda VV, VH,
+    RVI y CR por pasada. Devuelve (n_nuevos, mensaje). SOLO se llama desde el boton.
+    """
+    if not hay_ee():
+        return (0, "earthengine-api no disponible")
+    try:
+        ficha = DB.ficha(nombre)
+        if not ficha or not ficha.get("coordenadas"):
+            return (0, "parcela sin geometria")
+
+        geom = ee.Geometry.Polygon(ficha["coordenadas"])
+        ini_camp, fin_camp = rango_campana(campana)
+        ultima = DB.ultima_fecha_radar(nombre, campana)
+        existentes = {p["fecha"] for p in DB.radar(nombre, campana) if p.get("fecha")}
+        try:
+            inicio = ((datetime.strptime(ultima, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                      if ultima else ini_camp)
+        except ValueError:
+            inicio = ini_camp
+        hoy = datetime.now().strftime("%Y-%m-%d")
+        fin = min(fin_camp, hoy)
+        if inicio > fin:
+            return (0, "radar ya al dia")
+
+        col = (ee.ImageCollection("COPERNICUS/S1_GRD")
+               .filterBounds(geom).filterDate(inicio, fin)
+               .filter(ee.Filter.eq("instrumentMode", "IW"))
+               .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+               .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
+               .select(["VV", "VH"])
+               .sort("system:time_start", True))
+
+        # media + desviacion espacial + nº de pixeles (para la incertidumbre)
+        reductor = (ee.Reducer.mean()
+                    .combine(ee.Reducer.stdDev(), sharedInputs=True)
+                    .combine(ee.Reducer.count(), sharedInputs=True))
+
+        def feat(img):
+            m = img.reduceRegion(reductor, geom, scale=10, bestEffort=True)
+            return ee.Feature(None, {"fecha": img.date().format("yyyy-MM-dd"),
+                                     "vv": m.get("VV_mean"), "vh": m.get("VH_mean"),
+                                     "vv_std": m.get("VV_stdDev"), "vh_std": m.get("VH_stdDev"),
+                                     "n": m.get("VV_count"),
+                                     "orbita": img.get("orbitProperties_pass")})
+
+        data = col.map(feat).getInfo()["features"]
+        nuevos = []
+        for f in data:
+            p = f["properties"]
+            fecha = p.get("fecha")
+            vv, vh = p.get("vv"), p.get("vh")
+            if not fecha or fecha in existentes or vv is None or vh is None:
+                continue
+            existentes.add(fecha)          # evita duplicar si hay dos escenas el mismo dia
+            vv_std, vh_std = p.get("vv_std"), p.get("vh_std")
+            n = int(p["n"]) if p.get("n") is not None else None
+            vv_e = error_estandar(vv_std, n)
+            vh_e = error_estandar(vh_std, n)
+            rv, rlo, rhi = rvi_incertidumbre(vv, vh, vv_e, vh_e)
+            nuevos.append({"fecha": fecha, "vv": round(vv, 2), "vh": round(vh, 2),
+                           "vv_std": round(vv_std, 2) if vv_std is not None else None,
+                           "vh_std": round(vh_std, 2) if vh_std is not None else None,
+                           "n_pixeles": n, "rvi": rv, "rvi_lo": rlo, "rvi_hi": rhi,
+                           "cr": cross_ratio_db(vv, vh),
+                           "fiabilidad": fiabilidad_radar(n, vv_std, vh_std),
+                           "orbita": p.get("orbita")})
+
+        if not nuevos:
+            return (0, "sin pasadas de radar nuevas")
+        DB.anadir_radar(nombre, campana, nuevos)
+        return (len(nuevos), f"anadidas {len(nuevos)} pasadas de radar")
+    except Exception as e:
         if not silencioso:
             raise
         return (0, f"error: {e}")

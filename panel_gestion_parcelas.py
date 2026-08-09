@@ -2826,7 +2826,7 @@ class FichaParcela:
         threading.Thread(target=self._sync_radar, daemon=True).start()
 
     def _sync_radar(self):
-        n, msg = S1.sincronizar_radar(self.nombre, self.campana, silencioso=True)
+        n, msg = gee_cliente.sincronizar_radar(self.nombre, self.campana, silencioso=True)
 
         def fin():
             try:
