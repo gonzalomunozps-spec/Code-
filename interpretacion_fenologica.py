@@ -26,8 +26,16 @@ import os
 import json
 from datetime import datetime
 
+import fenologia_especies as FEN
 from contraste_indices import analizar_por_contraste, heterogeneidad
 from bitacora import log
+
+try:
+    # OPCIONAL: ajusta los umbrales con las validaciones del usuario. Si se borra
+    # el fichero se juzga con los valores de la tabla, que es lo de siempre.
+    import calibracion_umbrales as _CAL
+except Exception:
+    _CAL = None
 
 try:
     from openai import OpenAI
@@ -221,10 +229,15 @@ def detectar_cubierta(tipo, subtipo, serie, fecha_iso):
 # =====================================================================
 # 4. EVALUACION UNIFICADA (semaforo y frase salen del MISMO juicio)
 # =====================================================================
-def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None):
+def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
+                    parcela=None):
     """
     Devuelve un dict con el diagnostico completo. Semaforo y explicacion
     coherentes entre si, con fenologia y (en lenosos) cubierta vegetal.
+
+    parcela: nombre, solo para poder aplicar los umbrales que el usuario haya
+        calibrado con sus validaciones (modulo OPCIONAL calibracion_umbrales).
+        Sin este argumento -o sin ese modulo- se juzga con la tabla de siempre.
 
     eventos_cerca: lista opcional [(dias, evento), ...] del cuaderno de campo.
     spec: dict opcional con el modelo por especie:
@@ -266,6 +279,16 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
             fase_esp = None
     if fase_esp is None:
         fase, lo, hi, caida_ok = fase_fenologica(tipo, subtipo, fecha)
+
+    # --- UMBRALES DE LA FASE, ya calibrados con lo que haya validado el usuario ---
+    # Se hace UNA vez y aqui arriba, para que el NDVI se juzgue con el mismo liston
+    # que luego se explica. Sin el modulo opcional, o sin parcela, quedan los de la
+    # tabla y todo se comporta como siempre.
+    umbrales = FEN.umbrales_de_fase(fase_esp)
+    if _CAL is not None and parcela:
+        umbrales = _CAL.ajustar_umbrales(dict(umbrales, lo=lo, hi=hi),
+                                         (spec or {}).get("especie"), fase, parcela)
+        lo, hi = umbrales.get("lo", lo), umbrales.get("hi", hi)
 
     # deltas de todos los indices
     deltas = {}
@@ -371,16 +394,28 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         motivo += (" [El arbol esta SIN HOJA: cualquier verde que se vea es cubierta o "
                    "hierba, no el cultivo. El NDVI no mide el arbol hasta la brotacion.]")
 
-    # el estres hidrico ELEVA el nivel de alerta (ya no contradice al semaforo)
-    if ndmi is not None and ndmi < 0 and not esperado:
+    # --- FALTA DE AGUA: eleva el nivel de alerta (ya no contradice al semaforo) ---
+    # El suelo del NDMI sale de la FASE, no de una constante unica: un maiz en
+    # floracion sufre mucho antes que un trigo en rastrojo. `ndmi_min = None`
+    # significa que en esta fase el NDMI no dice nada (presiembra, barbecho,
+    # senescencia, lenoso sin hoja) y no se evalua. Si la fase no declara nada,
+    # DEFECTO_UMBRALES deja el 0.0 de siempre.
+    ndmi_min = umbrales["ndmi_min"]
+    if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not esperado:
+        # el listón calibrado por el usuario, si lo hay, manda sobre el de la tabla
+        como = (f"negativo ({ndmi:+.3f})" if ndmi_min == 0.0 else
+                f"{ndmi:+.3f}, por debajo de {ndmi_min:.2f} esperado en {fase}")
         if clave == "OK":
             clave, estado = "Vigilar", "Vigilar"
-            motivo += f" Ademas el NDMI es negativo ({ndmi:+.3f}): indicio de estres hidrico."
+            motivo += f" Ademas el NDMI es {como}: indicio de estres hidrico."
         elif clave == "Vigilar":
             clave, estado = "Revisar", "Revisar"
-            motivo += f" El NDMI negativo ({ndmi:+.3f}) agrava el diagnostico."
+            motivo += f" El NDMI {como} agrava el diagnostico."
         else:
-            motivo += f" NDMI negativo ({ndmi:+.3f}): estres hidrico asociado."
+            motivo += f" NDMI {como}: estres hidrico asociado."
+        if umbrales.get("critica"):
+            motivo += (" Es ademas la fase en la que la falta de agua mas se lleva "
+                       "por delante el rendimiento.")
 
     # --- EVENTOS DEL CUADERNO DE CAMPO ---
     # Una siega/cosecha/herbicida REGISTRADO por el usuario explica una caida brusca
@@ -434,10 +469,14 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         if clave == "OK" and not esperado:
             clave, estado = "Vigilar", "Vigilar"
 
+    # si algun umbral viene de tus validaciones y no de la tabla, se dice
+    if _CAL is not None and umbrales.get("calibrado"):
+        motivo += " " + _CAL.texto_calibracion(umbrales)
+
     return {"estado": estado, "clave": clave, "fase": fase, "rango_fase": (lo, hi),
             "motivo": motivo, "deltas": deltas, "cubierta": cubierta, "copa": copa,
             "heterogeneidad": hetero, "ndvi_juicio": ndvi_juicio,
-            "esperado": esperado, "fecha": fecha}
+            "esperado": esperado, "fecha": fecha, "umbrales": umbrales}
 
 
 # =====================================================================

@@ -55,7 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 1
+ESQUEMA_VERSION = 3
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -144,7 +144,10 @@ def _crear_tablas():
             propietario TEXT,
             coordenadas TEXT,          -- JSON: [[lon,lat], ...]
             superficie_ha REAL,
-            anio_inicio TEXT);
+            anio_inicio TEXT,
+            provincia TEXT,            -- codigo SIGPAC de provincia
+            municipio TEXT,            -- codigo SIGPAC de municipio
+            sigpac TEXT);              -- JSON con los 7 codigos del recinto
         CREATE TABLE IF NOT EXISTS cultivos(
             nombre TEXT, campana TEXT,
             datos TEXT,                -- JSON del cultivo (tipo, subtipo, especie, marco...)
@@ -172,6 +175,20 @@ def _crear_tablas():
             nota TEXT,                 -- observacion libre del agricultor
             ts TEXT,                   -- momento de la validacion
             PRIMARY KEY(nombre, campana, fecha));
+        CREATE TABLE IF NOT EXISTS validaciones_indice(
+            id TEXT PRIMARY KEY,
+            nombre TEXT, campana TEXT, fecha TEXT,
+            indice TEXT,               -- NDVI, NDMI, LAI...
+            valor REAL,                -- lo que midio el satelite ese dia
+            especie TEXT, fase TEXT,
+            dijo_sistema TEXT,         -- bajo | normal | alto
+            dijo_usuario TEXT,         -- bajo | normal | alto
+            ambito TEXT,               -- parcela | municipio | provincia | global
+            clave_ambito TEXT,
+            ts TEXT);
+        CREATE INDEX IF NOT EXISTS ix_vidx_busca
+            ON validaciones_indice(indice, especie, fase, ambito, clave_ambito);
+        CREATE INDEX IF NOT EXISTS ix_vidx_parcela ON validaciones_indice(nombre);
         CREATE INDEX IF NOT EXISTS ix_pasadas_np ON pasadas(nombre, campana);
         CREATE INDEX IF NOT EXISTS ix_pasadas_c  ON pasadas(campana);
         CREATE INDEX IF NOT EXISTS ix_radar_np   ON pasadas_radar(nombre, campana);
@@ -182,9 +199,54 @@ def _crear_tablas():
     _CONN.commit()
 
 
+def _migracion_2(c):
+    """Guarda DONDE esta la parcela: provincia, municipio y los codigos SIGPAC.
+
+    Hasta ahora los 7 codigos SIGPAC se tecleaban para capturar el recinto y se
+    tiraban en cuanto llegaba el poligono. Sin provincia y municipio no se puede
+    corregir un umbral "para todo el municipio", que es la unidad en la que un
+    agricultor piensa. Se anaden vacios: las parcelas existentes no se tocan y se
+    rellenan cuando se editen.
+
+    Idempotente: en una base NUEVA las columnas ya vienen de `_crear_tablas`, asi
+    que se comprueba antes de anadirlas."""
+    ya = {r[1] for r in c.execute("PRAGMA table_info(parcelas)")}
+    for col, tipo in (("provincia", "TEXT"), ("municipio", "TEXT"), ("sigpac", "TEXT")):
+        if col not in ya:
+            c.execute(f"ALTER TABLE parcelas ADD COLUMN {col} {tipo}")
+
+
+def _migracion_3(c):
+    """Validaciones POR INDICE (las usa el modulo extraible calibracion_umbrales).
+
+    La tabla `validaciones` guarda el veredicto sobre el diagnostico entero. Esta
+    guarda, ademas, que dijo el usuario de CADA indice por separado, que es lo que
+    permite mover el umbral de ese indice y no los demas. Vive aqui, y no en el
+    modulo, porque el esquema es responsabilidad del almacen: si se borra el
+    modulo la tabla se queda quieta, sin estorbar."""
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS validaciones_indice(
+            id TEXT PRIMARY KEY,
+            nombre TEXT,               -- parcela
+            campana TEXT,
+            fecha TEXT,                -- dia de la pasada
+            indice TEXT,               -- NDVI, NDMI, LAI...
+            valor REAL,                -- lo que medio el satelite ese dia
+            especie TEXT,
+            fase TEXT,
+            dijo_sistema TEXT,         -- bajo | normal | alto
+            dijo_usuario TEXT,         -- bajo | normal | alto
+            ambito TEXT,               -- parcela | municipio | provincia | global
+            clave_ambito TEXT,         -- valor del ambito (nombre, municipio, provincia o '')
+            ts TEXT)""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_vidx_busca "
+              "ON validaciones_indice(indice, especie, fase, ambito, clave_ambito)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_vidx_parcela ON validaciones_indice(nombre)")
+
+
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
-_MIGRACIONES = {}
+_MIGRACIONES = {2: _migracion_2, 3: _migracion_3}
 
 
 def _migrar_esquema():
@@ -266,11 +328,22 @@ def _migrar_desde_json():
 # ---------------------------------------------------------------------------
 # PARCELAS
 # ---------------------------------------------------------------------------
+def _col(r, nombre):
+    """Columna que puede no existir todavia (bases anteriores a su migracion)."""
+    try:
+        return r[nombre]
+    except (IndexError, KeyError):
+        return None
+
+
 def _ficha_from_row(r):
     return {"propietario": r["propietario"] or "",
             "coordenadas": json.loads(r["coordenadas"]) if r["coordenadas"] else [],
             "superficie_ha": r["superficie_ha"] or 0.0,
-            "anio_inicio_monitoreo": r["anio_inicio"] or ""}
+            "anio_inicio_monitoreo": r["anio_inicio"] or "",
+            "provincia": _col(r, "provincia") or "",
+            "municipio": _col(r, "municipio") or "",
+            "sigpac": json.loads(_col(r, "sigpac")) if _col(r, "sigpac") else {}}
 
 
 def parcelas_dict():
@@ -315,13 +388,23 @@ def guardar_ficha(nombre, ficha):
     """Inserta/actualiza la parcela y sus cultivos por campana."""
     c = _c()
     with _LOCK:
-        c.execute("INSERT INTO parcelas(nombre,propietario,coordenadas,superficie_ha,anio_inicio) "
-                  "VALUES(?,?,?,?,?) ON CONFLICT(nombre) DO UPDATE SET "
+        # provincia/municipio/sigpac: si la ficha no los trae NO se pisan los que
+        # ya hubiera (COALESCE). Asi un guardado que no sabe de ellos -por ejemplo
+        # una version antigua del dialogo- no borra la ubicacion.
+        sig = ficha.get("sigpac") or None
+        c.execute("INSERT INTO parcelas(nombre,propietario,coordenadas,superficie_ha,"
+                  "anio_inicio,provincia,municipio,sigpac) VALUES(?,?,?,?,?,?,?,?) "
+                  "ON CONFLICT(nombre) DO UPDATE SET "
                   "propietario=excluded.propietario, coordenadas=excluded.coordenadas, "
-                  "superficie_ha=excluded.superficie_ha, anio_inicio=excluded.anio_inicio",
+                  "superficie_ha=excluded.superficie_ha, anio_inicio=excluded.anio_inicio, "
+                  "provincia=COALESCE(excluded.provincia, parcelas.provincia), "
+                  "municipio=COALESCE(excluded.municipio, parcelas.municipio), "
+                  "sigpac=COALESCE(excluded.sigpac, parcelas.sigpac)",
                   (nombre, ficha.get("propietario", ""),
                    json.dumps(ficha.get("coordenadas", []), ensure_ascii=False),
-                   ficha.get("superficie_ha", 0.0), ficha.get("anio_inicio_monitoreo", "")))
+                   ficha.get("superficie_ha", 0.0), ficha.get("anio_inicio_monitoreo", ""),
+                   ficha.get("provincia") or None, ficha.get("municipio") or None,
+                   json.dumps(sig, ensure_ascii=False) if sig else None))
         for camp, cult in (ficha.get("cultivos_por_campana") or {}).items():
             c.execute("INSERT INTO cultivos(nombre,campana,datos) VALUES(?,?,?) "
                       "ON CONFLICT(nombre,campana) DO UPDATE SET datos=excluded.datos",
@@ -345,7 +428,7 @@ def eliminar_parcela(nombre):
         # quedan huerfanas y una parcela nueva con el mismo nombre heredaria los datos
         # de la anterior (le pasaba a pasadas_radar y a validaciones).
         for t in ("pasadas", "pasadas_radar", "cultivos", "eventos",
-                  "validaciones", "parcelas"):
+                  "validaciones", "validaciones_indice", "parcelas"):
             c.execute(f"DELETE FROM {t} WHERE nombre=?", (nombre,))
         c.commit()
 
@@ -541,6 +624,75 @@ def eliminar_evento(parcela, campana, evento_id):
         c.execute("DELETE FROM eventos WHERE id=? AND nombre=? AND campana=?",
                   (evento_id, parcela, campana))
         c.commit()
+
+
+# ---------------------------------------------------------------------------
+# VALIDACIONES POR INDICE (las consume el modulo extraible calibracion_umbrales)
+# ---------------------------------------------------------------------------
+# Aqui solo se guarda y se lee. QUE se hace con estos datos -como se mueve un
+# umbral- vive en calibracion_umbrales.py, para poder borrarlo sin tocar nada.
+def guardar_validacion_indice(nombre, campana, fecha, indice, valor, especie, fase,
+                              dijo_sistema, dijo_usuario, ambito, clave_ambito):
+    """Anota lo que el usuario dice de UN indice en UNA pasada.
+
+    La clave incluye el ambito: la misma pasada puede corregirse a nivel de
+    parcela y, mas adelante, a nivel de municipio, y son dos hechos distintos.
+    Repetir la misma correccion la sustituye, no la duplica."""
+    c = _c()
+    clave = f"{nombre}|{campana}|{fecha}|{indice}|{ambito}|{clave_ambito or ''}"
+    with _LOCK:
+        c.execute("INSERT OR REPLACE INTO validaciones_indice(id,nombre,campana,fecha,indice,"
+                  "valor,especie,fase,dijo_sistema,dijo_usuario,ambito,clave_ambito,ts) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (clave, nombre, campana, fecha, indice,
+                   None if valor is None else float(valor), especie or "", fase or "",
+                   dijo_sistema or "", dijo_usuario or "", ambito or "parcela",
+                   clave_ambito or "", datetime.now().strftime("%Y-%m-%d %H:%M")))
+        c.commit()
+    return clave
+
+
+def validaciones_indice(indice=None, especie=None, fase=None, ambitos=None):
+    """Validaciones por indice, filtrando por lo que se necesite.
+
+    `ambitos` es una lista de pares (ambito, clave) -por ejemplo
+    [("parcela","La Vega"), ("municipio","47/186"), ("global","")]-. Devolver
+    todas juntas permite a quien llama decidir la precedencia."""
+    sql = "SELECT * FROM validaciones_indice WHERE 1=1"
+    args = []
+    for col, val in (("indice", indice), ("especie", especie), ("fase", fase)):
+        if val:
+            sql += f" AND {col}=?"
+            args.append(val)
+    if ambitos:
+        sql += " AND (" + " OR ".join(["(ambito=? AND clave_ambito=?)"] * len(ambitos)) + ")"
+        for a, k in ambitos:
+            args += [a, k or ""]
+    c = _c()
+    with _LOCK:
+        return [dict(r) for r in c.execute(sql + " ORDER BY ts", args)]
+
+
+def validaciones_indice_de_pasada(nombre, campana, fecha):
+    """Lo que el usuario dijo de cada indice en una pasada concreta."""
+    c = _c()
+    with _LOCK:
+        return {r["indice"]: dict(r) for r in c.execute(
+            "SELECT * FROM validaciones_indice WHERE nombre=? AND campana=? AND fecha=? "
+            "ORDER BY ts", (nombre, campana, fecha))}
+
+
+def pasadas_validadas(nombre, campana):
+    """Fechas de esa campana que tienen ALGUNA validacion (del diagnostico o de
+    un indice). Sirve para marcar en la lista cuales ya se han revisado."""
+    c = _c()
+    with _LOCK:
+        f = {r["fecha"] for r in c.execute(
+            "SELECT fecha FROM validaciones WHERE nombre=? AND campana=?", (nombre, campana))}
+        f |= {r["fecha"] for r in c.execute(
+            "SELECT DISTINCT fecha FROM validaciones_indice WHERE nombre=? AND campana=?",
+            (nombre, campana))}
+        return f
 
 
 # ---------------------------------------------------------------------------

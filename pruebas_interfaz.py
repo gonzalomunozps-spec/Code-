@@ -408,6 +408,91 @@ def escenario_cuaderno(P, DB):
     return f"{len(DB.rendimientos(NOM))} rendimientos, alto estable ({alto1} px)"
 
 
+def escenario_validacion_indices(P, DB):
+    """Desplegable de pasadas anteriores y validacion indice a indice.
+
+    Todo esto cuelga del modulo OPCIONAL calibracion_umbrales: si no esta, el
+    escenario se salta y la suite sigue verde."""
+    if getattr(P, "_CALIB", None) is None:
+        return "se omite (sin calibracion_umbrales)"
+    from tkinter import ttk
+    CAL = P._CALIB
+    root = _raiz()
+    P.aplicar_tema(root)
+    nb = ttk.Notebook(root)
+    nb.pack(fill="both", expand=True)
+    panel = P.PanelGestionParcelas(nb)
+    nb.add(panel, text="x")
+    ultima = {}
+    original = P.FichaParcela.__init__
+    P.FichaParcela.__init__ = lambda s, *a, **k: (ultima.__setitem__("f", s),
+                                                  original(s, *a, **k))[1]
+    root.update()
+
+    NOM = "Cerealista_Vega"
+    # se le pone ubicacion para que existan los cuatro ambitos
+    ficha = DB.ficha(NOM) or {}
+    ficha.update({"provincia": "47", "municipio": "47/186",
+                  "sigpac": {"Prov": "47", "Mun": "186", "Pol": "3", "Par": "12", "Rec": "1"}})
+    DB.guardar_ficha(NOM, ficha)
+    panel.mostrar_ficha(NOM)
+    root.update()
+    f = ultima["f"]
+
+    n_pasadas = len(DB.pasadas(NOM, panel.campana))
+    _paso("el desplegable lista todas las pasadas",
+          lambda: (_ for _ in ()).throw(AssertionError(
+              f"{len(f.cb_interp['values'])} opciones para {n_pasadas} pasadas"))
+          if len(f.cb_interp["values"]) != n_pasadas else None)
+    _paso("por defecto se muestra la ultima",
+          lambda: (_ for _ in ()).throw(AssertionError("no arranca en la ultima"))
+          if f.cb_interp.current() != n_pasadas - 1 else None)
+
+    # recorrer TODAS las pasadas anteriores: cada una se reinterpreta
+    def _recorrer():
+        for i in range(n_pasadas):
+            f.cb_interp.current(i)
+            f._cambiar_pasada_interp()
+            root.update()
+            if f._val_ctx["fecha"] != sorted(
+                    r["fecha"] for r in DB.pasadas(NOM, panel.campana))[i]:
+                raise AssertionError(f"la pasada {i} no interpreta su propio dia")
+    _paso("cada pasada del desplegable interpreta SU dia", _recorrer)
+
+    # validar la primera pasada indice a indice
+    f.cb_interp.current(0)
+    f._cambiar_pasada_interp()
+    root.update()
+    fecha0 = f._val_ctx["fecha"]
+    dlg = {}
+    _paso("abre el dialogo de validacion por indice",
+          lambda: dlg.__setitem__("v", P.DialogoValidacionIndices(root, f, f._idx_ctx)))
+    v = dlg.get("v")
+    if v is not None:
+        root.update()
+        _paso("hay un desplegable por cada indice medido",
+              lambda: (_ for _ in ()).throw(AssertionError("ningun indice en el dialogo"))
+              if not v.combos else None)
+        _paso("viene preseleccionado con lo que ve el sistema",
+              lambda: (_ for _ in ()).throw(AssertionError("desplegable vacio"))
+              if any(c.get() not in CAL.ESTADOS for c in v.combos.values()) else None)
+        _paso("ofrece los cuatro ambitos",
+              lambda: (_ for _ in ()).throw(AssertionError(f"{v.ambitos}"))
+              if len(v.ambitos) != 4 else None)
+        _paso("guardar anota las validaciones", lambda: (v._guardar(), root.update()))
+        guardadas = DB.validaciones_indice_de_pasada(NOM, panel.campana, fecha0)
+        _paso("quedan guardadas en la base",
+              lambda: (_ for _ in ()).throw(AssertionError("no se guardo nada"))
+              if not guardadas else None)
+        _paso("la pasada validada sale marcada en el desplegable",
+              lambda: (f.refrescar(), root.update(),
+                       (_ for _ in ()).throw(AssertionError("sin marca ✓"))
+                       if not str(f.cb_interp["values"][0]).startswith("✓") else None))
+    P.FichaParcela.__init__ = original
+    _derribar(root)
+    return f"{n_pasadas} pasadas recorridas y validadas"
+
+
 def escenario_dialogos(P, DB):
     """Cada ventana secundaria: se abre, se toca y se cierra."""
     import tkinter as tk
@@ -552,6 +637,7 @@ def escenario_cierre(P, DB):
 
 ESCENARIOS = [("arranque", escenario_arranque), ("lista de parcelas", escenario_lista),
               ("fichas de parcela", escenario_fichas), ("cuaderno y cosecha", escenario_cuaderno),
+              ("validacion por indice", escenario_validacion_indices),
               ("dialogos", escenario_dialogos), ("cierre a media sincronizacion", escenario_cierre)]
 
 

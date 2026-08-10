@@ -569,6 +569,147 @@ def _mensaje_error(fn, *args, **kw):
 
 
 # =====================================================================
+# 4b. UMBRALES POR FASE Y CALIBRACION POR VALIDACIONES
+# =====================================================================
+def pruebas_umbrales():
+    import fenologia_especies as FEN
+    from interpretacion_fenologica import evaluar_parcela
+
+    # --- estructura: las filas sin umbrales propios se comportan como siempre
+    check("umbrales: por defecto son los de antes (NDMI cruzando el cero)",
+          lambda: FEN.umbrales_de_fase(None),
+          lambda r: r["ndmi_min"] == 0.0 and r["lai_min"] == 2.0 and r["critica"] is False)
+    check("umbrales: lo declarado por la fase manda",
+          lambda: FEN.umbrales_de_fase({"ndmi_min": 0.22, "critica": True}),
+          lambda r: r["ndmi_min"] == 0.22 and r["critica"] is True and r["lai_min"] == 2.0)
+    check("umbrales: None significa 'aqui el indice no dice nada'",
+          lambda: FEN.umbrales_de_fase({"ndmi_min": None})["ndmi_min"], lambda r: r is None)
+    check("umbrales: no se han tocado los seis valores de siempre de ninguna fila",
+          lambda: [f for e in FEN.EXTENSIVO_ESPECIES.values() for f in e["fases"]
+                   if not (isinstance(f[3], float) and isinstance(f[4], float)
+                           and isinstance(f[5], bool))],
+          lambda r: r == [])
+
+    # --- el umbral sale de la FASE, no de una constante unica
+    def _ndmi_por_fase(especie, siembra, fecha):
+        serie = [{"fecha": fecha, "ndvi": 0.60, "ndmi": 0.05, "lai": 3.0}]
+        return evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie,
+                               spec={"especie": especie, "fecha_siembra": siembra})
+    check("umbrales: maiz en floracion con NDMI 0.05 -> avisa (umbral 0.22)",
+          lambda: _ndmi_por_fase("MAIZ", "2026-04-01", "2026-06-05"),
+          lambda d: "hidrico" in d["motivo"] and "floracion" in d["fase"])
+    check("umbrales: fase critica, se dice que lo es",
+          lambda: _ndmi_por_fase("MAIZ", "2026-04-01", "2026-06-05")["motivo"],
+          lambda t: "se lleva por delante el rendimiento" in t)
+    check("umbrales: trigo en rastrojo con NDMI -0.3 -> ya NO avisa (secarse es normal)",
+          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
+                                  [{"fecha": "2026-08-01", "ndvi": 0.10, "ndmi": -0.30, "lai": 0.3}],
+                                  spec={"especie": "TRIGO", "fecha_siembra": "2025-10-15"}),
+          lambda d: "hidrico" not in d["motivo"])
+    check("umbrales: en barbecho el NDMI no se juzga",
+          lambda: evaluar_parcela("BARBECHO", "",
+                                  [{"fecha": "2026-05-01", "ndvi": 0.10, "ndmi": -0.4}]),
+          lambda d: "hidrico" not in d["motivo"])
+
+    # --- calibracion (modulo OPCIONAL: si se borra, estas se omiten)
+    try:
+        import calibracion_umbrales as CAL
+    except Exception:
+        return
+    import almacen as DB
+    DB.conectar(os.path.join(tempfile.mkdtemp(), "cal.db"))
+    DB.guardar_ficha("Vega", {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 5,
+                              "provincia": "47", "municipio": "47/186"})
+    DB.guardar_ficha("Suelta", {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 5})
+    check("calibracion: los ambitos salen de la ubicacion guardada",
+          lambda: [a for a, _ in CAL.ambitos_de("Vega")],
+          lambda r: r == ["parcela", "municipio", "provincia", "global"])
+    check("calibracion: sin ubicacion solo hay parcela y global (no se inventa)",
+          lambda: [a for a, _ in CAL.ambitos_de("Suelta")], lambda r: r == ["parcela", "global"])
+
+    UMB = {"lo": 0.60, "hi": 0.92, "ndmi_min": 0.12, "lai_min": 3.0}
+    check("calibracion: veredicto del sistema por indice",
+          lambda: (CAL.veredicto_sistema("NDMI", 0.09, UMB),
+                   CAL.veredicto_sistema("NDVI", 0.95, UMB),
+                   CAL.veredicto_sistema("NDVI", 0.70, UMB)),
+          lambda r: r == ("bajo", "alto", "normal"))
+    check("calibracion: donde la fase no define umbral, no hay criterio",
+          lambda: CAL.veredicto_sistema("NDMI", -0.2, {"ndmi_min": None}),
+          lambda r: r == CAL.SIN_CRITERIO)
+    check("calibracion: los indices de contraste no son calibrables",
+          lambda: [i for i in ("EVI", "SAVI", "GNDVI", "MSAVI") if i in CAL.CALIBRABLES],
+          lambda r: r == [])
+
+    spec = {"especie": "TRIGO", "fecha_siembra": "2025-11-01"}
+    serie = [{"fecha": "2026-03-20", "ndvi": 0.70, "ndmi": 0.14, "lai": 3.2},
+             {"fecha": "2026-04-05", "ndvi": 0.72, "ndmi": 0.09, "lai": 3.3}]
+    d0 = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec, parcela="Vega")
+    FASE = d0["fase"]
+    check("calibracion: sin validaciones manda la tabla",
+          lambda: (d0["estado"], d0["umbrales"]["ndmi_min"]), lambda r: r == ("Vigilar", 0.12))
+
+    def _valida(n, ambito="municipio", parcela="Vega", dijo="normal"):
+        for k in range(n):
+            CAL.registrar(parcela, "2025-2026", f"2026-04-0{k + 1}", "TRIGO", FASE,
+                          {"NDMI": {"valor": 0.09 + k * 0.005, "sistema": "bajo"}},
+                          {"NDMI": dijo}, ambito)
+
+    _valida(1)
+    check("calibracion: UNA sola validacion no mueve el umbral",
+          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec,
+                                  parcela="Vega")["umbrales"]["ndmi_min"],
+          lambda r: r == 0.12)
+    _valida(2)
+    d1 = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec, parcela="Vega")
+    check("calibracion: con 2 coherentes el umbral baja y el estado cambia",
+          lambda: (d1["estado"], d1["umbrales"]["ndmi_min"] < 0.12), lambda r: r == ("OK", True))
+    check("calibracion: se explica de donde sale el umbral",
+          lambda: CAL.texto_calibracion(d1["umbrales"]),
+          lambda t: "municipio" in t and "validaciones" in t)
+    check("calibracion: la BIBLIOGRAFIA no se ha tocado",
+          lambda: dict(FEN.EXTENSIVO_ESPECIES["TRIGO"]["fases"][3][6]),
+          lambda r: r["ndmi_min"] == 0.12)
+    check("calibracion: sin pasar parcela se juzga con la tabla",
+          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie,
+                                  spec=spec)["umbrales"]["ndmi_min"], lambda r: r == 0.12)
+    check("calibracion: otra parcela del mismo municipio hereda el ajuste",
+          lambda: (DB.guardar_ficha("Otra", {"propietario": "x", "coordenadas": [[0, 0]],
+                                             "superficie_ha": 5, "provincia": "47",
+                                             "municipio": "47/186"}),
+                   evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec,
+                                   parcela="Otra")["umbrales"]["ndmi_min"])[1],
+          lambda r: r < 0.12)
+    check("calibracion: una parcela de OTRO municipio no se entera",
+          lambda: (DB.guardar_ficha("Lejos", {"propietario": "x", "coordenadas": [[0, 0]],
+                                              "superficie_ha": 5, "provincia": "09",
+                                              "municipio": "09/001"}),
+                   evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec,
+                                   parcela="Lejos")["umbrales"]["ndmi_min"])[1],
+          lambda r: r == 0.12)
+
+    # el tope: por muchas validaciones locas que haya, no se desmadra
+    def _desmadre():
+        for k in range(30):
+            CAL.registrar("Vega", "2025-2026", f"2027-01-{k + 1:02d}", "TRIGO", FASE,
+                          {"NDMI": {"valor": -0.45, "sistema": "bajo"}}, {"NDMI": "normal"},
+                          "parcela")
+        return evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec,
+                               parcela="Vega")["umbrales"]["ndmi_min"]
+    check("calibracion: el ajuste esta acotado (no se lo lleva una racha de errores)",
+          _desmadre, lambda r: r >= 0.12 - CAL.DESVIACION_MAX - 1e-9)
+    check("calibracion: manda el ambito MAS concreto (parcela sobre municipio)",
+          lambda: CAL.umbral_calibrado("NDMI", "ndmi_min", 0.12, "TRIGO", FASE,
+                                       CAL.ambitos_de("Vega"))["ambito"],
+          lambda r: r == "parcela")
+    check("calibracion: donde la tabla no define umbral, no se inventa uno",
+          lambda: CAL.umbral_calibrado("NDMI", "ndmi_min", None, "TRIGO", "rastrojo / cosecha",
+                                       CAL.ambitos_de("Vega")), lambda r: r is None)
+    check("almacen: las validaciones por indice se borran con la parcela",
+          lambda: (DB.eliminar_parcela("Vega"),
+                   DB.validaciones_indice(ambitos=[("parcela", "Vega")]))[1], lambda r: r == [])
+
+
+# =====================================================================
 # 5. CREDENCIALES (degradacion sin librerias externas)
 # =====================================================================
 def pruebas_credenciales():
@@ -736,8 +877,11 @@ def pruebas_almacen():
             return ("riego" in cols, v1, _uv(p_vieja))
         finally:
             DB.ESQUEMA_VERSION, DB._MIGRACIONES = orig_v, orig_m
+    # la version de destino se calcula, no se escribe: asi la prueba sigue valiendo
+    # cuando ESQUEMA_VERSION suba (antes estaba clavada a 2 y fallaba al subirla)
     check("esquema: aplica una migracion pendiente y no la repite",
-          _migracion_futura, lambda r: r[0] is True and r[1] == r[2] == 2)
+          _migracion_futura,
+          lambda r: r[0] is True and r[1] == r[2] == DB.ESQUEMA_VERSION + 1)
     # una base de una version MAS NUEVA no se toca
     p_futura = os.path.join(d_e, "futura.db")
     _c9 = _sq.connect(p_futura); _c9.execute("PRAGMA user_version=99"); _c9.commit(); _c9.close()
@@ -1489,7 +1633,7 @@ def pruebas_geo():
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
-              pruebas_cuaderno, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
+              pruebas_cuaderno, pruebas_umbrales, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente):
         try:

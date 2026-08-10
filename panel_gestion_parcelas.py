@@ -91,6 +91,14 @@ try:
 except Exception:
     _INFORME = None
 
+# Modulo OPCIONAL: calibracion de umbrales con las validaciones del usuario. Si se
+# borra calibracion_umbrales.py desaparecen el selector de pasada y la validacion
+# por indice, y el diagnostico vuelve a los valores de la tabla. Nada mas.
+try:
+    import calibracion_umbrales as _CALIB
+except Exception:
+    _CALIB = None
+
 
 def _abrir_archivo(ruta):
     """Abre un fichero con la aplicacion por defecto del sistema (multiplataforma)."""
@@ -997,13 +1005,21 @@ class PanelGestionParcelas(ttk.Frame):
     def abrir_alta_parcela(self):
         VentanaAltaParcela(self)
 
-    def guardar_parcela(self, nombre, propietario, tipo, spec, coords, campana=None):
+    def guardar_parcela(self, nombre, propietario, tipo, spec, coords, campana=None,
+                        sigpac=None):
         camp = campana or self.campana
         cerrado = coords + [coords[0]] if coords and coords[0] != coords[-1] else coords
         ficha = DB.ficha(nombre) or {}
         ficha.update({"propietario": propietario, "coordenadas": cerrado,
                       "superficie_ha": superficie_ha(cerrado),
                       "anio_inicio_monitoreo": ficha.get("anio_inicio_monitoreo", camp)})
+        # DONDE esta la parcela. Antes los 7 codigos SIGPAC se tecleaban, servian
+        # para bajar el recinto y se tiraban. Se guardan porque provincia y
+        # municipio son la unidad en la que se corrige un umbral para una comarca.
+        if sigpac and sigpac.get("Prov") and sigpac.get("Mun"):
+            ficha["provincia"] = str(sigpac["Prov"]).strip()
+            ficha["municipio"] = f"{str(sigpac['Prov']).strip()}/{str(sigpac['Mun']).strip()}"
+            ficha["sigpac"] = {k: str(v).strip() for k, v in sigpac.items() if str(v).strip()}
         # subtipo derivado (compatibilidad y visualizacion):
         #   leñoso -> tipo de plantacion segun el marco; cereal -> COSECHA_GRANO
         spec = dict(spec or {})
@@ -1213,6 +1229,11 @@ class VentanaAltaParcela(tk.Toplevel):
         self.e_nombre.insert(0, self.editar.replace("_", " "))
         self.e_nombre.config(state="readonly")     # el nombre identifica la parcela: no se cambia aqui
         self.e_prop.insert(0, ficha.get("propietario", ""))
+        # codigos SIGPAC guardados: se reponen para no tener que teclearlos otra vez
+        # (y para que editar sin tocarlos no borre la provincia y el municipio)
+        for k, v in (ficha.get("sigpac") or {}).items():
+            if k in self.sig and not self.sig[k].get():
+                self.sig[k].insert(0, str(v))
         cult = (ficha.get("cultivos_por_campana", {}) or {}).get(self.campana_edit, {})
         tipo = cult.get("tipo", "")
         if tipo:
@@ -1363,7 +1384,11 @@ class VentanaAltaParcela(tk.Toplevel):
             except ValueError:
                 return messagebox.showwarning("Marco", "Indica el marco de plantacion (calle y pie en metros).", parent=self)
 
-        self.panel.guardar_parcela(nombre, prop, tipo, spec, self.coords, campana=self.campana_edit)
+        # los codigos SIGPAC tecleados se guardan con la parcela (provincia y
+        # municipio), aunque el recinto se haya dibujado a mano despues
+        codigos = {k: e.get().strip() for k, e in self.sig.items()} if hasattr(self, "sig") else None
+        self.panel.guardar_parcela(nombre, prop, tipo, spec, self.coords,
+                                   campana=self.campana_edit, sigpac=codigos)
         if self.editar:
             messagebox.showinfo("OK", f"Cambios guardados en '{nombre.replace('_', ' ')}'.", parent=self)
             self.destroy()
@@ -1596,6 +1621,113 @@ class DialogoCorreccion(tk.Toplevel):
         self.ficha._validar("incorrecto", estado_real=estado_real, nota=nota,
                             solo_parcela=(self.ambito.get() == "parcela"))
         self.destroy()
+
+
+class DialogoValidacionIndices(tk.Toplevel):
+    """Validacion INDICE A INDICE de una pasada, con el alcance de la correccion.
+
+    Cada indice llega con lo que midio el satelite y con lo que el sistema opina
+    (bajo / normal / alto), ya preseleccionado en su desplegable: confirmar es no
+    tocar nada. Lo que se cambie mueve el umbral de ESE indice, en el alcance
+    elegido, sin tocar los valores de la bibliografia.
+
+    Vive detras del modulo opcional `calibracion_umbrales`: si se borra, ni este
+    dialogo ni su boton existen.
+    """
+
+    def __init__(self, master, ficha, ctx):
+        super().__init__(master)
+        self.ficha, self.ctx = ficha, ctx
+        self.title("Validar indices de la pasada")
+        self.configure(bg=TEMA["surface"])
+        self.resizable(False, False)
+        self.transient(master.winfo_toplevel())
+        self.lift()
+        self.after(60, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
+        self.grab_set()
+
+        cab = f"{ficha.nombre.replace('_', ' ')}  ·  {ctx.get('fecha', '?')}"
+        tk.Label(self, text=cab, bg=TEMA["surface"], fg=TEMA["text"],
+                 font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 0))
+        sub = f"Fase: {ctx.get('fase', '?')}"
+        if ctx.get("especie"):
+            sub = f"{ctx['especie']}  ·  " + sub
+        tk.Label(self, text=sub, bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=16)
+        tk.Label(self, text="Confirma o corrige lo que el sistema ve en cada indice. "
+                            "Ya viene marcado lo que opina: si estas de acuerdo, no toques nada.",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"],
+                 wraplength=470, justify="left").pack(anchor="w", padx=16, pady=(8, 4))
+
+        tabla = tk.Frame(self, bg=TEMA["surface"])
+        tabla.pack(fill="x", padx=16, pady=(0, 4))
+        for col, txt in enumerate(("Indice", "Valor", "El sistema ve", "Tu dices")):
+            tk.Label(tabla, text=txt, bg=TEMA["surface"], fg=TEMA["text_muted"],
+                     font=FUENTES["small"]).grid(row=0, column=col, sticky="w", padx=(0, 12))
+
+        previas = DB.validaciones_indice_de_pasada(ficha.nombre, ficha.campana,
+                                                   ctx.get("fecha", ""))
+        self.combos = {}
+        fila = 1
+        for idx in INDICES_ORDEN:
+            lec = (ctx.get("lecturas") or {}).get(idx) or {}
+            if lec.get("valor") is None:
+                continue                      # ese dia no se midio: no hay nada que validar
+            tk.Label(tabla, text=idx, bg=TEMA["surface"], fg=TEMA["text"],
+                     font=FUENTES["small"]).grid(row=fila, column=0, sticky="w", pady=1)
+            tk.Label(tabla, text=f"{lec['valor']:.3f}", bg=TEMA["surface"], fg=TEMA["text"],
+                     font=FUENTES["small"]).grid(row=fila, column=1, sticky="w", padx=(0, 12))
+            visto = lec.get("sistema", _CALIB.SIN_CRITERIO)
+            tk.Label(tabla, text=visto, bg=TEMA["surface"],
+                     fg=TEMA["danger_fg"] if visto == "bajo" else TEMA["text_sec"],
+                     font=FUENTES["small"]).grid(row=fila, column=2, sticky="w", padx=(0, 12))
+            cb = ttk.Combobox(tabla, state="readonly", width=10, values=_CALIB.ESTADOS)
+            # preseleccionado con lo que ya dijiste antes; si no, con lo que ve el
+            # sistema; y si el sistema no tiene criterio en esta fase, "normal"
+            anterior = (previas.get(idx) or {}).get("dijo_usuario")
+            cb.set(anterior or (visto if visto in _CALIB.ESTADOS else "normal"))
+            cb.grid(row=fila, column=3, sticky="w", pady=1)
+            self.combos[idx] = cb
+            if not lec.get("calibrable"):
+                tk.Label(tabla, text="(se anota, hoy no mueve umbral)", bg=TEMA["surface"],
+                         fg=TEMA["text_muted"], font=FUENTES["small"]).grid(
+                             row=fila, column=4, sticky="w", padx=(8, 0))
+            fila += 1
+
+        tk.Label(self, text="¿A que debe aplicarse lo que digas?", bg=TEMA["surface"],
+                 fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(10, 0))
+        self.ambitos = _CALIB.ambitos_disponibles(ficha.nombre)
+        self.cb_ambito = ttk.Combobox(self, state="readonly", width=34,
+                                      values=[t for _, t in self.ambitos])
+        self.cb_ambito.current(0)
+        self.cb_ambito.pack(anchor="w", padx=16, pady=(2, 0))
+        if len(self.ambitos) < 4:
+            tk.Label(self, text="Esta parcela no tiene municipio ni provincia guardados: "
+                                "capturala por SIGPAC o editala para poder corregir a ese nivel.",
+                     bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"],
+                     wraplength=470, justify="left").pack(anchor="w", padx=16, pady=(4, 0))
+
+        botones = tk.Frame(self, bg=TEMA["surface"])
+        botones.pack(fill="x", padx=16, pady=14)
+        ttk.Button(botones, text="  Guardar  ", style="Accent.TButton",
+                   command=self._guardar).pack(side="right")
+        ttk.Button(botones, text="  Cancelar  ", style="Ghost.TButton",
+                   command=self.destroy).pack(side="right", padx=(0, 8))
+
+    def _guardar(self):
+        ambito = self.ambitos[self.cb_ambito.current()][0]
+        respuestas = {idx: cb.get() for idx, cb in self.combos.items()}
+        n = _CALIB.registrar(self.ficha.nombre, self.ficha.campana, self.ctx.get("fecha"),
+                             self.ctx.get("especie"), self.ctx.get("fase"),
+                             self.ctx.get("lecturas"), respuestas, ambito)
+        self.destroy()
+        self.ficha.refrescar()          # el umbral puede haber cambiado ya
+        messagebox.showinfo("Validacion",
+                            f"Anotados {n} indice(s) para «{dict(self.ambitos)[ambito]}».\n\n"
+                            f"Hacen falta {_CALIB.MIN_OBSERVACIONES} validaciones coherentes "
+                            f"de la misma especie y fase para que un umbral se mueva.",
+                            parent=self.ficha.master)
 
 
 class DialogoSincronizarCampanas(tk.Toplevel):
@@ -2323,6 +2455,20 @@ class FichaParcela:
         card.pack(side="right", fill="both", padx=(7, 0))
         card.pack_propagate(False)
         self._titulo(card, "Interpretacion automatica")
+
+        # --- selector de pasada ---------------------------------------------
+        # Por defecto se ve la ultima, como siempre. El desplegable permite mirar
+        # -y validar- cualquier dia anterior: la marca ✓ dice cual ya revisaste.
+        # Solo aparece con el modulo opcional de calibracion.
+        if _CALIB is not None:
+            sel = tk.Frame(card, bg=TEMA["surface"])
+            sel.pack(fill="x", padx=12, pady=(0, 4))
+            tk.Label(sel, text="Pasada", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                     font=FUENTES["small"]).pack(side="left")
+            self.cb_interp = ttk.Combobox(sel, state="readonly", width=30)
+            self.cb_interp.pack(side="left", padx=(6, 0), fill="x", expand=True)
+            self.cb_interp.bind("<<ComboboxSelected>>", self._cambiar_pasada_interp)
+
         self.txt = tk.Text(card, wrap="word", height=8, bd=0, relief="flat",
                            bg="#f2f8ff", fg=TEMA["text"], font=FUENTES["body"],
                            padx=12, pady=10, highlightthickness=0)
@@ -2344,6 +2490,39 @@ class FichaParcela:
         self.btn_val_no = ttk.Button(botones, text="  ✗ Corregir…  ", style="Ghost.TButton",
                                      command=self._abrir_correccion)
         self.btn_val_no.pack(side="left", padx=(6, 0))
+        if _CALIB is not None:
+            self.btn_val_idx = ttk.Button(botones, text="  Indices…  ", style="Ghost.TButton",
+                                          command=self._abrir_validacion_indices)
+            self.btn_val_idx.pack(side="left", padx=(6, 0))
+
+    # ---- seleccion de la pasada que se interpreta ----
+    def _cambiar_pasada_interp(self, _=None):
+        """El usuario elige otro dia en el desplegable: se reinterpreta ESE dia."""
+        self._pasada_sel = self.cb_interp.current()
+        self._pintar_interp(getattr(self, "_regs_actual", []) or [])
+
+    def _indice_pasada(self, regs):
+        """Posicion de la pasada que hay que interpretar. Por defecto, la ultima.
+
+        Si el usuario habia elegido otra, se respeta mientras siga existiendo (al
+        sincronizar entran pasadas nuevas y la lista crece)."""
+        if not regs:
+            return -1
+        i = getattr(self, "_pasada_sel", None)
+        if i is None or not (0 <= i < len(regs)):
+            return len(regs) - 1
+        return i
+
+    def _refrescar_selector_pasadas(self, regs, idx):
+        if _CALIB is None or not hasattr(self, "cb_interp") or not self.cb_interp.winfo_exists():
+            return
+        validadas = DB.pasadas_validadas(self.nombre, self.campana)
+        etiquetas = [("✓ " if r.get("fecha") in validadas else "    ") + self._fmt(r["fecha"])
+                     for r in regs if r.get("fecha")]
+        if list(self.cb_interp["values"]) != etiquetas:
+            self.cb_interp["values"] = etiquetas
+        if etiquetas and 0 <= idx < len(etiquetas):
+            self.cb_interp.current(idx)
 
     def refrescar(self):
         # La ficha se destruye al abrir OTRA parcela. Si mientras tanto seguia
@@ -2499,17 +2678,26 @@ class FichaParcela:
         if not regs:
             self.txt.insert(tk.END, "Sin datos. Pulsa 'Sincronizar Copernicus'.")
             return
+        # Se interpreta la pasada ELEGIDA (por defecto la ultima). Para juzgar un dia
+        # anterior hay que darle al motor la serie HASTA ese dia: si se le pasara
+        # entera, las variaciones se calcularian contra pasadas del futuro.
+        idx = self._indice_pasada(regs)
+        regs = regs[:idx + 1]
         actual = regs[-1]
+        self._refrescar_selector_pasadas(
+            sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", "")), idx)
         cult = (DB.ficha(self.nombre) or {}).get("cultivos_por_campana", {}).get(self.campana, {})
         tipo, sub = cult.get("tipo", "BARBECHO"), cult.get("subtipo", "")
         spec = spec_de(cult)
 
-        # eventos del cuaderno cercanos a la ultima pasada (para el diagnostico)
+        # eventos del cuaderno cercanos a esa pasada (para el diagnostico)
         eventos_cerca = REG.eventos_cercanos(self.nombre, self.campana,
                                              actual.get("fecha", ""), ventana_dias=20)
 
-        # diagnostico fenologico (rapido, local): fase, estado, cubierta y eventos
-        diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec)
+        # diagnostico fenologico (rapido, local): fase, estado, cubierta y eventos.
+        # `parcela` solo sirve para aplicar los umbrales que tu hayas calibrado.
+        diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec,
+                               parcela=self.nombre)
         estado_bruto = diag["estado"]          # el que produce el motor (base del aprendizaje)
         cultivo_id = f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")
 
@@ -2541,6 +2729,15 @@ class FichaParcela:
         # contexto que se guarda al validar (se guarda el estado BRUTO, para aprender coherente)
         self._val_ctx = {"fecha": actual.get("fecha"), "fase": diag.get("fase"),
                          "estado": estado_bruto, "cultivo": cultivo_id}
+        # contexto del dialogo de validacion POR INDICE: que midio el satelite ese
+        # dia y que dice el sistema de cada indice con los umbrales de esa fase
+        if _CALIB is not None:
+            self._idx_ctx = {
+                "fecha": actual.get("fecha"), "fase": diag.get("fase"),
+                "especie": (spec or {}).get("especie", ""),
+                "lecturas": _CALIB.lectura_de_pasada(actual, diag.get("umbrales") or {},
+                                                     INDICES_ORDEN),
+                "umbrales": diag.get("umbrales") or {}}
 
         # ---- ENCABEZADO compartido por el render inmediato y el de la IA ----
         cab = f"[{diag['estado']}]  Fase: {diag['fase']}"
@@ -2644,6 +2841,16 @@ class FichaParcela:
         if not ctx or not ctx.get("fecha"):
             return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.", parent=self.master)
         DialogoCorreccion(self.master, self, ctx)
+
+    def _abrir_validacion_indices(self):
+        ctx = getattr(self, "_idx_ctx", None)
+        if _CALIB is None or not ctx or not ctx.get("fecha"):
+            return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.",
+                                       parent=self.master)
+        if not any(l.get("valor") is not None for l in (ctx.get("lecturas") or {}).values()):
+            return messagebox.showinfo("Validacion", "Esa pasada no trae ningun indice medido.",
+                                       parent=self.master)
+        DialogoValidacionIndices(self.master, self, ctx)
 
     # ================= CUADERNO DE CAMPO =================
     # Filas visibles del historico de rendimientos. El resto se alcanza con la

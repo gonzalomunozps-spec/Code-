@@ -55,6 +55,7 @@ Son la base testeable. Ninguno importa a otro.
 | `cultivo.py` | Modelo de cultivo: `spec_de`, `clave_cultivo`. |
 | `sigpac.py` | Consulta de recintos SIGPAC y parseo GeoJSON. La petición HTTP se **inyecta**, por eso se prueba sin red. |
 | `herbicida_contexto.py` | Interpretación del herbicida con LAI constante. **Opcional.** |
+| `calibracion_umbrales.py` | Ajusta los umbrales de los índices con las validaciones del usuario, por ámbito (parcela / municipio / provincia / global). No toca la bibliografía. **Opcional.** |
 
 ### Capa 1 — Datos
 | Módulo | Responsabilidad |
@@ -84,7 +85,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 296 pruebas sin pantalla ni red. |
+| `pruebas.py` | 321 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -137,15 +138,20 @@ todas las parcelas.
 6. **Ninguna ruta de datos es relativa al directorio de trabajo.** Todo se pide a
    `rutas.ruta(...)`. Si al arrancar hay un `parcelas.db` en el directorio actual
    y no en el de datos, se traslada una vez y queda anotado en la bitácora.
-7. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
+7. **Los umbrales de la bibliografía no se editan.** `fenologia_especies` es la
+   referencia agronómica. Lo que el usuario valida se guarda aparte y se aplica
+   como una capa encima (`calibracion_umbrales`), acotada y reversible. Donde la
+   tabla dice `ndmi_min: None` («aquí este índice no significa nada») no se
+   inventa un umbral por muchas validaciones que haya.
+8. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
    cambiarlo hay que subir `ESQUEMA_VERSION` y añadir su migración a
    `_MIGRACIONES` (receta completa en el docstring de `almacen.py`).
-8. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
+9. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
    superficie cosechada y el origen del dato se anotan a mano en un evento
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
    humedad comercial y no predice con ellos. Es el único dato objetivo del
    sistema: viene de la báscula, no de una imagen.
-9. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
+10. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
    registros antiguos sin campos nuevos. Convertirlas a `dataclass` cambiaría el
    formato de datos.
 
@@ -181,10 +187,13 @@ resto sigue igual**; no hay interruptor que tocar.
 
 - `informe_anual.py` → quita el botón «Informe / Exportar».
 - `herbicida_contexto.py` → el herbicida con LAI constante vuelve a «sin cambio claro».
+- `calibracion_umbrales.py` → desaparecen el selector de pasada y la validación por
+  índice; el diagnóstico vuelve a los umbrales de la tabla. Lo ya anotado se queda
+  en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 295, sin `informe_anual` 284,
-sin `herbicida_contexto` 293 — los tres en verde.
+Comprobado borrando cada fichero: completo 321, sin `informe_anual` 310,
+sin `herbicida_contexto` 319, sin `calibracion_umbrales` 304 — los cuatro en verde.
 
 ---
 
@@ -192,7 +201,7 @@ sin `herbicida_contexto` 293 — los tres en verde.
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 296 pruebas, sin pantalla ni red
+python pruebas.py          # 321 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
