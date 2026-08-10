@@ -795,8 +795,8 @@ class PanelGestionParcelas(ttk.Frame):
 
     def _actualizar_estado_sync(self):
         """Refresca el indicador de la cabecera a partir de ULTIMO_SYNC."""
-        if not hasattr(self, "lbl_sync"):
-            return
+        if not hasattr(self, "lbl_sync") or not self.lbl_sync.winfo_exists():
+            return          # la ventana se cerro mientras el hilo sincronizaba
         est = ULTIMO_SYNC.get("estado")
         self.lbl_sync.config(text=self._SYNC_TEXTO.get(est, self._SYNC_TEXTO[None]),
                              fg=self._SYNC_COLOR.get(est, self._SYNC_COLOR[None]))
@@ -871,6 +871,8 @@ class PanelGestionParcelas(ttk.Frame):
             sincronizacion.marca_guardar()
 
         def fin():
+            if not self.btn_sync.winfo_exists():
+                return      # se cerro el programa mientras sincronizaba todo
             self.btn_sync.config(text="  ↻ Sincronizar ahora  ", state="normal")
             self._actualizar_estado_sync()
             self._refrescar()
@@ -924,6 +926,8 @@ class PanelGestionParcelas(ttk.Frame):
         self._refrescar()
 
     def _refrescar(self):
+        if not hasattr(self, "tree") or not self.tree.winfo_exists():
+            return          # la ventana se cerro mientras el hilo sincronizaba
         self.tree.delete(*self.tree.get_children())   # vaciado en UNA llamada a Tk
         texto = self.entry_buscar.get().lower() if hasattr(self, "entry_buscar") else ""
         orden = self.cb_orden.get() if hasattr(self, "cb_orden") else "nombre"
@@ -2342,6 +2346,11 @@ class FichaParcela:
         self.btn_val_no.pack(side="left", padx=(6, 0))
 
     def refrescar(self):
+        # La ficha se destruye al abrir OTRA parcela. Si mientras tanto seguia
+        # sincronizando, el hilo vuelve por after() y se encuentra los widgets ya
+        # muertos: sin esta comprobacion salta TclError (invalid command name).
+        if not hasattr(self, "tv") or not self.tv.winfo_exists():
+            return
         regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
         self._radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
         self.tv.delete(*self.tv.get_children())       # vaciado en UNA llamada a Tk
