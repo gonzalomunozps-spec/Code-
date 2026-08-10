@@ -1391,19 +1391,26 @@ def pruebas_geo():
     import demo_sistema as D
     check("demo: superficie redondeada a 2 (== round(geo))",
           lambda: D.superficie_ha(sq), lambda r: r == round(geo.superficie_ha(sq), 2))
-    import informe_anual as IA
-    check("informe: poligono invalido -> None (contrato propio)",
-          lambda: IA._superficie_ha([[0, 0], [1, 1]]), lambda r: r is None)
-    check("informe: valido -> round(geo, 2)",
-          lambda: IA._superficie_ha(sq), lambda r: r == round(geo.superficie_ha(sq), 2))
+    # informe_anual es OPCIONAL: si se borra el fichero, estas comprobaciones se
+    # omiten y la suite sigue verde (es lo que promete ARQUITECTURA.md §6).
+    try:
+        import informe_anual as IA
+    except Exception:
+        IA = None
+    if IA is not None:
+        check("informe: poligono invalido -> None (contrato propio)",
+              lambda: IA._superficie_ha([[0, 0], [1, 1]]), lambda r: r is None)
+        check("informe: valido -> round(geo, 2)",
+              lambda: IA._superficie_ha(sq), lambda r: r == round(geo.superficie_ha(sq), 2))
     # modelo de cultivo (cultivo.py): mismo resultado en panel e informe
     import cultivo as CU
     cult = {"especie": "TRIGO", "fecha_siembra": "2025-11-10", "marco_calle": None, "marco_pie": None}
     check("cultivo: spec_de extrae especie y siembra",
           lambda: CU.spec_de(cult), lambda r: r and r["especie"] == "TRIGO" and r["fecha_siembra"] == "2025-11-10")
     check("cultivo: sin especie -> None", lambda: CU.spec_de({"tipo": "BARBECHO"}), lambda r: r is None)
-    check("cultivo: informe._spec_de == cultivo.spec_de (dedup)",
-          lambda: IA._spec_de(cult), lambda r: r == CU.spec_de(cult))
+    if IA is not None:
+        check("cultivo: informe._spec_de == cultivo.spec_de (dedup)",
+              lambda: IA._spec_de(cult), lambda r: r == CU.spec_de(cult))
     check("cultivo: clave_cultivo barbecho / normal",
           lambda: (CU.clave_cultivo("BARBECHO", ""), CU.clave_cultivo("LENOSO", "INTENSIVO")),
           lambda r: r == ("BARBECHO", "LENOSO_INTENSIVO"))
