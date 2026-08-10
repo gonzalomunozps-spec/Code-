@@ -84,7 +84,8 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 295 pruebas sin pantalla ni red. |
+| `pruebas.py` | 296 pruebas sin pantalla ni red. |
+| `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
 
@@ -191,7 +192,8 @@ sin `herbicida_contexto` 293 — los tres en verde.
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 295 pruebas, sin pantalla ni red
+python pruebas.py          # 296 pruebas, sin pantalla ni red
+python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
 ```
@@ -203,8 +205,11 @@ python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py 
 ```
 
 ### Límites conocidos de las pruebas
-- **No cubren la interfaz**: `pruebas.py` corre sin Tkinter a propósito. Los fallos
-  de la GUI hay que verificarlos abriendo la aplicación.
+- `pruebas.py` corre **sin Tkinter** a propósito, así que no ve nada de lo que
+  pasa dentro de la interfaz. Para eso está `pruebas_interfaz.py`, que monta la
+  aplicación de verdad y la recorre (`xvfb-run -a python pruebas_interfaz.py` en
+  un servidor sin pantalla). Lo que **ninguna** de las dos comprueba es el
+  aspecto: que no reviente no significa que se vea bien.
 - **No cubren Earth Engine ni la red**: requieren credenciales. `sigpac` sí se
   prueba porque la petición se inyecta; `descargar_mapa_*` **no tiene cobertura**
   (es la deuda técnica más clara que queda).
