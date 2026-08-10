@@ -2136,7 +2136,11 @@ class FichaParcela:
         self._build_graficas(inf)
         self._build_interp(inf)
 
-        inf2 = tk.Frame(cuerpo, bg=TEMA["page"], height=340)   # +60: lista de rendimientos
+        # 410 px = lo que MIDE el cuaderno completo (402) mas un margen. Es fijo a
+        # proposito, como el resto de filas: dentro del marco con scroll el contenido
+        # necesita altura real. Si se le queda corto, pack deja sin dibujar lo ultimo
+        # que hay dentro -que es la lista de rendimientos-, sin avisar de nada.
+        inf2 = tk.Frame(cuerpo, bg=TEMA["page"], height=410)
         inf2.pack(fill="x", pady=(14, 0))
         inf2.pack_propagate(False)
         self._build_cuaderno(inf2)
@@ -2633,6 +2637,10 @@ class FichaParcela:
         DialogoCorreccion(self.master, self, ctx)
 
     # ================= CUADERNO DE CAMPO =================
+    # Filas visibles del historico de rendimientos. El resto se alcanza con la
+    # barra: lo que NO puede es empujar el resto de la ficha.
+    ALTO_RENDIMIENTOS = 3
+
     def _build_cuaderno(self, parent):
         card = tarjeta(parent)
         card.pack(fill="both", expand=True)
@@ -2724,11 +2732,26 @@ class FichaParcela:
 
         # Historico de cosecha: lo unico medido en bascula, no interpretado.
         # Se listan TODAS las campanas, no solo la que se esta viendo.
-        tk.Label(card, text="Rendimientos registrados", bg=TEMA["surface"], fg=TEMA["text_sec"],
+        tk.Label(card, text="Rendimientos registrados  ·  se anotan con un evento COSECHA, "
+                           "que admite fechas de campanas anteriores",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).pack(anchor="w", padx=12)
-        self.lbl_rend = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                                 font=FUENTES["small"], justify="left", anchor="w")
-        self.lbl_rend.pack(fill="x", padx=12, pady=(0, 10))
+        # Lista ACOTADA (ALTO_RENDIMIENTOS filas) con su propia barra: el historico
+        # crece una linea por campana y esta ficha vive en un marco de altura fija,
+        # asi que una etiqueta multilinea acabaria comiendose la tabla de eventos o
+        # recortandose sola. Con la lista, ocupe lo que ocupe el historico, el alto
+        # del cuaderno no se mueve.
+        wrap_rend = tk.Frame(card, bg=TEMA["surface"])
+        wrap_rend.pack(fill="x", padx=12, pady=(2, 10))
+        self.lst_rend = tk.Listbox(wrap_rend, height=self.ALTO_RENDIMIENTOS,
+                                   font=FUENTES["small"], bd=1, relief="solid",
+                                   bg="#ffffff", fg=TEMA["text"],
+                                   highlightthickness=0, activestyle="none",
+                                   exportselection=False)
+        sb_rend = ttk.Scrollbar(wrap_rend, orient="vertical", command=self.lst_rend.yview)
+        self.lst_rend.configure(yscrollcommand=sb_rend.set)
+        self.lst_rend.pack(side="left", fill="x", expand=True)
+        sb_rend.pack(side="right", fill="y")
         self._toggle_campos_evento()
         self._refrescar_eventos()
 
@@ -2826,13 +2849,17 @@ class FichaParcela:
         self._refrescar_rendimientos()
 
     def _refrescar_rendimientos(self):
-        if not hasattr(self, "lbl_rend") or not self.lbl_rend.winfo_exists():
+        if not hasattr(self, "lst_rend") or not self.lst_rend.winfo_exists():
             return
         filas = DB.rendimientos(self.nombre)
-        self.lbl_rend.config(
-            text="\n".join(REG.linea_rendimiento(r) for r in filas) if filas else
-            "Sin rendimientos anotados. Se apuntan con un evento COSECHA; admite fechas de "
-            "campanas anteriores para cargar el historico.")
+        self.lst_rend.delete(0, tk.END)          # vaciado en UNA llamada a Tk
+        for r in filas:
+            self.lst_rend.insert(tk.END, REG.linea_rendimiento(r))
+        if filas:
+            self.lst_rend.see(tk.END)            # la campana mas reciente, a la vista
+        else:
+            self.lst_rend.insert(tk.END, "  (todavia no hay ninguno)")
+            self.lst_rend.itemconfig(0, foreground=TEMA["text_muted"])
 
     def _menu_evento(self, event):
         fila = self.tv_ev.identify_row(event.y)
