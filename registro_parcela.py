@@ -68,6 +68,18 @@ def admite_humedad_grano(cultivo):
             and (cultivo.get("subtipo") or "COSECHA_GRANO") == "COSECHA_GRANO")
 
 
+def admite_humedad_en_campana(cultivo_campana, cultivo_vista):
+    """Como `admite_humedad_grano`, pero para una COSECHA que puede caer en una
+    campana anterior.
+
+    Al cargar el historico de anos pasados esa campana casi nunca tiene cultivo
+    registrado: el agricultor empezo a usar el programa despues. Si se mirase solo
+    ahi, la humedad desapareceria JUSTO en el caso para el que se pide. Por eso,
+    cuando la campana de destino no dice nada, se hereda el cultivo de la campana
+    que se esta viendo, que es el de la parcela."""
+    return admite_humedad_grano(cultivo_campana or cultivo_vista)
+
+
 def campana_de_evento(tipo, iso, campana_vista):
     """Campana bajo la que se archiva un evento del cuaderno.
 

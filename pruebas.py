@@ -466,6 +466,16 @@ def pruebas_cuaderno():
           lambda r: r is False)
     check("cosecha: extensivo sin subtipo cuenta como grano (fichas antiguas)",
           lambda: REG.admite_humedad_grano({"tipo": "EXTENSIVO"}), lambda r: r is True)
+    # al cargar historico, la campana vieja no tiene cultivo registrado: se hereda
+    # el de la campana que se esta viendo, o la humedad desapareceria justo ahi
+    trigo = {"tipo": "EXTENSIVO", "subtipo": "COSECHA_GRANO"}
+    almendro = {"tipo": "LENOSO", "subtipo": "INTENSIVO"}
+    check("cosecha: campana vieja sin cultivo hereda el de la campana vista",
+          lambda: REG.admite_humedad_en_campana({}, trigo), lambda r: r is True)
+    check("cosecha: campana vieja sin cultivo, parcela de lenoso -> sigue sin humedad",
+          lambda: REG.admite_humedad_en_campana({}, almendro), lambda r: r is False)
+    check("cosecha: si la campana vieja SI declara cultivo, manda ella",
+          lambda: REG.admite_humedad_en_campana(almendro, trigo), lambda r: r is False)
     check("cosecha: numero_opcional acepta coma decimal",
           lambda: REG.numero_opcional(" 12,5 "), lambda r: r == 12.5)
     check("cosecha: numero_opcional vacio -> None",

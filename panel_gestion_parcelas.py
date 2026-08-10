@@ -2743,9 +2743,15 @@ class FichaParcela:
         (self.frame_prod.grid if tipo == "PRODUCTO" else self.frame_prod.grid_remove)()
         (self.frame_cosecha.grid if tipo == "COSECHA" else self.frame_cosecha.grid_remove)()
         if tipo == "COSECHA":
-            cult = self._cultivo_de(self._campana_evento(self.ev_fecha.get_iso()))
-            (self.frame_humedad.grid if REG.admite_humedad_grano(cult)
-             else self.frame_humedad.grid_remove)()
+            (self.frame_humedad.grid if self._admite_humedad(self._campana_evento(
+                self.ev_fecha.get_iso())) else self.frame_humedad.grid_remove)()
+
+    def _admite_humedad(self, campana):
+        """Si toca pedir la humedad del grano para una cosecha de esa campana. Las
+        campanas viejas no suelen tener cultivo registrado: se hereda el de la que
+        se esta viendo (ver REG.admite_humedad_en_campana)."""
+        return REG.admite_humedad_en_campana(self._cultivo_de(campana),
+                                             self._cultivo_de(self.campana))
 
     def _add_evento(self):
         fecha = self.ev_fecha.get_iso()
@@ -2766,14 +2772,13 @@ class FichaParcela:
                                                   "(o dejalo vacio para el automatico).")
                 ev["fecha_informe"] = informe
         elif ev["tipo"] == "COSECHA":
-            admite = REG.admite_humedad_grano(self._cultivo_de(campana))
-            # si la fecha ha llevado el evento a una campana cuyo cultivo no es grano,
-            # se avisa en vez de tirar el dato en silencio
+            admite = self._admite_humedad(campana)
+            # si el cultivo no es grano, se avisa en vez de tirar el dato en silencio
             if not admite and self.ev_humedad.get().strip():
                 self._toggle_campos_evento()
                 return messagebox.showwarning(
-                    "Cosecha", f"El cultivo de la campana {campana} no es grano de "
-                    "extensivo: ahi no se anota humedad. Borra ese campo para continuar.")
+                    "Cosecha", "Este cultivo no es grano de extensivo: ahi no se anota "
+                    "humedad de grano. Borra ese campo para continuar.")
             try:
                 ev.update(REG.datos_cosecha(
                     self.ev_rend.get(), self.ev_humedad.get(), self.ev_sup.get(),
