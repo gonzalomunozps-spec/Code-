@@ -482,6 +482,13 @@ def pruebas_cuaderno():
           lambda: REG.numero_opcional("   "), lambda r: r is None)
     check("cosecha: numero_opcional negativo -> error",
           lambda: _lanza(REG.numero_opcional, ValueError, "-3"), lambda r: r is True)
+    # 'nan' burlaria la comprobacion del signo y se escribiria como NaN (JSON invalido)
+    for _basura in ("nan", "inf", "-inf", "NaN", "Infinity"):
+        check(f"cosecha: numero_opcional rechaza '{_basura}'",
+              (lambda b: lambda: _lanza(REG.numero_opcional, ValueError, b))(_basura),
+              lambda r: r is True)
+    check("cosecha: 'nan' no llega a la base como NaN",
+          lambda: _lanza(REG.datos_cosecha, ValueError, "nan"), lambda r: r is True)
     check("cosecha: datos_cosecha completo",
           lambda: REG.datos_cosecha("4500", "12,5", "3.2", "bascula"),
           lambda r: r == {"rendimiento_kg_ha": 4500.0, "humedad_grano_pct": 12.5,

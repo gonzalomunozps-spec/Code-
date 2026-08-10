@@ -17,6 +17,7 @@ Dos funcionalidades que se apoyan en el diagnostico existente:
 Persistencia en JSON (misma carpeta que el resto de datos).
 """
 
+import math
 from datetime import datetime
 
 import almacen as DB     # el almacen (SQLite) guarda ahora los eventos
@@ -123,11 +124,18 @@ def numero_opcional(texto):
     """Texto -> numero, aceptando la coma decimal ('4,5' y '4.5' valen igual).
 
     Devuelve None si esta vacio. Lanza ValueError si no es un numero o si es
-    negativo (un rendimiento o una superficie negativos no existen)."""
+    negativo (un rendimiento o una superficie negativos no existen).
+
+    'nan' e 'inf' tambien se rechazan aunque float() los acepte: 'nan' burla la
+    comprobacion del signo (nan < 0 es False) y los dos acabarian escritos en la
+    base como NaN / Infinity, que NO son JSON valido y atragantan a cualquier
+    lector que no sea Python."""
     t = (texto or "").strip().replace(",", ".")
     if not t:
         return None
     v = float(t)                      # ValueError si no es un numero
+    if not math.isfinite(v):
+        raise ValueError("no es un numero valido")
     if v < 0:
         raise ValueError("no puede ser negativo")
     return v
