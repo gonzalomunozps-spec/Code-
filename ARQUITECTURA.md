@@ -32,7 +32,7 @@ El grafo de dependencias **no tiene ciclos**. Las capas van de abajo arriba:
 CAPA 3  ENTREGA        panel_gestion_parcelas.py   informe_anual.py*
            │                     │                        │
 CAPA 2b SATELITE       gee_cliente.py  ──►  mapas_cache.py   sincronizacion.py
-           │            (unico modulo que habla con Earth Engine; `ee` inyectable)
+           │            (unico que PIDE datos a Earth Engine; `ee` inyectable)
 CAPA 2  DOMINIO        interpretacion_fenologica.py  registro_parcela.py  sentinel1.py
            │                     │                        │
 CAPA 1  DATOS                 almacen.py ──► bitacora.py ──► rutas.py
@@ -74,7 +74,7 @@ Son la base testeable. Ninguno importa a otro.
 ### Capa 2b — Satélite (lo único que habla con Earth Engine)
 | Módulo | Responsabilidad |
 |---|---|
-| `gee_cliente.py` | Índices, sincronización incremental (óptico y radar) y descarga de mapas. El módulo `ee` es **inyectable**, por eso la descarga se prueba sin red. Tablas `INDICES`/`RADAR_VIS` y sesión HTTP compartida. |
+| `gee_cliente.py` | Índices, sincronización incremental (óptico y radar) y descarga de mapas. El único que usa Earth Engine **para obtener datos** (`credenciales.py` también importa `ee`, pero solo para probar la conexión y autenticar). El módulo `ee` es **inyectable**, por eso la descarga se prueba sin red. Tablas `INDICES`/`RADAR_VIS` y sesión HTTP compartida. |
 | `mapas_cache.py` | Nombres y rutas de los PNG cacheados, y su purga. |
 | `sincronizacion.py` | Cuándo toca sincronizar, marca del último sync y estado del último intento. |
 
@@ -84,7 +84,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 283 pruebas sin pantalla ni red. |
+| `pruebas.py` | 294 pruebas sin pantalla ni red. |
 
 ---
 
@@ -176,6 +176,8 @@ resto sigue igual**; no hay interruptor que tocar.
 - `herbicida_contexto.py` → el herbicida con LAI constante vuelve a «sin cambio claro».
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
+Comprobado borrando cada fichero: completo 294, sin `informe_anual` 283,
+sin `herbicida_contexto` 292 — los tres en verde.
 
 ---
 
@@ -183,7 +185,7 @@ Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 283 pruebas, sin pantalla ni red
+python pruebas.py          # 294 pruebas, sin pantalla ni red
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
 ```
