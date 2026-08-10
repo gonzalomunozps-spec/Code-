@@ -84,7 +84,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 294 pruebas sin pantalla ni red. |
+| `pruebas.py` | 295 pruebas sin pantalla ni red. |
 
 ---
 
@@ -165,6 +165,12 @@ todas las parcelas.
 | `CampoFecha` / `PopupCalendario` | Entrada de fecha con máscara y calendario. |
 | `PanelCredenciales` | Earth Engine y clave de OpenAI. |
 
+> **Cuidado:** `FichaParcela`, `LienzoMapa` y `PanelMapaComparado` **no son
+> widgets**: son clases normales que pintan sobre un `master`. Pasarles `self`
+> como padre de un widget lanza `AttributeError: ... has no attribute 'tk'`, y
+> como pasa dentro de un callback de Tk no se ve nada: el widget simplemente no
+> aparece. Usa `self.master`. Hay una prueba que lo vigila sobre el fuente.
+
 ---
 
 ## 6. Piezas opcionales (borrar el fichero y listo)
@@ -176,8 +182,8 @@ resto sigue igual**; no hay interruptor que tocar.
 - `herbicida_contexto.py` → el herbicida con LAI constante vuelve a «sin cambio claro».
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 294, sin `informe_anual` 283,
-sin `herbicida_contexto` 292 — los tres en verde.
+Comprobado borrando cada fichero: completo 295, sin `informe_anual` 284,
+sin `herbicida_contexto` 293 — los tres en verde.
 
 ---
 
@@ -185,7 +191,7 @@ sin `herbicida_contexto` 292 — los tres en verde.
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 294 pruebas, sin pantalla ni red
+python pruebas.py          # 295 pruebas, sin pantalla ni red
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
 ```

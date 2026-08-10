@@ -937,6 +937,39 @@ def pruebas_panel_helpers():
           lambda: tip({"fecha": "2026-05-05", "ndvi": 0.5}), lambda r: "Fiabilidad" not in r)
     check("tooltip: registro vacio -> cadena vacia", lambda: tip({}), lambda r: r == "" or "None" not in r)
 
+    # No todas las clases del panel son widgets: FichaParcela, LienzoMapa y
+    # PanelMapaComparado son clases normales que PINTAN sobre un master. Pasarles
+    # `self` como padre de un widget revienta con
+    #   AttributeError: 'FichaParcela' object has no attribute 'tk'
+    # y, como ocurre dentro de un callback de Tk, no se ve: el menu contextual del
+    # cuaderno simplemente no abria, y era la unica forma de borrar un evento.
+    # Se comprueba sobre el fuente porque la suite corre sin pantalla.
+    import ast as _ast
+    arbol = _ast.parse(src)
+    _WIDGET = ("tk.Frame", "tk.Toplevel", "ttk.Frame", "tk.Canvas", "tk.Tk")
+
+    def _es_widget(cls):
+        for b in cls.bases:
+            if (isinstance(b, _ast.Attribute)
+                    and f"{getattr(b.value, 'id', '')}.{b.attr}" in _WIDGET):
+                return True
+        return False
+
+    def _self_como_padre():
+        malos = []
+        for cls in [n for n in arbol.body if isinstance(n, _ast.ClassDef)]:
+            if _es_widget(cls):
+                continue                      # es un widget: `self` como padre es valido
+            for n in _ast.walk(cls):
+                if (isinstance(n, _ast.Call) and isinstance(n.func, _ast.Attribute)
+                        and getattr(n.func.value, "id", "") in ("tk", "ttk")
+                        and n.args and isinstance(n.args[0], _ast.Name)
+                        and n.args[0].id == "self"):
+                    malos.append(f"{cls.name}:{n.lineno} {n.func.attr}")
+        return malos
+    check("panel: ninguna clase que NO es widget se pasa a si misma como padre",
+          _self_como_padre, lambda r: r == [])
+
     # campanas_entre (para sincronizar anos anteriores): vive en campanas.py (modulo puro)
     from campanas import campanas_entre as ce
     check("campanas_entre: rango descendente inclusive",

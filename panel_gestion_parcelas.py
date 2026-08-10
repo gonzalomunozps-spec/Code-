@@ -2866,7 +2866,10 @@ class FichaParcela:
         if not fila:
             return
         self.tv_ev.selection_set(fila)
-        m = tk.Menu(self, tearoff=0, bg=TEMA["surface"], fg=TEMA["text"], bd=0)
+        # OJO: el padre es self.master, no self. FichaParcela NO es un widget (es
+        # una clase normal que pinta sobre master), asi que tk.Menu(self, ...)
+        # reventaba con AttributeError: 'FichaParcela' object has no attribute 'tk'.
+        m = tk.Menu(self.master, tearoff=0, bg=TEMA["surface"], fg=TEMA["text"], bd=0)
         m.add_command(label="  Ver efecto", command=self._ver_efecto_evento)
         m.add_separator()
         m.add_command(label="  Eliminar evento", command=self._eliminar_evento)
