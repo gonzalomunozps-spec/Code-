@@ -2106,10 +2106,10 @@ class FichaParcela:
                  bg=TEMA["header_bg"], fg="#fff", font=FUENTES["h2"]).pack(side="left")
         ttk.Button(cab, text="  \u21BB Sincronizar Copernicus  ", style="Ghost.TButton",
                    command=self.sincronizar).pack(side="right", padx=(0, 12), pady=10)
-        ttk.Button(cab, text="  \uD83D\uDCE1 Sentinel-1 (radar)  ", style="Ghost.TButton",
+        ttk.Button(cab, text="  \U0001F4E1 Sentinel-1 (radar)  ", style="Ghost.TButton",
                    command=self._sincronizar_radar).pack(side="right", padx=(0, 4), pady=10)
         if _INFORME is not None:      # boton solo si el modulo opcional esta presente
-            ttk.Button(cab, text="  \uD83D\uDCC4 Informe / Exportar  ", style="Ghost.TButton",
+            ttk.Button(cab, text="  \U0001F4C4 Informe / Exportar  ", style="Ghost.TButton",
                        command=self._menu_exportar).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u23F2 Campanas anteriores  ", style="Ghost.TButton",
                    command=self._sincronizar_anteriores).pack(side="right", padx=(0, 4), pady=10)

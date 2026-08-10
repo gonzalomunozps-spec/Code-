@@ -970,6 +970,22 @@ def pruebas_panel_helpers():
     check("panel: ninguna clase que NO es widget se pasa a si misma como padre",
           _self_como_padre, lambda r: r == [])
 
+    # Suplentes UTF-16 sueltos. Escribir un emoji como dos escapes ("\\uD83D\\uDCE1")
+    # NO produce el emoji: produce dos medios caracteres que no se pueden codificar en
+    # UTF-8. Al pasarselos a Tk saltaba UnicodeEncodeError y la ficha de parcela no
+    # llegaba a abrirse. Un emoji se escribe de una pieza: "\\U0001F4E1".
+    def _suplentes_sueltos():
+        malos = []
+        carpeta = os.path.dirname(os.path.abspath(__file__))
+        for f in sorted(x for x in os.listdir(carpeta) if x.endswith(".py")):
+            with open(os.path.join(carpeta, f), encoding="utf-8") as fh:
+                for i, linea in enumerate(fh, 1):
+                    if any(0xD800 <= ord(c) <= 0xDFFF for c in linea):
+                        malos.append(f"{f}:{i}")
+        return malos
+    check("fuente: ningun caracter a medias (suplentes UTF-16 sueltos)",
+          _suplentes_sueltos, lambda r: r == [])
+
     # campanas_entre (para sincronizar anos anteriores): vive en campanas.py (modulo puro)
     from campanas import campanas_entre as ce
     check("campanas_entre: rango descendente inclusive",
