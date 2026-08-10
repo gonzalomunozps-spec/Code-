@@ -1299,6 +1299,20 @@ def pruebas_rutas():
           lambda: R.purgar_png_antiguos(os.path.join(tempfile.mkdtemp(), "nada"), dias=30),
           lambda n: n == 0)
 
+    # la cache no puede impedir el arranque: si no se puede crear la carpeta (aqui
+    # se pone un FICHERO con ese nombre), el modulo tiene que importarse igual.
+    d3 = tempfile.mkdtemp()
+    open(os.path.join(d3, "cache_mapas"), "w").close()
+    check("cache: si no se puede crear la carpeta, el modulo importa igual",
+          lambda: _en_subproceso("import mapas_cache; print('ARRANCA')",
+                                 {"GESTOR_PARCELAS_DIR": d3}),
+          lambda r: r == "ARRANCA")
+    check("cache: y el panel puede seguir pidiendo rutas de PNG",
+          lambda: _en_subproceso("import mapas_cache as M; "
+                                 "print(M.ruta_cache_mapa('P', 'NDVI', '2026-01-01', 10))",
+                                 {"GESTOR_PARCELAS_DIR": d3}),
+          lambda r: r.endswith("P_NDVI_2026-01-01_10m.png"))
+
     check("rutas: bitacora y credenciales tambien cuelgan de ahi",
           lambda: _en_subproceso(
               "import bitacora, credenciales; print(bitacora.RUTA_LOG); "
