@@ -47,8 +47,8 @@ Son la base testeable. Ninguno importa a otro.
 
 | Módulo | Responsabilidad |
 |---|---|
-| `fenologia_especies.py` | Tablas por especie: fase según días desde siembra (extensivos) o mes + marco (leñosos). |
-| `contraste_indices.py` | Cruza índices entre sí para separar senescencia, estrés hídrico y malas hierbas; heterogeneidad intraparcela. |
+| `fenologia_especies.py` | Tablas por especie: fase según días desde siembra (extensivos) o mes + marco (leñosos). En leñosos, además, **fases fisiológicas** y umbrales por **régimen hídrico** (regadío/secano). |
+| `contraste_indices.py` | Cruza índices entre sí para separar senescencia, estrés hídrico y malas hierbas; heterogeneidad intraparcela. `separacion_copa_cubierta` reparte copa/cubierta en leñosos usando los percentiles de la pasada. |
 | `fechas.py` | Conversión ISO ↔ dd-mm-aaaa, máscara y validación al teclear. |
 | `geo.py` | Superficie de la parcela (fórmula del polígono). |
 | `campanas.py` | Campaña agrícola (sep–ago): actual, rango, listado. |
@@ -85,7 +85,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 321 pruebas sin pantalla ni red. |
+| `pruebas.py` | 348 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -138,7 +138,17 @@ todas las parcelas.
 6. **Ninguna ruta de datos es relativa al directorio de trabajo.** Todo se pide a
    `rutas.ruta(...)`. Si al arrancar hay un `parcelas.db` en el directorio actual
    y no en el de datos, se traslada una vez y queda anotado en la bitácora.
-7. **Los umbrales de la bibliografía no se editan.** `fenologia_especies` es la
+7. **En leñosos el juez es el MSAVI, no el NDVI.** El NDVI medio mezcla copa y
+   calle: un olivar puede salir «normal» con la copa floja y la hierba alta. El
+   vigor de copa se juzga con MSAVI, y con el percentil 90 cuando el marco da
+   para separar líneas. `separacion_copa_cubierta` es la **única** fuente del
+   veredicto copa/cubierta: antes había dos heurísticas que discrepaban en el
+   21 % de los casos, y la cabecera podía contradecir al diagnóstico.
+8. **El régimen hídrico manda sobre la especie en leñosos.** Un olivar de secano
+   en julio está en déficit por diseño. Donde el déficit es normal o buscado
+   (secano en verano, viña en envero) el NDMI **no se juzga**: `ndmi_min = None`.
+   Un régimen sin declarar cuenta como SECANO, que es el supuesto que no alarma.
+9. **Los umbrales de la bibliografía no se editan.** `fenologia_especies` es la
    referencia agronómica. Lo que el usuario valida se guarda aparte y se aplica
    como una capa encima (`calibracion_umbrales`), acotada y reversible. Donde la
    tabla dice `ndmi_min: None` («aquí este índice no significa nada») no se
@@ -192,8 +202,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 321, sin `informe_anual` 310,
-sin `herbicida_contexto` 319, sin `calibracion_umbrales` 304 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 348, sin `informe_anual` 337,
+sin `herbicida_contexto` 346, sin `calibracion_umbrales` 326 — los cuatro en verde.
 
 ---
 
@@ -201,7 +211,7 @@ sin `herbicida_contexto` 319, sin `calibracion_umbrales` 304 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 321 pruebas, sin pantalla ni red
+python pruebas.py          # 348 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

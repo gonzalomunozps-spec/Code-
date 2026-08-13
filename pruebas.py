@@ -636,9 +636,13 @@ def pruebas_umbrales():
     check("calibracion: donde la fase no define umbral, no hay criterio",
           lambda: CAL.veredicto_sistema("NDMI", -0.2, {"ndmi_min": None}),
           lambda r: r == CAL.SIN_CRITERIO)
+    # EVI, SAVI y GNDVI se usan por CONTRASTE entre ellos, no contra una constante:
+    # no hay umbral que mover. MSAVI si, porque es el indice de la copa en lenosos.
     check("calibracion: los indices de contraste no son calibrables",
-          lambda: [i for i in ("EVI", "SAVI", "GNDVI", "MSAVI") if i in CAL.CALIBRABLES],
+          lambda: [i for i in ("EVI", "SAVI", "GNDVI") if i in CAL.CALIBRABLES],
           lambda r: r == [])
+    check("calibracion: MSAVI si lo es (es el indice de la copa)",
+          lambda: "MSAVI" in CAL.CALIBRABLES, lambda r: r is True)
 
     spec = {"especie": "TRIGO", "fecha_siembra": "2025-11-01"}
     serie = [{"fecha": "2026-03-20", "ndvi": 0.70, "ndmi": 0.14, "lai": 3.2},
@@ -707,6 +711,159 @@ def pruebas_umbrales():
     check("almacen: las validaciones por indice se borran con la parcela",
           lambda: (DB.eliminar_parcela("Vega"),
                    DB.validaciones_indice(ambitos=[("parcela", "Vega")]))[1], lambda r: r == [])
+
+
+# =====================================================================
+# 4c. LEÑOSOS: FASES FISIOLOGICAS, REGIMEN HIDRICO Y COPA vs CUBIERTA
+# =====================================================================
+def pruebas_lenosos():
+    import fenologia_especies as FEN
+    from contraste_indices import separacion_copa_cubierta
+    from interpretacion_fenologica import evaluar_parcela
+
+    # --- fases fisiologicas, no meses con nombre generico
+    check("lenoso: cada especie declara su calendario fisiologico",
+          lambda: sorted(FEN.FASES_LENOSO), lambda r: r == ["ALMENDRO", "OLIVO", "PISTACHO", "VIÑA"])
+    check("lenoso: el olivo tiene su ventana critica de endurecimiento de hueso",
+          lambda: (FEN.FASES_LENOSO["OLIVO"][6], FEN.FASES_LENOSO["OLIVO"][7]),
+          lambda r: r == ("endurecimiento de hueso", "endurecimiento de hueso"))
+    check("lenoso: los 12 meses tienen fase en las cuatro especies",
+          lambda: [e for e, t in FEN.FASES_LENOSO.items() if sorted(t) != list(range(1, 13))],
+          lambda r: r == [])
+
+    # --- el regimen cambia el juicio con el MISMO dato
+    def _olivo(mes, reg, **kw):
+        base = {"fecha": f"2026-{mes:02d}-15", "ndvi": 0.55, "msavi": 0.42, "ndmi": 0.06,
+                "lai": 2.2, "evi": 0.33, "savi": 0.47, "gndvi": 0.52}
+        base.update(kw)
+        serie = [dict(base, fecha=f"2026-{mes:02d}-01"), base]
+        return evaluar_parcela("LENOSO", "INTENSIVO", serie,
+                               spec={"especie": "OLIVO", "marco_calle": 6.0,
+                                     "marco_pie": 5.0, "regimen": reg})
+    check("lenoso: en REGADIO un NDMI 0.06 en julio es aviso",
+          lambda: _olivo(7, "REGADIO")["estado"], lambda r: r in ("Vigilar", "Revisar"))
+    check("lenoso: en SECANO el mismo dato es normal (deficit por diseno)",
+          lambda: _olivo(7, "SECANO")["estado"], lambda r: r == "OK")
+    check("lenoso: y se explica por que no se avisa",
+          lambda: _olivo(7, "SECANO")["motivo"],
+          lambda t: "deficit hidrico es lo esperado" in t)
+    check("lenoso: la fase critica se dice",
+          lambda: _olivo(7, "REGADIO")["umbrales"].get("critica"), lambda r: r is True)
+    check("lenoso: un regimen desconocido cae en SECANO (el que no alarma)",
+          lambda: FEN.regimen_valido("lo que sea"), lambda r: r == "SECANO")
+    check("lenoso: sin regimen declarado, tambien SECANO",
+          lambda: _olivo(7, None)["estado"], lambda r: r == "OK")
+
+    # --- viña en envero: el deficit es intencionado
+    def _vina(mes):
+        base = {"fecha": f"2026-{mes:02d}-15", "ndvi": 0.50, "msavi": 0.38, "ndmi": -0.02,
+                "lai": 1.9, "evi": 0.30, "savi": 0.43, "gndvi": 0.47}
+        return evaluar_parcela("LENOSO", "INTENSIVO",
+                               [dict(base, fecha=f"2026-{mes:02d}-01"), base],
+                               spec={"especie": "VIÑA", "marco_calle": 2.5,
+                                     "marco_pie": 1.2, "regimen": "REGADIO"})
+    check("lenoso: viña en envero -> el deficit es buscado, no se alarma",
+          lambda: (_vina(7)["fase"], _vina(7)["estado"]), lambda r: r == ("envero", "OK"))
+    check("lenoso: viña en floracion SI se juzga el agua",
+          lambda: FEN.fase_lenoso("VIÑA", "2026-06-15", 2.5, 1.2, "REGADIO")["ndmi_min"],
+          lambda r: r == 0.16)
+
+    # --- sin hoja no se juzga ningun indice de copa
+    check("lenoso: en parada sin hoja no hay umbral de copa ni de agua",
+          lambda: FEN.fase_lenoso("ALMENDRO", "2026-01-15", 6.0, 5.0, "REGADIO"),
+          lambda d: d["msavi_min"] is None and d["ndmi_min"] is None and d["sin_hoja"] is True)
+
+    # --- la densidad del marco escala el umbral de copa
+    check("lenoso: un seto exige mas MSAVI que un olivar tradicional",
+          lambda: (FEN.fase_lenoso("OLIVO", "2026-07-15", 12.0, 12.0, "REGADIO")["msavi_min"],
+                   FEN.fase_lenoso("OLIVO", "2026-07-15", 1.5, 1.2, "REGADIO")["msavi_min"]),
+          lambda r: r[0] < r[1])
+
+    # --- separacion copa / cubierta
+    def _sep(marco, con_percentiles, mes=3):
+        reg = {"fecha": f"2026-{mes:02d}-20", "ndvi": 0.52, "msavi": 0.36, "lai": 1.3,
+               "evi": 0.28, "gndvi": 0.50, "savi": 0.44, "ndmi": 0.22}
+        if con_percentiles:
+            reg.update({"p10": 0.42, "p50": 0.52, "p90": 0.66})
+        serie = [dict(reg, fecha=f"2026-{mes:02d}-01", ndvi=0.42, msavi=0.30), reg]
+        fase = FEN.fase_lenoso("OLIVO", reg["fecha"], marco, marco, "SECANO")
+        return separacion_copa_cubierta(serie, fase, reg)
+    check("copa/cubierta: con marco ancho y percentiles, confianza alta",
+          lambda: _sep(14.0, True)["confianza"], lambda r: r == "alta")
+    check("copa/cubierta: con marco estrecho baja la confianza (el pixel no separa)",
+          lambda: _sep(6.0, True)["confianza"], lambda r: r == "media")
+    check("copa/cubierta: sin percentiles, confianza baja",
+          lambda: _sep(14.0, False)["confianza"], lambda r: r == "baja")
+    check("copa/cubierta: el p90 sirve de proxy de la copa",
+          lambda: _sep(14.0, True), lambda s: s["copa_ndvi_p90"] == 0.66 and s["copa_msavi"] is not None)
+    check("copa/cubierta: la calle verde en primavera cuenta como cubierta",
+          lambda: _sep(14.0, True)["evidencias_cubierta"],
+          lambda r: any("calle esta verde" in e for e in r))
+    check("copa/cubierta: un solo veredicto, no dos vocabularios",
+          lambda: _sep(14.0, True)["veredicto"],
+          lambda r: r in ("cubierta vegetal dominando la senal", "posible aporte de cubierta",
+                          "senal atribuible a la copa",
+                          "el arbol esta sin hoja: todo el verde es cubierta o suelo"))
+    # antes habia DOS heuristicas: la cabecera podia decir "cubierta probable"
+    # mientras el juicio iba por la copa. Ahora el veredicto que se ensena es el
+    # mismo que decide con que indice se juzga.
+    def _coherencia():
+        malos = []
+        for mes in range(1, 13):
+            for ndvi, msavi in ((0.25, 0.20), (0.45, 0.28), (0.60, 0.50), (0.70, 0.44)):
+                reg = {"fecha": f"2026-{mes:02d}-20", "ndvi": ndvi, "msavi": msavi,
+                       "lai": 1.5, "ndmi": 0.18, "evi": ndvi * 0.6, "savi": ndvi * 0.85,
+                       "gndvi": ndvi * 0.95, "p10": ndvi - 0.08, "p50": ndvi, "p90": ndvi + 0.08}
+                serie = [dict(reg, fecha=f"2026-{mes:02d}-05"), reg]
+                d = evaluar_parcela("LENOSO", "INTENSIVO", serie,
+                                    spec={"especie": "OLIVO", "marco_calle": 14.0,
+                                          "marco_pie": 12.0, "regimen": "REGADIO"})
+                cub = (d.get("cubierta") or {}).get("hipotesis_preliminar", "")
+                sep = ((d.get("copa") or {}).get("separacion") or {})
+                if cub and sep and cub != sep.get("veredicto"):
+                    malos.append((mes, ndvi, cub, sep.get("veredicto")))
+        return malos
+    check("copa/cubierta: la cabecera y el juicio nunca se contradicen",
+          _coherencia, lambda r: r == [])
+    check("copa/cubierta: sin hoja lo dice sin rodeos",
+          lambda: separacion_copa_cubierta(
+              [{"fecha": "2026-01-20", "ndvi": 0.30, "msavi": 0.20, "lai": 0.5, "evi": 0.15}],
+              FEN.fase_lenoso("ALMENDRO", "2026-01-20", 6.0, 5.0, "SECANO"))["veredicto"],
+          lambda r: "sin hoja" in r)
+
+    # --- calibracion: los sistemas no se contaminan entre si
+    try:
+        import calibracion_umbrales as CAL
+    except Exception:
+        return
+    import almacen as DB
+    DB.conectar(os.path.join(tempfile.mkdtemp(), "len.db"))
+    for n in ("Reg", "Sec"):
+        DB.guardar_ficha(n, {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 8,
+                             "provincia": "23", "municipio": "23/050"})
+    spec = {"especie": "OLIVO", "marco_calle": 6.0, "marco_pie": 5.0}
+    serie = [{"fecha": "2026-06-20", "ndvi": 0.52, "msavi": 0.34, "ndmi": 0.13, "lai": 2.0},
+             {"fecha": "2026-07-10", "ndvi": 0.50, "msavi": 0.33, "ndmi": 0.12, "lai": 1.9}]
+    d = evaluar_parcela("LENOSO", "INTENSIVO", serie, spec=dict(spec, regimen="REGADIO"),
+                        parcela="Reg")
+    check("lenoso: la clave de calibracion separa regimen y densidad",
+          lambda: CAL.sistema_de(d["umbrales"]), lambda r: r == ("REGADIO", "intensivo"))
+    for f, v in (("2026-07-10", 0.33), ("2026-06-20", 0.34)):
+        CAL.registrar("Reg", "2025-2026", f, "OLIVO", d["fase"],
+                      {"MSAVI": {"valor": v, "sistema": "bajo"}}, {"MSAVI": "normal"},
+                      "municipio", umbrales=d["umbrales"])
+    d2 = evaluar_parcela("LENOSO", "INTENSIVO", serie, spec=dict(spec, regimen="REGADIO"),
+                         parcela="Reg")
+    check("lenoso: validar el MSAVI mueve el umbral de copa",
+          lambda: d2["umbrales"]["msavi_min"] < d["umbrales"]["msavi_min"], lambda r: r is True)
+    d3 = evaluar_parcela("LENOSO", "INTENSIVO", serie, spec=dict(spec, regimen="SECANO"),
+                         parcela="Sec")
+    check("lenoso: el SECANO del mismo municipio NO hereda lo del regadio",
+          lambda: d3["umbrales"]["msavi_min"],
+          lambda r: r == FEN.fase_lenoso("OLIVO", "2026-07-10", 6.0, 5.0, "SECANO")["msavi_min"])
+    check("lenoso: la bibliografia sigue intacta",
+          lambda: FEN.UMBRALES_LENOSO["OLIVO"]["endurecimiento de hueso"]["REGADIO"]["msavi_min"],
+          lambda r: r == 0.38)
 
 
 # =====================================================================
@@ -882,6 +1039,31 @@ def pruebas_almacen():
     check("esquema: aplica una migracion pendiente y no la repite",
           _migracion_futura,
           lambda r: r[0] is True and r[1] == r[2] == DB.ESQUEMA_VERSION + 1)
+    # Regresion: un indice sobre columnas que anade una migracion NO puede estar en
+    # _crear_tablas. En una base que ya existe, CREATE TABLE IF NOT EXISTS no anade
+    # las columnas y el CREATE INDEX revienta al abrirla ("no such column").
+    def _base_de_cada_version():
+        fallos = []
+        for v in range(0, DB.ESQUEMA_VERSION):
+            p = os.path.join(d_e, f"v{v}.db")
+            c0 = _sq.connect(p)
+            c0.executescript("""
+                CREATE TABLE IF NOT EXISTS parcelas(nombre TEXT PRIMARY KEY, propietario TEXT,
+                    coordenadas TEXT, superficie_ha REAL, anio_inicio TEXT);
+                CREATE TABLE IF NOT EXISTS validaciones_indice(id TEXT PRIMARY KEY,
+                    nombre TEXT, campana TEXT, fecha TEXT, indice TEXT, valor REAL,
+                    especie TEXT, fase TEXT, dijo_sistema TEXT, dijo_usuario TEXT,
+                    ambito TEXT, clave_ambito TEXT, ts TEXT);""")
+            c0.execute(f"PRAGMA user_version={v}")
+            c0.commit(); c0.close()
+            try:
+                DB.conectar(p); DB.cerrar()
+            except Exception as e:
+                fallos.append(f"v{v}: {type(e).__name__}: {e}")
+        return fallos
+    check("esquema: una base de CUALQUIER version anterior se abre sin reventar",
+          _base_de_cada_version, lambda r: r == [])
+
     # una base de una version MAS NUEVA no se toca
     p_futura = os.path.join(d_e, "futura.db")
     _c9 = _sq.connect(p_futura); _c9.execute("PRAGMA user_version=99"); _c9.commit(); _c9.close()
@@ -1633,7 +1815,7 @@ def pruebas_geo():
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
-              pruebas_cuaderno, pruebas_umbrales, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
+              pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente):
         try:

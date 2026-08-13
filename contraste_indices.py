@@ -127,11 +127,159 @@ def contrastes(serie):
 # =====================================================================
 # 2. DIAGNOSTICO EN LENOSOS: ¿el verde es de la copa o de la cubierta?
 # =====================================================================
+# =====================================================================
+# 2b. COPA CONTRA CUBIERTA: UNA SOLA LECTURA
+# =====================================================================
+# Habia DOS heuristicas que calculaban esto por separado, con umbrales distintos
+# y vocabularios distintos (`detectar_cubierta` en interpretacion_fenologica y
+# `diagnostico_lenoso` aqui). Medido sobre 1.152 combinaciones, discrepaban en el
+# 21 % de los casos: una decia "cubierta probable" y la otra "senal de la copa".
+# `separacion_copa_cubierta` las sustituye a las dos.
+#
+# QUE INDICES MIRAN LA COPA Y CUALES EL SUELO
+#   MSAVI  corrige el efecto del suelo -> es el que mejor ve la COPA
+#   EVI    resistente a suelo y atmosfera, satura menos que el NDVI
+#   LAI    estructura: verde CON volumen
+#   NDVI   mezcla copa y calle -> el peor juez en lenosos, pero util por contraste
+#
+# Y LAS RELACIONES, que es donde esta la informacion
+#   NDVI - MSAVI   alto  -> hay verde que la correccion de suelo se lleva: fondo
+#   NDVI / EVI     alto  -> saturacion o senal de fondo
+#   LAI / NDVI     bajo  -> verde sin estructura, o sea hierba y no copa
+#   GNDVI / NDVI   alto  -> hoja densa y con clorofila: copa de verdad
+#
+# LA EVIDENCIA PRINCIPAL, SI ESTA: LOS PERCENTILES
+# En una parcela con calles la distribucion de NDVI dentro de la parcela es
+# BIMODAL: los pixeles con copa arriba, los de calle abajo. El programa ya guarda
+# p10/p50/p90 de cada pasada y hasta ahora solo los ensenaba en una tabla.
+#   p90         mucho mejor proxy del vigor de COPA que la media
+#   p10         en la ventana de cubierta, delata hierba viva entre lineas
+#   p90 - p10   dice si las calles llegan a distinguirse
+#
+# LIMITE HONESTO: a 10 m de pixel, un olivar tradicional a marco 10x10 no tiene
+# NI UN pixel puro de copa; todos mezclan. El metodo funciona bien en dosel
+# continuo y marcos anchos, y se degrada en medio. Por eso se devuelve
+# `confianza`, y con marco estrecho baja a "baja" en vez de fingir precision.
+_MARCO_FIABLE = 12.0        # m de calle a partir de los cuales el pixel separa
+
+
+def separacion_copa_cubierta(serie, fase_esp, reg=None):
+    """Reparte la senal entre COPA y CUBIERTA/suelo, con la confianza que toca.
+
+    `fase_esp` es lo que devuelve `fenologia_especies.fase_lenoso` (trae marco,
+    factor de densidad, ventana de cubierta y si el arbol esta sin hoja).
+    `reg` es la pasada, para leer sus percentiles; si no se pasa, la ultima.
+    """
+    if not serie:
+        return None
+    reg = reg or serie[-1]
+    c = contrastes(serie) or {}
+    fase_esp = fase_esp or {}
+    ndvi = _g(reg, "ndvi")
+    if ndvi is None:
+        return None
+
+    p10, p50, p90 = _g(reg, "p10"), _g(reg, "p50"), _g(reg, "p90")
+    hay_perc = None not in (p10, p90)
+    marco = fase_esp.get("marco_calle") or 0
+    # el pixel separa copa de calle si la calle es ancha, O si el dosel es continuo
+    # (un seto no tiene calle que resolver: casi todo el pixel es copa)
+    seto = "seto" in (fase_esp.get("tipo") or "") or "alta densidad" in (fase_esp.get("tipo") or "")
+    confianza = ("baja" if not hay_perc else
+                 "alta" if (marco >= _MARCO_FIABLE or seto) else "media")
+
+    # --- vigor de copa: MSAVI, y con el p90 cuando se puede -----------------
+    msavi = _g(reg, "msavi")
+    # el p90 es de NDVI; se traslada a escala MSAVI con la brecha observada, que
+    # es exactamente lo que el MSAVI le quita al NDVI en esta parcela y este dia
+    brecha = c.get("brecha_suelo")
+    copa_ndvi = p90 if hay_perc else ndvi
+    copa_msavi = None
+    if copa_ndvi is not None and brecha is not None:
+        copa_msavi = round(max(0.0, copa_ndvi - brecha), 3)
+    elif msavi is not None:
+        copa_msavi = msavi
+
+    # --- cuanto verde hay en la calle ---------------------------------------
+    calle = p10 if hay_perc else None
+    amplitud = round(p90 - p10, 3) if hay_perc else None
+
+    # --- evidencias, con UN solo vocabulario --------------------------------
+    ev_cubierta, ev_copa = [], []
+    if brecha is not None:
+        if brecha > 0.12:
+            ev_cubierta.append(f"brecha NDVI-MSAVI {brecha}: hay verde que la correccion "
+                               f"de suelo se lleva, luego esta en el fondo")
+        elif brecha < 0.05:
+            ev_copa.append(f"brecha NDVI-MSAVI {brecha}: el verde aguanta la correccion "
+                           f"de suelo, es dosel")
+    lpn = c.get("lai_por_ndvi")
+    if lpn is not None:
+        if lpn < 2.2:
+            ev_cubierta.append(f"poca area foliar para el verdor (LAI/NDVI={lpn}): "
+                               f"verde sin estructura")
+        elif lpn > 3.2:
+            ev_copa.append(f"mucha area foliar por unidad de verdor (LAI/NDVI={lpn}): "
+                           f"dosel denso")
+    gn = c.get("gndvi_ndvi")
+    if gn is not None and gn > 1.05:
+        ev_copa.append(f"GNDVI/NDVI={gn}: hoja densa y con clorofila, propia de copa")
+    ne = c.get("ndvi_evi")
+    if ne is not None and ne > 2.2:
+        ev_cubierta.append(f"NDVI/EVI={ne}: el NDVI va muy por delante del EVI, "
+                           f"senal de fondo")
+    dvl = c.get("divergencia_ndvi_lai")
+    if dvl is not None:
+        if dvl > 0.06:
+            ev_cubierta.append(f"el NDVI sube sin que el LAI acompane ({dvl})")
+        elif dvl < -0.02:
+            ev_copa.append(f"el LAI crece junto al NDVI ({dvl}): estructura de copa")
+    if hay_perc:
+        if calle is not None and calle > 0.30 and fase_esp.get("ventana_cubierta"):
+            ev_cubierta.append(f"el 10 % peor de la parcela ya esta en {calle}: "
+                               f"la calle esta verde")
+        if amplitud is not None and amplitud > 0.25:
+            ev_copa.append(f"p90-p10={amplitud}: las lineas se distinguen del suelo")
+        elif amplitud is not None and amplitud < 0.10 and fase_esp.get("ventana_cubierta"):
+            ev_cubierta.append(f"p90-p10={amplitud}: la parcela esta verde por igual, "
+                               f"copa y calle no se separan")
+    if c.get("agua_sin_dosel"):
+        ev_cubierta.append("NDMI alto con LAI bajo: el agua esta a ras de suelo")
+    if fase_esp.get("ventana_cubierta"):
+        ev_cubierta.append("epoca en que la cubierta suele estar viva")
+    else:
+        ev_copa.append("fuera de la ventana de cubierta (agostada)")
+
+    n_cub, n_copa = len(ev_cubierta), len(ev_copa)
+    if fase_esp.get("sin_hoja") or fase_esp.get("invierno_sin_hoja"):
+        veredicto, domina = "el arbol esta sin hoja: todo el verde es cubierta o suelo", True
+    elif n_cub >= 3 and n_cub > n_copa:
+        veredicto, domina = "cubierta vegetal dominando la senal", True
+    elif n_cub > n_copa:
+        veredicto, domina = "posible aporte de cubierta", False
+    else:
+        veredicto, domina = "senal atribuible a la copa", False
+
+    # bandera explicita: quien consume NO debe buscar la palabra "cubierta" dentro
+    # del texto. Se hacia asi y bastaba cambiar una frase para alterar el juicio.
+    return {"veredicto": veredicto, "cubierta_domina": domina, "confianza": confianza,
+            "copa_msavi": copa_msavi, "copa_ndvi_p90": p90, "calle_ndvi_p10": p10,
+            "mediana": p50, "amplitud": amplitud,
+            "evidencias_cubierta": ev_cubierta, "evidencias_copa": ev_copa,
+            "contrastes": c,
+            "nota": ("El vigor de la copa se juzga con MSAVI (y con el percentil 90 "
+                     "cuando la parcela tiene bastantes pixeles), porque el NDVI medio "
+                     "mezcla copa y calle.")}
+
+
 def diagnostico_lenoso(serie, fecha_iso, subtipo=""):
     """
     Decide, SOLO por contraste entre indices, si el verdor procede de la copa o
-    de la cubierta, y da un vigor de copa CUALITATIVO (alto/medio/bajo) sin
-    necesidad de estimar fraccion de copa.
+    de la cubierta, y da un vigor de copa CUALITATIVO (alto/medio/bajo).
+
+    SE MANTIENE por compatibilidad con el informe anual y las pruebas antiguas.
+    Lo que usa el diagnostico es `separacion_copa_cubierta`, que ademas mira los
+    percentiles y devuelve confianza.
     """
     c = contrastes(serie)
     if not c:

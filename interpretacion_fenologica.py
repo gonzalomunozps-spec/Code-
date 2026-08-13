@@ -27,7 +27,8 @@ import json
 from datetime import datetime
 
 import fenologia_especies as FEN
-from contraste_indices import analizar_por_contraste, heterogeneidad
+from contraste_indices import (analizar_por_contraste, heterogeneidad,
+                               separacion_copa_cubierta)
 from bitacora import log
 
 try:
@@ -272,7 +273,8 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
             fase_esp = fase_por_especie(tipo, spec.get("especie"), fecha,
                                         fecha_siembra=spec.get("fecha_siembra"),
                                         marco_calle=spec.get("marco_calle"),
-                                        marco_pie=spec.get("marco_pie"))
+                                        marco_pie=spec.get("marco_pie"),
+                                        regimen=spec.get("regimen"))
             fase = fase_esp["fase"]
             lo, hi, caida_ok = fase_esp["lo"], fase_esp["hi"], fase_esp["caida"]
         except Exception:
@@ -313,14 +315,24 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     copa = contraste
     ndvi_juicio = ndvi
     indice_juicio = "NDVI"
-    if (tipo == "LENOSO" and contraste and
-            "cubierta" in contraste.get("veredicto_cubierta", "")):
-        msavi = act.get("msavi")
-        if msavi is not None:
-            ndvi_juicio = msavi
-            indice_juicio = "MSAVI"
-            if prev and prev.get("msavi") is not None:
-                d_ndvi = msavi - prev["msavi"]
+    separacion = None
+    if tipo == "LENOSO":
+        # Reparto copa/cubierta con UNA sola lectura (ver contraste_indices). Usa
+        # los percentiles de la pasada cuando los hay: el p90 es mucho mejor proxy
+        # de la copa que la media, porque la media se come la calle.
+        separacion = separacion_copa_cubierta(serie, fase_esp, act)
+        if separacion:
+            copa = dict(contraste or {}, **{"separacion": separacion})
+            hay_cubierta = separacion["cubierta_domina"]
+            # el vigor de copa se juzga con MSAVI, y con el p90 trasladado a MSAVI
+            # si la parcela da para separar lineas
+            candidato = (separacion["copa_msavi"] if separacion["confianza"] == "alta"
+                         else act.get("msavi"))
+            if hay_cubierta and candidato is not None:
+                ndvi_juicio = candidato
+                indice_juicio = "MSAVI de copa" if separacion["confianza"] == "alta" else "MSAVI"
+                if prev and prev.get("msavi") is not None and act.get("msavi") is not None:
+                    d_ndvi = act["msavi"] - prev["msavi"]
 
     # --- SIEGA EN VERDE: una caida drastica del NDVI en primavera = SEGADO ---
     # En forraje segado en verde, cuando en abril-mayo (plena primavera) los indices
@@ -394,13 +406,50 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         motivo += (" [El arbol esta SIN HOJA: cualquier verde que se vea es cubierta o "
                    "hierba, no el cultivo. El NDVI no mide el arbol hasta la brotacion.]")
 
+    # --- VIGOR DE COPA (lenosos): el MSAVI, no el NDVI medio ---
+    # El NDVI de la parcela mezcla copa y calle, asi que un olivar puede salir
+    # "normal" con la copa floja y la hierba alta. El MSAVI corrige el suelo; con
+    # percentiles y lineas resolubles se usa el p90 trasladado, que es copa casi
+    # pura. El umbral viene de (especie, fase, regimen) y lleva ya el factor del
+    # marco: un seto cubre mas suelo que un olivar a 100 arboles/ha.
+    msavi_min = umbrales.get("msavi_min")
+    if (tipo == "LENOSO" and msavi_min is not None and separacion
+            and not fase_esp.get("invierno_sin_hoja")):
+        copa_val = (separacion["copa_msavi"] if separacion["confianza"] == "alta"
+                    else act.get("msavi"))
+        if copa_val is not None and copa_val < msavi_min:
+            de_donde = ("p90 de la parcela" if separacion["confianza"] == "alta"
+                        else "media de la parcela")
+            if clave == "OK":
+                clave, estado = "Vigilar", "Vigilar"
+            elif clave == "Vigilar":
+                clave, estado = "Revisar", "Revisar"
+            motivo += (f" Vigor de copa por debajo de lo esperado: MSAVI {copa_val:.3f} "
+                       f"({de_donde}) frente a {msavi_min:.2f} en {fase} de "
+                       f"{umbrales.get('regimen', 'SECANO').lower()}.")
+            if umbrales.get("critica"):
+                motivo += (" Es ademas una fase critica: lo que pase aqui se nota en la "
+                           "cosecha" + (" del ano que viene." if "postcosecha" in fase
+                                        else "."))
+        if separacion["confianza"] != "alta":
+            motivo += (" [Copa y calle no se separan bien con este marco: el juicio de "
+                       "copa va con la media, no con el percentil 90.]")
+
     # --- FALTA DE AGUA: eleva el nivel de alerta (ya no contradice al semaforo) ---
     # El suelo del NDMI sale de la FASE, no de una constante unica: un maiz en
     # floracion sufre mucho antes que un trigo en rastrojo. `ndmi_min = None`
     # significa que en esta fase el NDMI no dice nada (presiembra, barbecho,
     # senescencia, lenoso sin hoja) y no se evalua. Si la fase no declara nada,
     # DEFECTO_UMBRALES deja el 0.0 de siempre.
+    # En lenosos hay ademas una fase donde el deficit es INTENCIONADO: envero y
+    # maduracion de viña (riego deficitario controlado para calidad) y el verano
+    # de secano. Ahi el NDMI bajo no es una anomalia, y avisar seria un error.
     ndmi_min = umbrales["ndmi_min"]
+    if umbrales.get("deficit_buscado") and ndmi is not None:
+        motivo += (f" [NDMI {ndmi:+.3f}: en esta fase el deficit hidrico es lo esperado"
+                   + (" en secano" if umbrales.get("regimen") == "SECANO" else
+                      " (riego deficitario controlado)") + ", no se toma como aviso.]")
+        ndmi_min = None
     if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not esperado:
         # el listón calibrado por el usuario, si lo hay, manda sobre el de la tabla
         como = (f"negativo ({ndmi:+.3f})" if ndmi_min == 0.0 else
@@ -436,6 +485,15 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                         exc_info=True)
 
     cubierta = detectar_cubierta(tipo, subtipo, serie, fecha)
+    # UNA sola fuente de verdad sobre la cubierta. `detectar_cubierta` aporta sus
+    # indicadores numericos, pero el VEREDICTO que se ensena es el mismo que ha
+    # decidido con que indice se juzga: si no, la cabecera podia decir "cubierta
+    # probable" mientras el juicio iba por la copa (pasaba en el 21 % de los casos).
+    if separacion and cubierta:
+        cubierta["hipotesis_preliminar"] = separacion["veredicto"]
+        cubierta["señales"] = len(separacion["evidencias_cubierta"])
+        cubierta["confianza"] = separacion["confianza"]
+        cubierta["copa_msavi"] = separacion["copa_msavi"]
     hetero = heterogeneidad(serie)
 
     # si hay deterioro LOCALIZADO, se advierte de posible foco (biotico)

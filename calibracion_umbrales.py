@@ -65,12 +65,16 @@ ETIQUETA_AMBITO = {"parcela": "Solo esta parcela",
 # Los demas (EVI, SAVI, GNDVI, MSAVI) se usan por CONTRASTE entre ellos, no contra
 # una constante, asi que no hay umbral que mover. Se muestran y se anota lo que
 # diga el usuario, pero hoy no cambian el diagnostico.
-CALIBRABLES = {"NDVI": ("lo", "hi"), "NDMI": ("ndmi_min", None), "LAI": ("lai_min", None)}
+CALIBRABLES = {"NDVI": ("lo", "hi"), "NDMI": ("ndmi_min", None), "LAI": ("lai_min", None),
+               # MSAVI es EL indice de la copa en lenosos: corrige el suelo, asi que
+               # mide el arbol y no la calle. Su umbral es el mas util de calibrar ahi.
+               "MSAVI": ("msavi_min", None)}
 
 MIN_OBSERVACIONES = 2       # igual que el aprendizaje del diagnostico
 DESVIACION_MAX = 0.10       # cuanto puede alejarse de la bibliografia, como mucho
 MARGEN = 0.01               # holgura al colocar el umbral entre bajo y normal
-LIMITES = {"NDVI": (0.0, 1.0), "NDMI": (-0.5, 0.6), "LAI": (0.0, 8.0)}
+LIMITES = {"NDVI": (0.0, 1.0), "NDMI": (-0.5, 0.6), "LAI": (0.0, 8.0),
+           "MSAVI": (0.0, 1.0)}
 
 # ---------------------------------------------------------------------------
 # Cache: evaluar_parcela se llama una vez por parcela en cada refresco de la
@@ -133,6 +137,9 @@ def veredicto_sistema(indice, valor, umbrales):
     if indice == "LAI":
         m = umbrales.get("lai_min")
         return SIN_CRITERIO if m is None else ("bajo" if valor < m else "normal")
+    if indice == "MSAVI":
+        m = umbrales.get("msavi_min")
+        return SIN_CRITERIO if m is None else ("bajo" if valor < m else "normal")
     return SIN_CRITERIO
 
 
@@ -152,7 +159,23 @@ def lectura_de_pasada(reg, umbrales, indices):
 # ---------------------------------------------------------------------------
 # Registrar lo que dice el USUARIO
 # ---------------------------------------------------------------------------
-def registrar(parcela, campana, fecha, especie, fase, lecturas, respuestas, ambito):
+def sistema_de(umbrales):
+    """(regimen, densidad) del cultivo, para no mezclar sistemas distintos.
+
+    Un olivar de secano tradicional y un seto superintensivo de regadio no tienen
+    nada que ver: si comparten clave de calibracion, sus validaciones se
+    contaminan. En herbaceos esto no aplica y queda vacio, que actua de comodin."""
+    umbrales = umbrales or {}
+    regimen = umbrales.get("regimen") or ""
+    tipo = (umbrales.get("tipo") or "").lower()
+    densidad = ("seto" if "seto" in tipo or "alta densidad" in tipo else
+                "intensivo" if "intensivo" in tipo else
+                "tradicional" if "tradicional" in tipo or "vaso" in tipo else "")
+    return regimen, densidad
+
+
+def registrar(parcela, campana, fecha, especie, fase, lecturas, respuestas, ambito,
+              umbrales=None):
     """Guarda las respuestas del usuario para una pasada.
 
     `lecturas` es lo que devolvio `lectura_de_pasada`; `respuestas` es
@@ -161,6 +184,7 @@ def registrar(parcela, campana, fecha, especie, fase, lecturas, respuestas, ambi
     """
     ficha = DB.ficha(parcela) or {}
     clave = dict(ambitos_de(parcela, ficha)).get(ambito, "")
+    regimen, densidad = sistema_de(umbrales)
     n = 0
     for idx, dijo in (respuestas or {}).items():
         lec = (lecturas or {}).get(idx) or {}
@@ -169,7 +193,7 @@ def registrar(parcela, campana, fecha, especie, fase, lecturas, respuestas, ambi
         DB.guardar_validacion_indice(parcela, campana, fecha, idx, lec["valor"],
                                      especie or "", fase or "",
                                      lec.get("sistema", SIN_CRITERIO), dijo,
-                                     ambito, clave)
+                                     ambito, clave, regimen, densidad)
         n += 1
     _invalidar()
     return n
@@ -204,7 +228,8 @@ def _acotar(indice, valor, biblio):
     return round(max(lo, min(hi, valor)), 3)
 
 
-def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos):
+def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos,
+                     regimen="", densidad=""):
     """Umbral ajustado para (indice, especie, fase), o None si no hay evidencia.
 
     Gana el ambito MAS CONCRETO que llegue a MIN_OBSERVACIONES. Si tu parcela
@@ -212,14 +237,15 @@ def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos):
     tierra."""
     if biblio is None:
         return None                     # la bibliografia dice que aqui no se juzga
-    llave = (indice, clave_umbral, especie, fase, tuple(ambitos))
+    llave = (indice, clave_umbral, especie, fase, tuple(ambitos), regimen, densidad)
     with _LOCK:
         if llave in _CACHE:
             return _CACHE[llave]
     resultado = None
     for ambito, clave in ambitos:
         filas = DB.validaciones_indice(indice=indice, especie=especie, fase=fase,
-                                       ambitos=[(ambito, clave)])
+                                       ambitos=[(ambito, clave)],
+                                       regimen=regimen, densidad=densidad)
         if len(filas) < MIN_OBSERVACIONES:
             continue
         bajos = [f["valor"] for f in filas if f["dijo_usuario"] == "bajo"
@@ -245,13 +271,15 @@ def ajustar_umbrales(umbrales, especie, fase, parcela, ficha=None):
     if not umbrales or not especie or not fase:
         return umbrales
     ambitos = ambitos_de(parcela, ficha)
+    regimen, densidad = sistema_de(umbrales)
     fuera = dict(umbrales)
     detalle = {}
     for indice, (clave_min, clave_max) in CALIBRABLES.items():
         for clave in (clave_min, clave_max):
             if clave is None:
                 continue
-            aj = umbral_calibrado(indice, clave, umbrales.get(clave), especie, fase, ambitos)
+            aj = umbral_calibrado(indice, clave, umbrales.get(clave), especie, fase,
+                                  ambitos, regimen, densidad)
             if aj and aj["valor"] != umbrales.get(clave):
                 fuera[clave] = aj["valor"]
                 detalle[f"{indice}.{clave}"] = aj

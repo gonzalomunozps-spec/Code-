@@ -264,6 +264,186 @@ LENOSO_ESPECIES = {
 }
 
 
+# =====================================================================
+# LEÑOSOS: FASES FISIOLOGICAS Y UMBRALES POR REGIMEN HIDRICO
+# =====================================================================
+# El mes por si solo no sirve para colgar umbrales: "verano" no dice si el arbol
+# esta engordando fruto o acumulando aceite. `FASES_LENOSO` traduce mes -> ventana
+# FISIOLOGICA, que es la que decide.
+#
+# Y sobre todo: en lenosos el REGIMEN HIDRICO pesa mas que la especie. Un olivar
+# de secano en julio esta en deficit POR DISENO -cierra estomas, el NDMI baja- y
+# eso es lo normal. El mismo NDMI en un seto regado significa que ha fallado el
+# riego. Mismo numero, significado opuesto. Por eso los umbrales van por
+# (fase, regimen), no solo por fase.
+#
+# En SECANO no se ponen suelos absolutos de NDMI en la ventana seca: no funcionan.
+# Un olivo de secano en agosto tiene el NDMI bajo y esta perfectamente. Ahi el
+# valor es `None` (no se juzga) y lo que queda es la comparacion con la propia
+# parcela en anos anteriores, que es otra cosa.
+REGIMENES = ["REGADIO", "SECANO"]
+
+FASES_LENOSO = {
+    "OLIVO": {1: "parada invernal", 2: "parada invernal", 3: "brotacion",
+              4: "brotacion", 5: "floracion / cuajado", 6: "endurecimiento de hueso",
+              7: "endurecimiento de hueso", 8: "acumulacion de aceite",
+              9: "acumulacion de aceite", 10: "acumulacion de aceite",
+              11: "cosecha", 12: "postcosecha"},
+    "VIÑA": {1: "parada (sin hoja)", 2: "parada (sin hoja)", 3: "brotacion",
+             4: "crecimiento vegetativo", 5: "crecimiento vegetativo",
+             6: "floracion / cuajado", 7: "envero", 8: "maduracion",
+             9: "vendimia", 10: "postcosecha", 11: "caida de hoja",
+             12: "parada (sin hoja)"},
+    "ALMENDRO": {1: "parada (sin hoja)", 2: "floracion (sin hoja)", 3: "foliacion",
+                 4: "crecimiento de fruto", 5: "crecimiento de fruto",
+                 6: "endurecimiento de hueso", 7: "llenado de pepita",
+                 8: "maduracion", 9: "cosecha", 10: "postcosecha",
+                 11: "caida de hoja", 12: "parada (sin hoja)"},
+    "PISTACHO": {1: "parada (sin hoja)", 2: "parada (sin hoja)", 3: "parada (sin hoja)",
+                 4: "brotacion / floracion", 5: "crecimiento", 6: "crecimiento",
+                 7: "llenado de pepita", 8: "llenado de pepita",
+                 9: "maduracion / cosecha", 10: "postcosecha",
+                 11: "caida de hoja", 12: "parada (sin hoja)"},
+}
+
+# Umbrales por (especie, fase, regimen). Claves:
+#   msavi_min  vigor de copa minimo. ES EL PARAMETRO CENTRAL EN LEÑOSOS: el MSAVI
+#              corrige el efecto del suelo, asi que mide la copa y no la calle.
+#              Se escala con el factor de densidad del marco.
+#   ndmi_min   suelo de agua. None = aqui no se juzga.
+#   lai_min    estructura de dosel esperada.
+#   critica    ventana en que la falta de agua se lleva la cosecha (o la del ano
+#              siguiente, en postcosecha de olivo y almendro).
+#   deficit_buscado  el deficit AQUI es intencionado (envero y maduracion de viña:
+#              riego deficitario controlado para calidad). No se avisa de agua.
+#   sin_hoja   el arbol no tiene hoja: ningun indice mide la copa.
+_SIN_HOJA = {"msavi_min": None, "ndmi_min": None, "lai_min": None, "sin_hoja": True}
+# Perdiendo hoja: el dosel baja A PROPOSITO, asi que no se juzga su vigor, pero el
+# arbol todavia tiene hoja y no todo el verde es cubierta.
+_CAIDA = {"msavi_min": None, "ndmi_min": None, "lai_min": None}
+
+UMBRALES_LENOSO = {
+    "OLIVO": {
+        "parada invernal": {"REGADIO": {"msavi_min": 0.28, "ndmi_min": 0.10, "lai_min": 1.2},
+                            "SECANO": {"msavi_min": 0.25, "ndmi_min": 0.05, "lai_min": 1.0}},
+        "brotacion": {"REGADIO": {"msavi_min": 0.32, "ndmi_min": 0.12, "lai_min": 1.5},
+                      "SECANO": {"msavi_min": 0.28, "ndmi_min": 0.06, "lai_min": 1.3}},
+        "floracion / cuajado": {
+            "REGADIO": {"msavi_min": 0.36, "ndmi_min": 0.15, "lai_min": 1.8, "critica": True},
+            "SECANO": {"msavi_min": 0.30, "ndmi_min": 0.05, "lai_min": 1.5, "critica": True}},
+        "endurecimiento de hueso": {
+            "REGADIO": {"msavi_min": 0.38, "ndmi_min": 0.18, "lai_min": 2.0, "critica": True},
+            "SECANO": {"msavi_min": 0.30, "ndmi_min": None, "lai_min": 1.5,
+                       "critica": True, "deficit_buscado": True}},
+        "acumulacion de aceite": {
+            "REGADIO": {"msavi_min": 0.36, "ndmi_min": 0.15, "lai_min": 1.9},
+            "SECANO": {"msavi_min": 0.28, "ndmi_min": None, "lai_min": 1.4,
+                       "deficit_buscado": True}},
+        "cosecha": {"REGADIO": {"msavi_min": 0.32, "ndmi_min": 0.12, "lai_min": 1.7},
+                    "SECANO": {"msavi_min": 0.26, "ndmi_min": None, "lai_min": 1.3}},
+        "postcosecha": {
+            "REGADIO": {"msavi_min": 0.32, "ndmi_min": 0.12, "lai_min": 1.6, "critica": True},
+            "SECANO": {"msavi_min": 0.26, "ndmi_min": 0.04, "lai_min": 1.2, "critica": True}},
+    },
+    "VIÑA": {
+        "parada (sin hoja)": {"REGADIO": _SIN_HOJA, "SECANO": _SIN_HOJA},
+        "caida de hoja": {"REGADIO": _CAIDA, "SECANO": _CAIDA},
+        "brotacion": {"REGADIO": {"msavi_min": 0.20, "ndmi_min": 0.10, "lai_min": 0.8},
+                      "SECANO": {"msavi_min": 0.18, "ndmi_min": 0.05, "lai_min": 0.7}},
+        "crecimiento vegetativo": {
+            "REGADIO": {"msavi_min": 0.30, "ndmi_min": 0.14, "lai_min": 1.4},
+            "SECANO": {"msavi_min": 0.26, "ndmi_min": 0.06, "lai_min": 1.2}},
+        "floracion / cuajado": {
+            "REGADIO": {"msavi_min": 0.36, "ndmi_min": 0.16, "lai_min": 1.8, "critica": True},
+            "SECANO": {"msavi_min": 0.30, "ndmi_min": 0.06, "lai_min": 1.5, "critica": True}},
+        "envero": {"REGADIO": {"msavi_min": 0.34, "ndmi_min": None, "lai_min": 1.8,
+                               "deficit_buscado": True},
+                   "SECANO": {"msavi_min": 0.28, "ndmi_min": None, "lai_min": 1.5,
+                              "deficit_buscado": True}},
+        "maduracion": {"REGADIO": {"msavi_min": 0.32, "ndmi_min": None, "lai_min": 1.7,
+                                   "deficit_buscado": True},
+                       "SECANO": {"msavi_min": 0.26, "ndmi_min": None, "lai_min": 1.4,
+                                  "deficit_buscado": True}},
+        "vendimia": {"REGADIO": {"msavi_min": 0.28, "ndmi_min": None, "lai_min": 1.5},
+                     "SECANO": {"msavi_min": 0.24, "ndmi_min": None, "lai_min": 1.2}},
+        "postcosecha": {"REGADIO": {"msavi_min": 0.24, "ndmi_min": 0.08, "lai_min": 1.2},
+                        "SECANO": {"msavi_min": 0.20, "ndmi_min": None, "lai_min": 1.0}},
+    },
+    "ALMENDRO": {
+        "parada (sin hoja)": {"REGADIO": _SIN_HOJA, "SECANO": _SIN_HOJA},
+        "floracion (sin hoja)": {"REGADIO": _SIN_HOJA, "SECANO": _SIN_HOJA},
+        "caida de hoja": {"REGADIO": _CAIDA, "SECANO": _CAIDA},
+        "foliacion": {"REGADIO": {"msavi_min": 0.26, "ndmi_min": 0.12, "lai_min": 1.2},
+                      "SECANO": {"msavi_min": 0.22, "ndmi_min": 0.06, "lai_min": 1.0}},
+        "crecimiento de fruto": {
+            "REGADIO": {"msavi_min": 0.34, "ndmi_min": 0.15, "lai_min": 1.8, "critica": True},
+            "SECANO": {"msavi_min": 0.28, "ndmi_min": 0.05, "lai_min": 1.5, "critica": True}},
+        "endurecimiento de hueso": {
+            "REGADIO": {"msavi_min": 0.36, "ndmi_min": 0.18, "lai_min": 2.0, "critica": True},
+            "SECANO": {"msavi_min": 0.30, "ndmi_min": None, "lai_min": 1.6,
+                       "critica": True, "deficit_buscado": True}},
+        "llenado de pepita": {
+            "REGADIO": {"msavi_min": 0.36, "ndmi_min": 0.18, "lai_min": 2.0, "critica": True},
+            "SECANO": {"msavi_min": 0.30, "ndmi_min": None, "lai_min": 1.6,
+                       "critica": True, "deficit_buscado": True}},
+        "maduracion": {"REGADIO": {"msavi_min": 0.32, "ndmi_min": 0.14, "lai_min": 1.8},
+                       "SECANO": {"msavi_min": 0.26, "ndmi_min": None, "lai_min": 1.4}},
+        "cosecha": {"REGADIO": {"msavi_min": 0.28, "ndmi_min": 0.12, "lai_min": 1.6},
+                    "SECANO": {"msavi_min": 0.24, "ndmi_min": None, "lai_min": 1.2}},
+        "postcosecha": {
+            "REGADIO": {"msavi_min": 0.28, "ndmi_min": 0.12, "lai_min": 1.5, "critica": True},
+            "SECANO": {"msavi_min": 0.24, "ndmi_min": 0.05, "lai_min": 1.2, "critica": True}},
+    },
+    "PISTACHO": {
+        "parada (sin hoja)": {"REGADIO": _SIN_HOJA, "SECANO": _SIN_HOJA},
+        "caida de hoja": {"REGADIO": _CAIDA, "SECANO": _CAIDA},
+        "brotacion / floracion": {"REGADIO": {"msavi_min": 0.22, "ndmi_min": 0.10, "lai_min": 1.0},
+                                  "SECANO": {"msavi_min": 0.20, "ndmi_min": 0.05, "lai_min": 0.9}},
+        "crecimiento": {"REGADIO": {"msavi_min": 0.32, "ndmi_min": 0.14, "lai_min": 1.6},
+                        "SECANO": {"msavi_min": 0.28, "ndmi_min": 0.05, "lai_min": 1.4}},
+        "llenado de pepita": {
+            "REGADIO": {"msavi_min": 0.36, "ndmi_min": 0.18, "lai_min": 2.0, "critica": True},
+            "SECANO": {"msavi_min": 0.30, "ndmi_min": None, "lai_min": 1.6,
+                       "critica": True, "deficit_buscado": True}},
+        "maduracion / cosecha": {"REGADIO": {"msavi_min": 0.30, "ndmi_min": 0.14, "lai_min": 1.7},
+                                 "SECANO": {"msavi_min": 0.26, "ndmi_min": None, "lai_min": 1.3}},
+        "postcosecha": {
+            "REGADIO": {"msavi_min": 0.28, "ndmi_min": 0.12, "lai_min": 1.5, "critica": True},
+            "SECANO": {"msavi_min": 0.24, "ndmi_min": 0.05, "lai_min": 1.2, "critica": True}},
+    },
+}
+
+# Meses en que la cubierta entre calles suele estar VIVA. Fuera de esa ventana,
+# el verde que se vea entre lineas ya no se explica por la cubierta sembrada.
+VENTANA_CUBIERTA = (12, 1, 2, 3, 4, 5)
+
+
+def regimen_valido(regimen):
+    """Normaliza el regimen hidrico. Lo que no se reconoce va a SECANO, que es el
+    supuesto conservador: no avisa de falta de agua donde el deficit es normal."""
+    r = (regimen or "").strip().upper()
+    return r if r in REGIMENES else "SECANO"
+
+
+def umbrales_lenoso(especie, fase, regimen, factor=1.0):
+    """Umbrales de esa fase y regimen, con la densidad del marco ya aplicada.
+
+    El `factor` viene del marco de plantacion (mismo que escala el techo de NDVI):
+    un seto superintensivo cubre mas suelo, asi que su MSAVI de referencia es mas
+    alto que el de un olivar tradicional a 100 arboles/ha."""
+    base = dict(DEFECTO_UMBRALES)
+    tabla = UMBRALES_LENOSO.get(especie, {}).get(fase, {})
+    propios = tabla.get(regimen_valido(regimen))
+    if propios:
+        base.update(propios)
+    if base.get("msavi_min") is not None:
+        base["msavi_min"] = round(base["msavi_min"] * factor, 3)
+    if base.get("lai_min") is not None:
+        base["lai_min"] = round(base["lai_min"] * factor, 2)
+    base["regimen"] = regimen_valido(regimen)
+    return base
+
+
 def densidad_arboles(marco_calle, marco_pie):
     """arboles/ha a partir del marco (distancia entre calles x distancia entre pies)."""
     if not marco_calle or not marco_pie:
@@ -301,36 +481,49 @@ def subtipo_canonico(especie, densidad):
 
 
 def _nombre_fase_lenoso(esp, mes):
-    info = LENOSO_ESPECIES[esp]
-    if info["hoja"] == "perennifolio":
+    """Ventana FISIOLOGICA de esa especie en ese mes.
+
+    Antes era una cadena de if/elif con nombres genericos ("verano", "pleno
+    desarrollo") que no servian para colgar umbrales: no distinguen engorde de
+    fruto de acumulacion de aceite. Ahora cada especie declara su calendario en
+    FASES_LENOSO, que es donde se ve y se corrige."""
+    tabla = FASES_LENOSO.get(esp)
+    if tabla:
+        return tabla.get(mes, "sin fase")
+    # especie sin calendario declarado: se cae al reparto generico de antes
+    info = LENOSO_ESPECIES.get(esp, {})
+    if info.get("hoja") == "perennifolio":
         return [None, "parada invernal", "parada invernal", "brotacion", "brotacion",
-                "floracion", "floracion", "verano", "verano", "postcosecha",
-                "postcosecha", "postcosecha", "parada invernal"][mes]
+                "floracion / cuajado", "floracion / cuajado", "verano", "verano",
+                "postcosecha", "postcosecha", "postcosecha", "parada invernal"][mes]
     brota = 4 if info.get("brota_tarde") else 3
     if mes == 12 or mes <= 2 or (info.get("brota_tarde") and mes == 3):
         return "parada (sin hoja)"
     if mes == brota:
         return "brotacion"
     if brota < mes <= 5:
-        return "foliacion / desarrollo"
+        return "foliacion"
     if 6 <= mes <= 8:
-        return "pleno desarrollo"
+        return "crecimiento"
     if mes in (9, 10):
         return "maduracion / cosecha"
     return "caida de hoja"
 
 
-def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None):
-    """Devuelve dict con fase, rango de NDVI, densidad y tipo de plantacion."""
+def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=None):
+    """Devuelve dict con fase, rango de NDVI, densidad, tipo de plantacion y los
+    umbrales de MSAVI/NDMI/LAI de esa fase y regimen hidrico."""
     info = LENOSO_ESPECIES.get(especie)
     if not info:
         return dict(umbrales_de_fase(), fase="sin especie", lo=0.30, hi=0.80,
-                    caida=False, caduco=False, densidad=None, tipo="sin marco")
+                    caida=False, caduco=False, densidad=None, tipo="sin marco",
+                    regimen=regimen_valido(regimen))
     try:
         mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
     except (TypeError, ValueError):          # fecha ausente o mal formada
         return dict(umbrales_de_fase(), fase="sin fecha", lo=0.30, hi=0.80, caida=False,
-                    caduco=info["hoja"] == "caducifolio", densidad=None, tipo="sin marco")
+                    caduco=info["hoja"] == "caducifolio", densidad=None, tipo="sin marco",
+                    regimen=regimen_valido(regimen))
     lo, hi, caida = info["mes"][mes]
     dens = densidad_arboles(marco_calle, marco_pie)
     nombre_tipo, factor = tipo_plantacion(especie, dens)
@@ -339,19 +532,24 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None):
     caduco = info["hoja"] == "caducifolio"
     brota_tarde = bool(info.get("brota_tarde"))
     invierno_sin_hoja = caduco and (mes == 12 or mes <= 2 or (brota_tarde and mes == 3))
-    # sin hoja no hay dosel que medir: el NDMI lee suelo y cubierta, no el arbol
-    extra = {"ndmi_min": None} if invierno_sin_hoja else None
-    return dict(umbrales_de_fase(extra), fase=_nombre_fase_lenoso(especie, mes),
-                lo=lo2, hi=hi2, caida=bool(caida), caduco=caduco, brota_tarde=brota_tarde,
-                invierno_sin_hoja=invierno_sin_hoja, densidad=dens,
-                tipo=nombre_tipo, factor=factor)
+    fase = _nombre_fase_lenoso(especie, mes)
+    # umbrales de la fase Y del regimen, con la densidad del marco ya aplicada
+    umb = umbrales_lenoso(especie, fase, regimen, factor)
+    if invierno_sin_hoja:
+        # sin hoja no hay dosel que medir: ningun indice habla del arbol
+        umb.update({"ndmi_min": None, "msavi_min": None, "lai_min": None, "sin_hoja": True})
+    return dict(umb, fase=fase, lo=lo2, hi=hi2, caida=bool(caida), caduco=caduco,
+                brota_tarde=brota_tarde, invierno_sin_hoja=invierno_sin_hoja,
+                densidad=dens, tipo=nombre_tipo, factor=factor,
+                marco_calle=marco_calle, marco_pie=marco_pie,
+                ventana_cubierta=mes in VENTANA_CUBIERTA)
 
 
 # =====================================================================
 # ENTRADA UNIFICADA
 # =====================================================================
 def fase_por_especie(grupo, especie, fecha_iso, fecha_siembra=None,
-                     marco_calle=None, marco_pie=None):
+                     marco_calle=None, marco_pie=None, regimen=None):
     """
     Punto de entrada unico. `grupo` in {EXTENSIVO, LENOSO, BARBECHO}.
     Devuelve un dict homogeneo con al menos: fase, lo, hi, caida.
@@ -365,7 +563,7 @@ def fase_por_especie(grupo, especie, fecha_iso, fecha_siembra=None,
         d["grupo"] = "EXTENSIVO"
         return d
     if grupo == "LENOSO":
-        d = fase_lenoso(especie, fecha_iso, marco_calle, marco_pie)
+        d = fase_lenoso(especie, fecha_iso, marco_calle, marco_pie, regimen)
         d["grupo"] = "LENOSO"
         return d
     return {"fase": "desconocido", "lo": 0.30, "hi": 0.80, "caida": False}

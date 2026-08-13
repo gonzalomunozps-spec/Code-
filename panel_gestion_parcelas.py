@@ -1156,6 +1156,14 @@ class VentanaAltaParcela(tk.Toplevel):
                  font=FUENTES["small"]).pack(side="left")
         self.e_pie.pack(side="left", padx=(4, 0))
         # etiqueta que muestra el tipo deducido del marco
+        # REGIMEN HIDRICO: en lenosos pesa mas que la especie. Un olivar de secano
+        # en julio esta en deficit por diseno; el mismo dato en un seto regado
+        # significa que ha fallado el riego.
+        self.lbl_regimen = tk.Label(self.frame_spec, text="Regimen hidrico",
+                                    bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
+        self.cb_regimen = ttk.Combobox(self.frame_spec, state="readonly", width=14,
+                                       values=["Secano", "Regadio"])
+        self.cb_regimen.set("Secano")
         self.lbl_tipo_calc = tk.Label(self.frame_spec, text="", bg=TEMA["surface"],
                                       fg=TEMA["ok_fg"], font=FUENTES["small"])
         self.e_calle.bind("<KeyRelease>", lambda e: self._calc_marco())
@@ -1252,6 +1260,9 @@ class VentanaAltaParcela(tk.Toplevel):
                     self.e_calle.insert(0, str(cult["marco_calle"]))
                 if cult.get("marco_pie") is not None:
                     self.e_pie.insert(0, str(cult["marco_pie"]))
+                # regimen guardado; los cultivos anteriores a este campo son SECANO,
+                # que es el supuesto que no avisa donde el deficit es normal
+                self.cb_regimen.set("Regadio" if cult.get("regimen") == "REGADIO" else "Secano")
                 self._calc_marco()
         # geometria: cargar los vertices y dibujarlos (sin el punto de cierre duplicado)
         coords = ficha.get("coordenadas") or []
@@ -1287,7 +1298,8 @@ class VentanaAltaParcela(tk.Toplevel):
         self.cb_sub["values"] = esp
         self.cb_sub.set(esp[0] if esp else "")
         for w in (self.lbl_finalidad, self.cb_finalidad, self.lbl_siembra, self.e_siembra,
-                  self.lbl_marco, self.marco_wrap, self.lbl_tipo_calc):
+                  self.lbl_marco, self.marco_wrap, self.lbl_regimen, self.cb_regimen,
+                  self.lbl_tipo_calc):
             w.pack_forget()
         if grupo == "EXTENSIVO":
             self.lbl_finalidad.pack(anchor="w")
@@ -1297,6 +1309,8 @@ class VentanaAltaParcela(tk.Toplevel):
         elif grupo == "LENOSO":
             self.lbl_marco.pack(anchor="w")
             self.marco_wrap.pack(anchor="w", pady=(0, 2))
+            self.lbl_regimen.pack(anchor="w")
+            self.cb_regimen.pack(anchor="w", pady=(0, 2))
             self.lbl_tipo_calc.pack(anchor="w")
             self._calc_marco()
 
@@ -1383,6 +1397,7 @@ class VentanaAltaParcela(tk.Toplevel):
                 spec["marco_pie"] = float(self.e_pie.get().replace(",", "."))
             except ValueError:
                 return messagebox.showwarning("Marco", "Indica el marco de plantacion (calle y pie en metros).", parent=self)
+            spec["regimen"] = "REGADIO" if self.cb_regimen.get().startswith("Rega") else "SECANO"
 
         # los codigos SIGPAC tecleados se guardan con la parcela (provincia y
         # municipio), aunque el recinto se haya dibujado a mano despues
@@ -1470,6 +1485,11 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.e_calle.pack(side="left")
         tk.Label(self.marco_wrap, text="x", bg=TEMA["surface"], fg=TEMA["text_muted"]).pack(side="left", padx=4)
         self.e_pie.pack(side="left")
+        self.lbl_regimen = tk.Label(self.spec_wrap, text="Regimen hidrico",
+                                    bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
+        self.cb_regimen = ttk.Combobox(self.spec_wrap, state="readonly", width=14,
+                                       values=["Secano", "Regadio"])
+        self.cb_regimen.set("Secano")
         self.lbl_tipo_calc = tk.Label(self.spec_wrap, text="", bg=TEMA["surface"],
                                       fg=TEMA["ok_fg"], font=FUENTES["small"])
         self.e_calle.bind("<KeyRelease>", lambda e: self._calc_marco())
@@ -1489,7 +1509,8 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.cb_sub["values"] = esp
         self.cb_sub.set(esp[0] if esp else "")
         for w in (self.lbl_finalidad, self.cb_finalidad, self.lbl_siembra, self.e_siembra,
-                  self.lbl_marco, self.marco_wrap, self.lbl_tipo_calc):
+                  self.lbl_marco, self.marco_wrap, self.lbl_regimen, self.cb_regimen,
+                  self.lbl_tipo_calc):
             w.pack_forget()
         if grupo == "EXTENSIVO":
             self.lbl_finalidad.pack(anchor="w")
@@ -1499,6 +1520,8 @@ class DialogoRelevoCampana(tk.Toplevel):
         elif grupo == "LENOSO":
             self.lbl_marco.pack(anchor="w")
             self.marco_wrap.pack(anchor="w", pady=(0, 2))
+            self.lbl_regimen.pack(anchor="w")
+            self.cb_regimen.pack(anchor="w", pady=(0, 2))
             self.lbl_tipo_calc.pack(anchor="w")
             self._calc_marco()
 
@@ -1558,6 +1581,7 @@ class DialogoRelevoCampana(tk.Toplevel):
                 spec["marco_pie"] = float(self.e_pie.get().replace(",", "."))
             except ValueError:
                 return messagebox.showwarning("Marco", "Indica el marco (calle y pie en metros).", parent=self)
+            spec["regimen"] = "REGADIO" if self.cb_regimen.get().startswith("Rega") else "SECANO"
         self.panel.asignar_cultivo(self.pendientes[self.idx], tipo, spec)
         self.idx += 1
         if self.idx < len(self.pendientes):
@@ -1718,9 +1742,12 @@ class DialogoValidacionIndices(tk.Toplevel):
     def _guardar(self):
         ambito = self.ambitos[self.cb_ambito.current()][0]
         respuestas = {idx: cb.get() for idx, cb in self.combos.items()}
+        # los umbrales llevan el regimen y la densidad: sin eso, lo validado en un
+        # olivar de secano contaminaria a un seto de regadio
         n = _CALIB.registrar(self.ficha.nombre, self.ficha.campana, self.ctx.get("fecha"),
                              self.ctx.get("especie"), self.ctx.get("fase"),
-                             self.ctx.get("lecturas"), respuestas, ambito)
+                             self.ctx.get("lecturas"), respuestas, ambito,
+                             umbrales=self.ctx.get("umbrales"))
         self.destroy()
         self.ficha.refrescar()          # el umbral puede haber cambiado ya
         messagebox.showinfo("Validacion",

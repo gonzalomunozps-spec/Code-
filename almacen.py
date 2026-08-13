@@ -55,7 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 3
+ESQUEMA_VERSION = 4
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -185,6 +185,8 @@ def _crear_tablas():
             dijo_usuario TEXT,         -- bajo | normal | alto
             ambito TEXT,               -- parcela | municipio | provincia | global
             clave_ambito TEXT,
+            regimen TEXT,              -- REGADIO | SECANO (lenosos); vacio = comodin
+            densidad TEXT,             -- tradicional | intensivo | seto; vacio = comodin
             ts TEXT);
         CREATE INDEX IF NOT EXISTS ix_vidx_busca
             ON validaciones_indice(indice, especie, fase, ambito, clave_ambito);
@@ -244,9 +246,27 @@ def _migracion_3(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_vidx_parcela ON validaciones_indice(nombre)")
 
 
+def _migracion_4(c):
+    """Separa las validaciones por REGIMEN HIDRICO y por DENSIDAD de plantacion.
+
+    En lenosos, un olivar de secano tradicional y un seto superintensivo de
+    regadio no tienen nada que ver: si comparten clave, sus validaciones se
+    contaminan y el ajuste sale peor que no ajustar. Con estas dos columnas cada
+    sistema aprende de lo suyo.
+
+    Las filas anteriores quedan con el campo vacio, que actua como comodin: lo ya
+    validado en herbaceos -donde esto no aplica- sigue contando igual."""
+    ya = {r[1] for r in c.execute("PRAGMA table_info(validaciones_indice)")}
+    for col in ("regimen", "densidad"):
+        if col not in ya:
+            c.execute(f"ALTER TABLE validaciones_indice ADD COLUMN {col} TEXT")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_vidx_sistema "
+              "ON validaciones_indice(indice, especie, fase, regimen, densidad)")
+
+
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
-_MIGRACIONES = {2: _migracion_2, 3: _migracion_3}
+_MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4}
 
 
 def _migrar_esquema():
@@ -632,7 +652,8 @@ def eliminar_evento(parcela, campana, evento_id):
 # Aqui solo se guarda y se lee. QUE se hace con estos datos -como se mueve un
 # umbral- vive en calibracion_umbrales.py, para poder borrarlo sin tocar nada.
 def guardar_validacion_indice(nombre, campana, fecha, indice, valor, especie, fase,
-                              dijo_sistema, dijo_usuario, ambito, clave_ambito):
+                              dijo_sistema, dijo_usuario, ambito, clave_ambito,
+                              regimen="", densidad=""):
     """Anota lo que el usuario dice de UN indice en UNA pasada.
 
     La clave incluye el ambito: la misma pasada puede corregirse a nivel de
@@ -642,17 +663,19 @@ def guardar_validacion_indice(nombre, campana, fecha, indice, valor, especie, fa
     clave = f"{nombre}|{campana}|{fecha}|{indice}|{ambito}|{clave_ambito or ''}"
     with _LOCK:
         c.execute("INSERT OR REPLACE INTO validaciones_indice(id,nombre,campana,fecha,indice,"
-                  "valor,especie,fase,dijo_sistema,dijo_usuario,ambito,clave_ambito,ts) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "valor,especie,fase,dijo_sistema,dijo_usuario,ambito,clave_ambito,"
+                  "regimen,densidad,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (clave, nombre, campana, fecha, indice,
                    None if valor is None else float(valor), especie or "", fase or "",
                    dijo_sistema or "", dijo_usuario or "", ambito or "parcela",
-                   clave_ambito or "", datetime.now().strftime("%Y-%m-%d %H:%M")))
+                   clave_ambito or "", regimen or "", densidad or "",
+                   datetime.now().strftime("%Y-%m-%d %H:%M")))
         c.commit()
     return clave
 
 
-def validaciones_indice(indice=None, especie=None, fase=None, ambitos=None):
+def validaciones_indice(indice=None, especie=None, fase=None, ambitos=None,
+                        regimen=None, densidad=None):
     """Validaciones por indice, filtrando por lo que se necesite.
 
     `ambitos` es una lista de pares (ambito, clave) -por ejemplo
@@ -663,6 +686,12 @@ def validaciones_indice(indice=None, especie=None, fase=None, ambitos=None):
     for col, val in (("indice", indice), ("especie", especie), ("fase", fase)):
         if val:
             sql += f" AND {col}=?"
+            args.append(val)
+    # regimen y densidad: el vacio es COMODIN, no un valor. Las filas anteriores a
+    # la migracion 4 -y todos los herbaceos- lo tienen vacio y siguen contando.
+    for col, val in (("regimen", regimen), ("densidad", densidad)):
+        if val:
+            sql += f" AND ({col}=? OR {col}='' OR {col} IS NULL)"
             args.append(val)
     if ambitos:
         sql += " AND (" + " OR ".join(["(ambito=? AND clave_ambito=?)"] * len(ambitos)) + ")"
