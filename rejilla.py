@@ -231,6 +231,43 @@ def desde_arrays(arr_ndvi, arr_validos, filas, columnas):
     return valores, validos
 
 
+# ---------------------------------------------------------------------------
+# Comprobacion de que la rejilla dice la verdad
+# ---------------------------------------------------------------------------
+# Tolerancia al comparar la media de la rejilla con la que calcula Earth Engine
+# sobre LA MISMA geometria. Son dos caminos independientes hasta el mismo numero:
+# uno lo reduce el servidor sobre la imagen, el otro sale de contar los pixeles
+# que nos hemos traido. Si no coinciden, la rejilla no describe lo que dice
+# describir -esta desplazada, mal enmascarada o mal encajada- y no vale.
+#
+# El margen cubre la cuantificacion (medio paso, 0.005) y las diferencias de
+# muestreo en el borde del recinto. Un desajuste de reticula da diferencias de
+# decimas, no de centesimas: esto lo caza de sobra.
+TOLERANCIA_MEDIA = 0.02
+
+
+def media_valida(valores, validos):
+    """Media de los pixeles validos. None si no hay ninguno."""
+    vivos = [v for v, ok in zip(valores, validos) if ok and v is not None]
+    return sum(vivos) / len(vivos) if vivos else None
+
+
+def coherente(valores, validos, media_referencia, tolerancia=TOLERANCIA_MEDIA):
+    """(True/False, diferencia) comparando la rejilla con una media de referencia.
+
+    Sin referencia no se puede comprobar nada, y se da por buena: es mejor tener
+    la rejilla sin verificar que no tenerla. Lo que NO se hace es darla por buena
+    cuando SI hay referencia y no cuadra.
+    """
+    if media_referencia is None:
+        return True, None
+    m = media_valida(valores, validos)
+    if m is None:
+        return False, None                # dice tener pixeles y no tiene ninguno
+    d = abs(m - float(media_referencia))
+    return d <= tolerancia, round(d, 4)
+
+
 def tamano_estimado(filas, columnas):
     """Bytes que ocuparia, en el peor caso (datos sin correlacion, que no comprimen).
 

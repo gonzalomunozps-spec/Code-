@@ -1626,6 +1626,38 @@ def _matriz(filas, columnas, valor=0.6, invalidos=()):
     return ndvi, val
 
 
+def pruebas_rejilla_coherencia():
+    """El contraste cruzado: la media de la rejilla contra la del servidor.
+
+    Es la unica comprobacion automatica que caza una rejilla desplazada o mal
+    enmascarada, que es justo lo que no se puede probar contra Earth Engine sin
+    credenciales. Si se cuela, la etapa de heterogeneidad mediria ruido dandolo
+    por bueno."""
+    import rejilla as R
+
+    vals = [0.60] * 20
+    validos = [True] * 20
+    check("coherencia: media de los pixeles validos",
+          lambda: R.media_valida([0.5, 0.7, 0.9], [True, True, False]), lambda r: r == 0.6)
+    check("coherencia: sin pixeles validos no hay media",
+          lambda: R.media_valida([0.5], [False]), lambda r: r is None)
+    check("coherencia: si la rejilla cuadra con el servidor, pasa",
+          lambda: R.coherente(vals, validos, 0.60), lambda r: r == (True, 0.0))
+    check("coherencia: una diferencia dentro de la cuantificacion pasa",
+          lambda: R.coherente(vals, validos, 0.605)[0], lambda r: r is True)
+    check("coherencia: una rejilla DESPLAZADA no cuadra y se caza",
+          lambda: R.coherente(vals, validos, 0.42), lambda r: r[0] is False and r[1] == 0.18)
+    check("coherencia: una mascara invertida tampoco cuadra",
+          lambda: R.coherente([0.6] * 10 + [0.1] * 10, [False] * 10 + [True] * 10, 0.60)[0],
+          lambda r: r is False)
+    check("coherencia: sin referencia se da por buena (mejor eso que nada)",
+          lambda: R.coherente(vals, validos, None), lambda r: r == (True, None))
+    check("coherencia: si dice tener pixeles y no tiene ninguno, se rechaza",
+          lambda: R.coherente(vals, [False] * 20, 0.60), lambda r: r == (False, None))
+    check("coherencia: la tolerancia cubre medio paso de cuantificacion",
+          lambda: R.TOLERANCIA_MEDIA, lambda t: t >= 1.0 / R.ESCALA_NDVI / 2)
+
+
 def pruebas_rejilla_descarga():
     """La descarga de la rejilla, con `ee` sustituido por un doble."""
     import gee_cliente as G
@@ -1643,12 +1675,13 @@ def pruebas_rejilla_descarga():
     # 15x17 = 255 pixeles segun el encaje de esa envolvente
     i0, j0, filas, columnas, _rect = R.encajar(ESQ[0], TR)
 
-    def _monta(area_buf=90000.0, crs_por_fecha=None, forma=None):
+    def _monta(area_buf=90000.0, crs_por_fecha=None, forma=None, media=0.6):
         nd, va = _matriz(*(forma or (filas, columnas)), invalidos=[(0, 0), (1, 1)])
         fechas = ["2026-04-10", "2026-04-20"]
         rasgos = []
         for f in fechas:
             rasgos.append({"properties": {"fecha": f, "ndvi": nd, "valido": va,
+                                          "media": media,
                                           "crs": (crs_por_fecha or {}).get(f, "EPSG:32630")}})
         return _EeRejilla([
             {"crs": "EPSG:32630", "transform": TR},        # proyeccion nativa
@@ -1741,6 +1774,18 @@ def pruebas_rejilla_descarga():
               lambda: (res, len(DB.pasadas("P", "2025-2026")), DB.tamano_rejillas("P")[0]),
               lambda r: r == ((1, "anadidas 1 fechas nuevas"), 1, 0))
 
+        # una rejilla que no cuadra con la media del servidor NO se guarda: dejarla
+        # pasar seria peor que no tenerla, porque la heterogeneidad la daria por
+        # buena y mediria ruido con aspecto de dato
+        DB.conectar(os.path.join(d, "rd7.db"))
+        DB.guardar_ficha("P", {"propietario": "x", "superficie_ha": 8,
+                               "coordenadas": [[-4.10, 41.65], [-4.093, 41.65],
+                                               [-4.093, 41.654], [-4.10, 41.654]]})
+        G.ee, fechas = _monta(media=0.20)          # la rejilla trae 0.6: no cuadra
+        n7 = G._descargar_rejillas("P", "2025-2026", G.ee, fechas)
+        check("rejilla/descarga: la que no cuadra con el servidor no se guarda",
+              lambda: (n7, DB.tamano_rejillas("P")[0]), lambda r: r == (0, 0))
+
         # ---- RELLENO DEL HISTORICO: campanas anteriores, ya descargadas antes de
         # que existiera la rejilla. Sin esto habria que esperar una campana entera.
         DB.conectar(os.path.join(d, "rd6.db"))
@@ -1764,7 +1809,7 @@ def pruebas_rejilla_descarga():
                 resp += [{"crs": "EPSG:32630", "transform": TR},
                          {"buf": 90000.0, "todo": 100000.0}, ESQ,
                          {"features": [{"properties": {"fecha": f, "ndvi": nd,
-                                                       "valido": va,
+                                                       "valido": va, "media": 0.6,
                                                        "crs": "EPSG:32630"}} for f in fs]}]
             G.ee = _EeRejilla(resp)
             return G.rellenar_rejillas("P")
@@ -2128,7 +2173,8 @@ def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_rejilla, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
-              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga):
+              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
+              pruebas_rejilla_coherencia):
         try:
             f()
         except Exception as e:

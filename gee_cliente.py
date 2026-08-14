@@ -276,8 +276,14 @@ def _descargar_rejillas(nombre, campana, geom, fechas):
         valido = ndvi.mask().rename("valido")
         par = ndvi.unmask(0).rename("ndvi").addBands(valido.unmask(0))
         muestra = par.sampleRectangle(region=region, defaultValue=0)
+        # Media que calcula EL SERVIDOR sobre la MISMA geometria. Es el contraste
+        # cruzado: dos caminos independientes hasta el mismo numero. Si la rejilla
+        # que nos traemos no da esta media, esta desplazada o mal enmascarada.
+        media = ndvi.reduceRegion(ee.Reducer.mean(), geom_uso, scale=lado,
+                                  bestEffort=True).values().get(0)
         return ee.Feature(None, {"fecha": img.date().format("yyyy-MM-dd"),
                                  "crs": img.select("B4").projection().crs(),
+                                 "media": media,
                                  "ndvi": muestra.get("ndvi"),
                                  "valido": muestra.get("valido")})
 
@@ -296,7 +302,7 @@ def _descargar_rejillas(nombre, campana, geom, fechas):
             log.warning("rejilla: fallo el lote %s..%s de %s; se sigue con el resto",
                         trozo[0], trozo[-1], nombre, exc_info=True)
 
-    guardadas = 0
+    guardadas, descartadas = 0, 0
     vistas = set()
     for f in datos:
         p = f.get("properties") or {}
@@ -316,10 +322,23 @@ def _descargar_rejillas(nombre, campana, geom, fechas):
                         nombre, fecha)
             continue
         valores, validos = plano
+        # CONTRASTE CRUZADO antes de guardar. La media del servidor y la de los
+        # pixeles que nos hemos traido tienen que coincidir; si no, la rejilla no
+        # describe lo que dice describir y guardarla seria peor que no tenerla:
+        # la etapa de heterogeneidad la daria por buena y mediria ruido.
+        ok, dif = rejilla.coherente(valores, validos, p.get("media"))
+        if not ok:
+            log.warning("rejilla: %s %s no cuadra con la media del servidor "
+                        "(diferencia %s); se descarta esa fecha", nombre, fecha, dif)
+            descartadas += 1
+            continue
         DB.guardar_rejilla(nombre, campana, fecha,
                            rejilla.codificar(valores, validos, geo, sin_buffer=sin_buffer,
                                              buffer_m=0 if sin_buffer else BUFFER_INTERIOR_M))
         guardadas += 1
+    if descartadas:
+        log.warning("rejilla: %s %s, %s fecha(s) descartadas por no cuadrar",
+                    nombre, campana, descartadas)
     return guardadas
 
 
