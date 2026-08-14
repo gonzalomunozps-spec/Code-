@@ -207,6 +207,9 @@ MIN_PIXELES_BUFFER = 20
 # de cualquier parcela real; sirve para que una geometria disparatada no llene la
 # base ni reviente el limite de `sampleRectangle`.
 MAX_PIXELES_REJILLA = 60000
+# Fechas por peticion al rellenar el historico. Earth Engine devuelve las matrices
+# como JSON de texto, mucho mas voluminoso que lo que acabamos guardando.
+LOTE_REJILLAS = 12
 
 
 def _dia_siguiente(iso):
@@ -239,15 +242,18 @@ def _descargar_rejillas(nombre, campana, geom, fechas):
     """
     if not fechas:
         return 0
-    # Ventana justa que cubre las fechas pedidas. Puede colarse alguna imagen de
-    # por medio que no se queria: se descarta abajo, al comprobar la fecha. Es mas
-    # simple y mucho mas robusto que componer un filtro por cada dia.
-    col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-           .filterBounds(geom)
-           .filterDate(min(fechas), _dia_siguiente(max(fechas)))
-           .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
-           .sort("system:time_start", True))
-    info = _info_rejilla(geom, col)
+    def coleccion(desde, hasta):
+        # Ventana justa que cubre las fechas pedidas. Puede colarse alguna imagen
+        # de por medio que no se queria: se descarta abajo, al comprobar la fecha.
+        # Es mas simple y mucho mas robusto que componer un filtro por cada dia.
+        return (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                .filterBounds(geom)
+                .filterDate(desde, _dia_siguiente(hasta))
+                .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+                .sort("system:time_start", True))
+
+    fechas = sorted(fechas)
+    info = _info_rejilla(geom, coleccion(fechas[0], fechas[-1]))
     if not info:
         log.warning("rejilla: sin proyeccion utilizable en %s %s", nombre, campana)
         return 0
@@ -275,15 +281,29 @@ def _descargar_rejillas(nombre, campana, geom, fechas):
                                  "ndvi": muestra.get("ndvi"),
                                  "valido": muestra.get("valido")})
 
-    datos = col.map(con_rejilla).getInfo()["features"]
     geo = {"crs": crs, "escala": lado, "i0": i0, "j0": j0,
            "filas": filas, "columnas": columnas}
+    # Por lotes: una campana entera son ~40 fechas, y Earth Engine devuelve las
+    # matrices como JSON de texto (mucho mas voluminoso que lo que acabamos
+    # guardando). Ademas, si un lote falla, los demas ya estan salvados.
+    datos, pedidas = [], set(fechas)
+    for k in range(0, len(fechas), LOTE_REJILLAS):
+        trozo = fechas[k:k + LOTE_REJILLAS]
+        try:
+            datos.extend(coleccion(trozo[0], trozo[-1]).map(con_rejilla)
+                         .getInfo()["features"])
+        except Exception:
+            log.warning("rejilla: fallo el lote %s..%s de %s; se sigue con el resto",
+                        trozo[0], trozo[-1], nombre, exc_info=True)
+
     guardadas = 0
+    vistas = set()
     for f in datos:
         p = f.get("properties") or {}
         fecha = p.get("fecha")
-        if not fecha or fecha not in fechas:
+        if not fecha or fecha not in pedidas or fecha in vistas:
             continue
+        vistas.add(fecha)
         # una pasada que llega en OTRO huso no comparte reticula: no se guarda
         # georreferenciada con la de las demas, que seria mentir sobre donde esta
         if p.get("crs") and p["crs"] != crs:
@@ -301,6 +321,46 @@ def _descargar_rejillas(nombre, campana, geom, fechas):
                                              buffer_m=0 if sin_buffer else BUFFER_INTERIOR_M))
         guardadas += 1
     return guardadas
+
+
+def rellenar_rejillas(nombre, campanas=None, silencioso=True):
+    """Descarga las rejillas que FALTAN, incluidas las de campanas anteriores.
+
+    Sin esto habria que esperar una campana entera para tener con que comparar:
+    las pasadas de anos pasados ya estan guardadas, pero se bajaron antes de que
+    existiera la rejilla. Con esto se tiene mapa de referencia desde el primer
+    dia.
+
+    Reutiliza la misma descarga incremental que la sincronizacion normal, asi que
+    no vuelve a pedir lo que ya esta. `campanas=None` recorre todas las que tengan
+    pasadas guardadas. Devuelve (n_rejillas, mensaje).
+    """
+    if not hay_ee():
+        return (0, "earthengine-api no disponible")
+    try:
+        ficha = DB.ficha(nombre)
+        if not ficha or not ficha.get("coordenadas"):
+            return (0, "parcela sin geometria")
+        geom = ee.Geometry.Polygon(ficha["coordenadas"])
+
+        if campanas is None:
+            campanas = DB.campanas_de(nombre)
+        total, sin_falta = 0, True
+        for camp in campanas:
+            fechas = sorted({p["fecha"] for p in DB.pasadas(nombre, camp) if p.get("fecha")}
+                            - DB.fechas_con_rejilla(nombre, camp))
+            if not fechas:
+                continue
+            sin_falta = False
+            total += _descargar_rejillas(nombre, camp, geom, fechas)
+        if sin_falta:
+            return (0, "todas las pasadas ya tienen su rejilla")
+        return (total, f"{total} rejilla(s) descargadas")
+    except Exception as e:
+        log.warning("rejilla: fallo el relleno de %s", nombre, exc_info=True)
+        if not silencioso:
+            raise
+        return (0, f"error: {e}")
 
 
 def sincronizar_parcela(nombre, campana, silencioso=True):

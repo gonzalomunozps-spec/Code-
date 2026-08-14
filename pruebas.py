@@ -1740,6 +1740,47 @@ def pruebas_rejilla_descarga():
         check("rejilla/descarga: si la rejilla falla, la pasada SI se guarda",
               lambda: (res, len(DB.pasadas("P", "2025-2026")), DB.tamano_rejillas("P")[0]),
               lambda r: r == ((1, "anadidas 1 fechas nuevas"), 1, 0))
+
+        # ---- RELLENO DEL HISTORICO: campanas anteriores, ya descargadas antes de
+        # que existiera la rejilla. Sin esto habria que esperar una campana entera.
+        DB.conectar(os.path.join(d, "rd6.db"))
+        DB.guardar_ficha("P", {"propietario": "x", "superficie_ha": 8,
+                               "coordenadas": [[-4.10, 41.65], [-4.093, 41.65],
+                                               [-4.093, 41.654], [-4.10, 41.654]]})
+        for camp, fs in (("2023-2024", ["2024-04-10", "2024-04-20"]),
+                         ("2024-2025", ["2025-04-10"]),
+                         ("2025-2026", ["2026-04-10", "2026-04-20"])):
+            DB.anadir_pasadas("P", camp, [{"fecha": f, "ndvi": 0.5} for f in fs])
+        check("rejilla/relleno: se ven las campanas de la parcela",
+              lambda: DB.campanas_de("P"),
+              lambda r: r == ["2023-2024", "2024-2025", "2025-2026"])
+
+        def _relleno():
+            # una tanda de respuestas por campana: proyeccion, areas, envolvente y datos
+            resp = []
+            for fs in (["2024-04-10", "2024-04-20"], ["2025-04-10"],
+                       ["2026-04-10", "2026-04-20"]):
+                nd, va = _matriz(filas, columnas)
+                resp += [{"crs": "EPSG:32630", "transform": TR},
+                         {"buf": 90000.0, "todo": 100000.0}, ESQ,
+                         {"features": [{"properties": {"fecha": f, "ndvi": nd,
+                                                       "valido": va,
+                                                       "crs": "EPSG:32630"}} for f in fs]}]
+            G.ee = _EeRejilla(resp)
+            return G.rellenar_rejillas("P")
+        check("rejilla/relleno: baja las rejillas de TODAS las campanas anteriores",
+              _relleno, lambda r: r[0] == 5)
+        check("rejilla/relleno: quedan guardadas por campana",
+              lambda: sorted({r["campana"] for r in DB.rejillas("P")}),
+              lambda r: r == ["2023-2024", "2024-2025", "2025-2026"])
+        check("rejilla/relleno: no vuelve a pedir lo que ya esta",
+              lambda: (setattr(G, "ee", _EeRejilla([])), G.rellenar_rejillas("P"))[1],
+              lambda r: r == (0, "todas las pasadas ya tienen su rejilla"))
+
+        # ---- ESPACIO: el requisito era 1.5-2 KB por pasada en 5-10 ha
+        check("rejilla/relleno: el gasto por pasada se mantiene en el presupuesto",
+              lambda: DB.tamano_rejillas("P"),
+              lambda r: r[0] == 5 and r[1] / r[0] <= 2048)
     finally:
         G.ee = orig
 

@@ -592,6 +592,16 @@ def campanas():
         return s
 
 
+def campanas_de(nombre):
+    """Campanas de UNA parcela que tienen pasadas guardadas, de la mas antigua a
+    la mas reciente. Lo usa el relleno de rejillas para saber que hay que rellenar."""
+    c = _c()
+    with _LOCK:
+        return [r["campana"] for r in c.execute(
+            "SELECT DISTINCT campana FROM pasadas WHERE nombre=? ORDER BY campana",
+            (nombre,))]
+
+
 def campanas_con_datos():
     """Solo las campanas que tienen datos de satelite (pasadas). Las que carecen de
     datos de Copernicus no se muestran en el desplegable del panel."""
