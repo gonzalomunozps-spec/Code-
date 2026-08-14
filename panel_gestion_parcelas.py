@@ -99,6 +99,11 @@ try:
 except Exception:
     _CALIB = None
 
+# Margen interior por defecto de la rejilla de pixeles. Mismo valor que
+# gee_cliente.BUFFER_INTERIOR_M; se repite aqui para no importar ese modulo (que
+# arrastra `ee`) solo por un numero que hay que ensenar en un formulario.
+BUFFER_POR_DEFECTO = 15.0
+
 
 def _abrir_archivo(ruta):
     """Abre un fichero con la aplicacion por defecto del sistema (multiplataforma)."""
@@ -1006,7 +1011,7 @@ class PanelGestionParcelas(ttk.Frame):
         VentanaAltaParcela(self)
 
     def guardar_parcela(self, nombre, propietario, tipo, spec, coords, campana=None,
-                        sigpac=None):
+                        sigpac=None, buffer_m=None):
         camp = campana or self.campana
         cerrado = coords + [coords[0]] if coords and coords[0] != coords[-1] else coords
         ficha = DB.ficha(nombre) or {}
@@ -1020,6 +1025,8 @@ class PanelGestionParcelas(ttk.Frame):
             ficha["provincia"] = str(sigpac["Prov"]).strip()
             ficha["municipio"] = f"{str(sigpac['Prov']).strip()}/{str(sigpac['Mun']).strip()}"
             ficha["sigpac"] = {k: str(v).strip() for k, v in sigpac.items() if str(v).strip()}
+        if buffer_m is not None:
+            ficha["buffer_m"] = float(buffer_m)
         # subtipo derivado (compatibilidad y visualizacion):
         #   leñoso -> tipo de plantacion segun el marco; cereal -> COSECHA_GRANO
         spec = dict(spec or {})
@@ -1112,6 +1119,19 @@ class VentanaAltaParcela(tk.Toplevel):
         etiqueta("Propietario")
         self.e_prop = ttk.Entry(form)
         self.e_prop.pack(fill="x", pady=(0, 6), **pad)
+
+        # BUFFER INTERIOR de la rejilla de pixeles. 15 m por defecto: un pixel de
+        # Sentinel-2 mas margen de geolocalizacion, que es lo que hace falta para
+        # que un pixel este fiablemente dentro Y siga estandolo en la pasada
+        # siguiente. Se puede subir (camino ancho, lindero con arbolado) o bajar
+        # (parcela pequena y limpia), incluso a 0.
+        etiqueta(f"Margen interior de la parcela (m) — por defecto {BUFFER_POR_DEFECTO:.0f}")
+        self.e_buffer = ttk.Entry(form, width=10)
+        self.e_buffer.pack(anchor="w", **pad)
+        tk.Label(form, text="Descarta los pixeles del borde, mezclados con lindero o camino.\n"
+                            "Subirlo limpia mas; bajarlo conserva mas superficie. 0 = sin margen.",
+                 bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"],
+                 justify="left").pack(anchor="w", pady=(0, 6), **pad)
 
         fila = tk.Frame(form, bg=TEMA["surface"])
         fila.pack(fill="x", **pad)
@@ -1242,6 +1262,8 @@ class VentanaAltaParcela(tk.Toplevel):
         for k, v in (ficha.get("sigpac") or {}).items():
             if k in self.sig and not self.sig[k].get():
                 self.sig[k].insert(0, str(v))
+        if ficha.get("buffer_m") is not None:
+            self.e_buffer.insert(0, f"{float(ficha['buffer_m']):g}")
         cult = (ficha.get("cultivos_por_campana", {}) or {}).get(self.campana_edit, {})
         tipo = cult.get("tipo", "")
         if tipo:
@@ -1402,8 +1424,36 @@ class VentanaAltaParcela(tk.Toplevel):
         # los codigos SIGPAC tecleados se guardan con la parcela (provincia y
         # municipio), aunque el recinto se haya dibujado a mano despues
         codigos = {k: e.get().strip() for k, e in self.sig.items()} if hasattr(self, "sig") else None
+        # margen interior: vacio = usar el de por defecto (se guarda como None)
+        buf = (self.e_buffer.get() or "").strip().replace(",", ".")
+        if buf:
+            try:
+                buf = float(buf)
+                if buf < 0:
+                    raise ValueError
+            except ValueError:
+                return messagebox.showwarning(
+                    "Margen interior", "El margen interior son metros: un numero de 0 en "
+                    "adelante (o dejalo vacio para usar el de por defecto).", parent=self)
+        else:
+            buf = None
+        # Cambiar el margen mueve el rectangulo de la rejilla, asi que las que ya
+        # estan guardadas dejan de ser comparables con las nuevas: el pixel (i,j)
+        # pasa a ser otro trozo de terreno. No se pierden -se pueden volver a
+        # descargar- pero conviene decirlo ANTES, no descubrirlo al comparar.
+        if self.editar and buf is not None:
+            antes = (DB.ficha(self.editar) or {}).get("buffer_m")
+            n_rej = DB.tamano_rejillas(self.editar)[0]
+            if n_rej and (antes is None or abs(float(antes) - buf) > 1e-9):
+                if not messagebox.askyesno(
+                        "Margen interior",
+                        f"Esta parcela tiene {n_rej} rejilla(s) de pixeles guardadas con el "
+                        f"margen anterior.\n\nAl cambiarlo dejan de ser comparables con las "
+                        f"nuevas y habra que volver a descargarlas (Sincronizar).\n\n"
+                        f"¿Cambiar el margen de todas formas?", parent=self):
+                    return
         self.panel.guardar_parcela(nombre, prop, tipo, spec, self.coords,
-                                   campana=self.campana_edit, sigpac=codigos)
+                                   campana=self.campana_edit, sigpac=codigos, buffer_m=buf)
         if self.editar:
             messagebox.showinfo("OK", f"Cambios guardados en '{nombre.replace('_', ' ')}'.", parent=self)
             self.destroy()
@@ -2496,6 +2546,18 @@ class FichaParcela:
             self.cb_interp.pack(side="left", padx=(6, 0), fill="x", expand=True)
             self.cb_interp.bind("<<ComboboxSelected>>", self._cambiar_pasada_interp)
 
+        # Incluir o no el analisis de ZONAS (heterogeneidad) en la interpretacion.
+        # Hay parcelas donde no aporta -muy pequenas, muy uniformes, o donde ya se
+        # sabe de donde viene la mancha- y el aviso solo estorba. Se guarda con la
+        # parcela: por defecto SI, que es como se ha comportado siempre.
+        self.var_hetero = tk.BooleanVar(value=True)
+        fila_h = tk.Frame(card, bg=TEMA["surface"])
+        fila_h.pack(fill="x", padx=12, pady=(0, 4))
+        self.chk_hetero = ttk.Checkbutton(
+            fila_h, text="Analizar zonas dentro de la parcela (heterogeneidad)",
+            variable=self.var_hetero, command=self._cambiar_heterogeneidad)
+        self.chk_hetero.pack(anchor="w")
+
         self.txt = tk.Text(card, wrap="word", height=8, bd=0, relief="flat",
                            bg="#f2f8ff", fg=TEMA["text"], font=FUENTES["body"],
                            padx=12, pady=10, highlightthickness=0)
@@ -2521,6 +2583,16 @@ class FichaParcela:
             self.btn_val_idx = ttk.Button(botones, text="  Indices…  ", style="Ghost.TButton",
                                           command=self._abrir_validacion_indices)
             self.btn_val_idx.pack(side="left", padx=(6, 0))
+
+    def _cambiar_heterogeneidad(self):
+        """Guarda la eleccion con la parcela y vuelve a interpretar al momento."""
+        ficha = DB.ficha(self.nombre) or {}
+        ficha["heterogeneidad"] = bool(self.var_hetero.get())
+        DB.guardar_ficha(self.nombre, ficha)
+        # la interpretacion cacheada de las pasadas se hizo con el ajuste anterior
+        for r in (getattr(self, "_regs_actual", None) or []):
+            r["interpretacion"] = None
+        self.refrescar()
 
     # ---- seleccion de la pasada que se interpreta ----
     def _cambiar_pasada_interp(self, _=None):
@@ -2713,9 +2785,14 @@ class FichaParcela:
         actual = regs[-1]
         self._refrescar_selector_pasadas(
             sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", "")), idx)
-        cult = (DB.ficha(self.nombre) or {}).get("cultivos_por_campana", {}).get(self.campana, {})
+        _ficha = DB.ficha(self.nombre) or {}
+        cult = (_ficha.get("cultivos_por_campana", {}) or {}).get(self.campana, {})
         tipo, sub = cult.get("tipo", "BARBECHO"), cult.get("subtipo", "")
         spec = spec_de(cult)
+        # el analisis de zonas se puede apagar por parcela (casilla de arriba)
+        hetero_on = _ficha.get("heterogeneidad", True)
+        if hasattr(self, "var_hetero") and self.var_hetero.get() != bool(hetero_on):
+            self.var_hetero.set(bool(hetero_on))
 
         # eventos del cuaderno cercanos a esa pasada (para el diagnostico)
         eventos_cerca = REG.eventos_cercanos(self.nombre, self.campana,
@@ -2724,7 +2801,7 @@ class FichaParcela:
         # diagnostico fenologico (rapido, local): fase, estado, cubierta y eventos.
         # `parcela` solo sirve para aplicar los umbrales que tu hayas calibrado.
         diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec,
-                               parcela=self.nombre)
+                               parcela=self.nombre, heterogeneidad_activa=hetero_on)
         estado_bruto = diag["estado"]          # el que produce el motor (base del aprendizaje)
         cultivo_id = f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")
 

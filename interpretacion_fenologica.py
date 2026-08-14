@@ -231,7 +231,7 @@ def detectar_cubierta(tipo, subtipo, serie, fecha_iso):
 # 4. EVALUACION UNIFICADA (semaforo y frase salen del MISMO juicio)
 # =====================================================================
 def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
-                    parcela=None):
+                    parcela=None, heterogeneidad_activa=True):
     """
     Devuelve un dict con el diagnostico completo. Semaforo y explicacion
     coherentes entre si, con fenologia y (en lenosos) cubierta vegetal.
@@ -239,6 +239,12 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     parcela: nombre, solo para poder aplicar los umbrales que el usuario haya
         calibrado con sus validaciones (modulo OPCIONAL calibracion_umbrales).
         Sin este argumento -o sin ese modulo- se juzga con la tabla de siempre.
+
+    heterogeneidad_activa: si es False, NO se analizan zonas dentro de la parcela
+        ni se avisa de focos. Hay parcelas donde ese aviso solo estorba (muy
+        pequenas, muy uniformes, o donde ya se sabe de donde viene la mancha).
+        Los estadisticos se siguen calculando y mostrando: lo que se apaga es el
+        JUICIO sobre ellos, no el dato.
 
     eventos_cerca: lista opcional [(dias, evento), ...] del cuaderno de campo.
     spec: dict opcional con el modelo por especie:
@@ -497,7 +503,9 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     hetero = heterogeneidad(serie)
 
     # si hay deterioro LOCALIZADO, se advierte de posible foco (biotico)
-    if evento_explica or segado:
+    if not heterogeneidad_activa:
+        pass   # el usuario ha apagado el analisis de zonas para esta parcela
+    elif evento_explica or segado:
         pass   # el evento (o el corte de forraje) ya explica lo observado; no se solapan avisos
     elif hetero and hetero.get("patron") == "deterioro LOCALIZADO":
         motivo += (" [ATENCION: deterioro LOCALIZADO. La dispersion interna crece "

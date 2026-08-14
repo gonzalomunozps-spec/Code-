@@ -216,17 +216,35 @@ def _dia_siguiente(iso):
     return (datetime.strptime(iso, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def _info_rejilla(geom, col):
+def buffer_de(ficha):
+    """Buffer interior de esa parcela, en metros.
+
+    Sale de la ficha; si no lo tiene, BUFFER_INTERIOR_M. Un 0 explicito significa
+    "esta parcela sin buffer, a proposito", y es distinto de "no lo he tocado"."""
+    v = (ficha or {}).get("buffer_m")
+    if v is None:
+        return BUFFER_INTERIOR_M
+    try:
+        return max(0.0, float(v))
+    except (TypeError, ValueError):
+        return BUFFER_INTERIOR_M
+
+
+def _info_rejilla(geom, col, buffer_m=BUFFER_INTERIOR_M):
     """Proyeccion nativa y geometria de trabajo. Dos viajes a Earth Engine.
 
-    Devuelve (crs, transform, esquinas, sin_buffer) o None si no se puede."""
+    Devuelve (crs, transform, esquinas, sin_buffer, geometria) o None."""
     proj = ee.Image(col.first()).select("B4").projection().getInfo()
     crs, transform = proj.get("crs"), proj.get("transform")
     if not crs or not transform:
         return None
-    geom_buf = geom.buffer(-BUFFER_INTERIOR_M)
-    areas = ee.Dictionary({"buf": geom_buf.area(1), "todo": geom.area(1)}).getInfo()
     lado = abs(float(transform[0])) or 10.0
+    if buffer_m <= 0:
+        # sin buffer a proposito: no se pregunta por el area, no hace falta
+        esquinas = geom.transform(crs, 1).bounds().coordinates().getInfo()[0]
+        return crs, transform, esquinas, True, geom
+    geom_buf = geom.buffer(-buffer_m)
+    areas = ee.Dictionary({"buf": geom_buf.area(1), "todo": geom.area(1)}).getInfo()
     # el buffer puede dejar la parcela en nada (parcelas estrechas o pequenas)
     sin_buffer = (areas.get("buf") or 0) / (lado * lado) < MIN_PIXELES_BUFFER
     usada = geom if sin_buffer else geom_buf
@@ -234,7 +252,7 @@ def _info_rejilla(geom, col):
     return crs, transform, esquinas, sin_buffer, usada
 
 
-def _descargar_rejillas(nombre, campana, geom, fechas):
+def _descargar_rejillas(nombre, campana, geom, fechas, buffer_m=None):
     """Descarga y guarda la rejilla de NDVI de esas fechas. Devuelve cuantas.
 
     Se llama DESPUES de guardar las pasadas y va en su propio try: la rejilla es
@@ -253,7 +271,9 @@ def _descargar_rejillas(nombre, campana, geom, fechas):
                 .sort("system:time_start", True))
 
     fechas = sorted(fechas)
-    info = _info_rejilla(geom, coleccion(fechas[0], fechas[-1]))
+    if buffer_m is None:
+        buffer_m = buffer_de(DB.ficha(nombre))
+    info = _info_rejilla(geom, coleccion(fechas[0], fechas[-1]), buffer_m)
     if not info:
         log.warning("rejilla: sin proyeccion utilizable en %s %s", nombre, campana)
         return 0
@@ -334,7 +354,7 @@ def _descargar_rejillas(nombre, campana, geom, fechas):
             continue
         DB.guardar_rejilla(nombre, campana, fecha,
                            rejilla.codificar(valores, validos, geo, sin_buffer=sin_buffer,
-                                             buffer_m=0 if sin_buffer else BUFFER_INTERIOR_M))
+                                             buffer_m=0 if sin_buffer else buffer_m))
         guardadas += 1
     if descartadas:
         log.warning("rejilla: %s %s, %s fecha(s) descartadas por no cuadrar",

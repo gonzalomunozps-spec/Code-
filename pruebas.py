@@ -1626,6 +1626,76 @@ def _matriz(filas, columnas, valor=0.6, invalidos=()):
     return ndvi, val
 
 
+def pruebas_buffer_y_zonas():
+    """Buffer interior por parcela y encendido/apagado del analisis de zonas."""
+    import almacen as DB
+    import gee_cliente as G
+    from interpretacion_fenologica import evaluar_parcela
+
+    DB.conectar(os.path.join(tempfile.mkdtemp(), "buf.db"))
+    DB.guardar_ficha("P", {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 8})
+    check("buffer: por defecto no se guarda nada (NULL = usa el del programa)",
+          lambda: DB.ficha("P")["buffer_m"], lambda r: r is None)
+    check("buffer: sin valor propio se usa el de por defecto",
+          lambda: G.buffer_de(DB.ficha("P")), lambda r: r == G.BUFFER_INTERIOR_M)
+    check("buffer: se puede subir",
+          lambda: (DB.guardar_ficha("P", dict(DB.ficha("P"), buffer_m=30.0)),
+                   G.buffer_de(DB.ficha("P")))[1], lambda r: r == 30.0)
+    check("buffer: se puede bajar",
+          lambda: (DB.guardar_ficha("P", dict(DB.ficha("P"), buffer_m=5.0)),
+                   G.buffer_de(DB.ficha("P")))[1], lambda r: r == 5.0)
+    check("buffer: un 0 explicito es 'sin margen', no 'por defecto'",
+          lambda: (DB.guardar_ficha("P", dict(DB.ficha("P"), buffer_m=0.0)),
+                   DB.ficha("P")["buffer_m"], G.buffer_de(DB.ficha("P")))[1:],
+          lambda r: r == (0.0, 0.0))
+    check("buffer: un guardado que no lo menciona NO lo pisa",
+          lambda: (DB.guardar_ficha("P", {"propietario": "y", "coordenadas": [[0, 0]],
+                                          "superficie_ha": 9}),
+                   DB.ficha("P")["buffer_m"])[1], lambda r: r == 0.0)
+    check("buffer: un valor absurdo no rompe, cae al de por defecto",
+          lambda: G.buffer_de({"buffer_m": "lo que sea"}), lambda r: r == G.BUFFER_INTERIOR_M)
+    check("buffer: negativo se trata como 0 (no se ensancha la parcela)",
+          lambda: G.buffer_de({"buffer_m": -10}), lambda r: r == 0.0)
+
+    # --- analisis de zonas: se apaga el JUICIO, no el dato
+    serie = [{"fecha": "2026-04-01", "ndvi": 0.70, "ndvi_std": 0.05, "p10": 0.64,
+              "p50": 0.70, "p90": 0.76, "ndmi": 0.20, "lai": 3.0},
+             {"fecha": "2026-04-20", "ndvi": 0.60, "ndvi_std": 0.14, "p10": 0.38,
+              "p50": 0.62, "p90": 0.74, "ndmi": 0.18, "lai": 2.8}]
+    spec = {"especie": "TRIGO", "fecha_siembra": "2025-11-01"}
+
+    def _con(on):
+        return evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec,
+                               heterogeneidad_activa=on)
+    check("zonas: encendido (por defecto) avisa del foco y sube a Vigilar",
+          lambda: _con(True),
+          lambda d: d["estado"] == "Vigilar" and ("FOCO" in d["motivo"]
+                                                  or "AVISO TEMPRANO" in d["motivo"]))
+    check("zonas: apagado no avisa ni cambia el estado",
+          lambda: _con(False),
+          lambda d: d["estado"] == "OK" and "FOCO" not in d["motivo"]
+          and "AVISO TEMPRANO" not in d["motivo"])
+    check("zonas: apagado NO deja de calcular los estadisticos (solo el juicio)",
+          lambda: _con(False)["heterogeneidad"], lambda r: r is not None)
+    check("zonas: el valor por defecto de la firma conserva el comportamiento de siempre",
+          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec)["estado"],
+          lambda r: r == "Vigilar")
+
+    # --- persistencia del ajuste
+    DB.guardar_ficha("Q", {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 8})
+    check("zonas: por defecto vienen encendidas (como se ha comportado siempre)",
+          lambda: DB.ficha("Q")["heterogeneidad"], lambda r: r is True)
+    check("zonas: apagarlas se guarda con la parcela",
+          lambda: (DB.guardar_ficha("Q", dict(DB.ficha("Q"), heterogeneidad=False)),
+                   DB.ficha("Q")["heterogeneidad"])[1], lambda r: r is False)
+    check("zonas: un guardado que no las menciona NO las vuelve a encender",
+          lambda: (DB.guardar_ficha("Q", {"propietario": "z", "coordenadas": [[0, 0]],
+                                          "superficie_ha": 8}),
+                   DB.ficha("Q")["heterogeneidad"])[1], lambda r: r is False)
+    check("zonas: solo afectan a su parcela",
+          lambda: DB.ficha("P")["heterogeneidad"], lambda r: r is True)
+
+
 def pruebas_rejilla_coherencia():
     """El contraste cruzado: la media de la rejilla contra la del servidor.
 
@@ -2174,7 +2244,7 @@ def main():
               pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_rejilla, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
-              pruebas_rejilla_coherencia):
+              pruebas_rejilla_coherencia, pruebas_buffer_y_zonas):
         try:
             f()
         except Exception as e:

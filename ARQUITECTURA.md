@@ -86,7 +86,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 390 pruebas sin pantalla ni red. |
+| `pruebas.py` | 416 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -139,24 +139,30 @@ todas las parcelas.
 6. **Ninguna ruta de datos es relativa al directorio de trabajo.** Todo se pide a
    `rutas.ruta(...)`. Si al arrancar hay un `parcelas.db` en el directorio actual
    y no en el de datos, se traslada una vez y queda anotado en la bitácora.
-7. **El píxel (i,j) de dos fechas es el mismo trozo de terreno, o no se compara.**
+7. **Una rejilla que no cuadra con el servidor no se guarda.** Al descargarla se
+   pide también la media que calcula Earth Engine sobre la misma geometría, y se
+   compara con la media de los píxeles recibidos. Son dos caminos independientes
+   al mismo número; si difieren, la rejilla está desplazada o mal enmascarada y
+   se descarta. Es la única comprobación que caza eso sin credenciales, y una
+   rejilla desplazada no da error: da un mapa de manchas perfectamente creíble.
+8. **El píxel (i,j) de dos fechas es el mismo trozo de terreno, o no se compara.**
    La rejilla de NDVI se guarda en la **retícula nativa** de Sentinel-2, sin
    reproyectar, con su georreferenciación (`crs`, `escala`, `i0`, `j0`, filas,
    columnas). Al leer se exige que coincidan los seis: si no —una parcela a
    caballo entre dos husos UTM llega en husos distintos según la pasada— la
    comparación se **descarta**, no se hace mal. Y se guarda la máscara de válidos:
    un píxel tapado por nube no es un píxel anómalo.
-8. **En leñosos el juez es el MSAVI, no el NDVI.** El NDVI medio mezcla copa y
+9. **En leñosos el juez es el MSAVI, no el NDVI.** El NDVI medio mezcla copa y
    calle: un olivar puede salir «normal» con la copa floja y la hierba alta. El
    vigor de copa se juzga con MSAVI, y con el percentil 90 cuando el marco da
    para separar líneas. `separacion_copa_cubierta` es la **única** fuente del
    veredicto copa/cubierta: antes había dos heurísticas que discrepaban en el
    21 % de los casos, y la cabecera podía contradecir al diagnóstico.
-9. **El régimen hídrico manda sobre la especie en leñosos.** Un olivar de secano
+10. **El régimen hídrico manda sobre la especie en leñosos.** Un olivar de secano
    en julio está en déficit por diseño. Donde el déficit es normal o buscado
    (secano en verano, viña en envero) el NDMI **no se juzga**: `ndmi_min = None`.
    Un régimen sin declarar cuenta como SECANO, que es el supuesto que no alarma.
-10. **Los umbrales de la bibliografía no se editan.** `fenologia_especies` es la
+11. **Los umbrales de la bibliografía no se editan.** `fenologia_especies` es la
    referencia agronómica. Lo que el usuario valida se guarda aparte y se aplica
    como una capa encima (`calibracion_umbrales`), acotada y reversible. Donde la
    tabla dice `ndmi_min: None` («aquí este índice no significa nada») no se
@@ -210,8 +216,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 390, sin `informe_anual` 379,
-sin `herbicida_contexto` 388, sin `calibracion_umbrales` 368 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 416, sin `informe_anual` 405,
+sin `herbicida_contexto` 414, sin `calibracion_umbrales` 394 — los cuatro en verde.
 
 ---
 
@@ -219,7 +225,7 @@ sin `herbicida_contexto` 388, sin `calibracion_umbrales` 368 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 390 pruebas, sin pantalla ni red
+python pruebas.py          # 416 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

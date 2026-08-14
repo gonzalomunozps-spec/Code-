@@ -488,6 +488,35 @@ def escenario_validacion_indices(P, DB):
               lambda: (f.refrescar(), root.update(),
                        (_ for _ in ()).throw(AssertionError("sin marca ✓"))
                        if not str(f.cb_interp["values"][0]).startswith("✓") else None))
+    # --- casilla de analisis de zonas: apaga el aviso, no el dato, y persiste
+    _paso("la casilla de zonas viene encendida",
+          lambda: (_ for _ in ()).throw(AssertionError("deberia venir marcada"))
+          if not f.var_hetero.get() else None)
+
+    def _apagar_zonas():
+        f.var_hetero.set(False)
+        f._cambiar_heterogeneidad()
+        root.update()
+        if DB.ficha(NOM).get("heterogeneidad") is not False:
+            raise AssertionError("no se guardo el apagado")
+    _paso("apagarla se guarda con la parcela", _apagar_zonas)
+
+    def _sobrevive():
+        panel.mostrar_ficha(NOM)
+        root.update()
+        if ultima["f"].var_hetero.get():
+            raise AssertionError("al reabrir la ficha vuelve a salir encendida")
+    _paso("sigue apagada al reabrir la ficha", _sobrevive)
+
+    def _encender():
+        g = ultima["f"]
+        g.var_hetero.set(True)
+        g._cambiar_heterogeneidad()
+        root.update()
+        if DB.ficha(NOM).get("heterogeneidad") is not True:
+            raise AssertionError("no se guardo el encendido")
+    _paso("y se puede volver a encender", _encender)
+
     P.FichaParcela.__init__ = original
     _derribar(root)
     return f"{n_pasadas} pasadas recorridas y validadas"
@@ -539,6 +568,17 @@ def escenario_dialogos(P, DB):
         c._abrir_cal()
         return c
     abrir("CampoFecha y calendario", _fecha)
+
+    def _alta_con_margen():
+        v = P.VentanaAltaParcela(panel)
+        root.update()
+        # el margen interior de la rejilla se teclea aqui; vacio = el de por defecto
+        v.e_buffer.insert(0, "25")
+        if not v.e_buffer.get():
+            raise AssertionError("no hay campo de margen interior")
+        return v
+    abrir("alta de parcela con margen interior", _alta_con_margen,
+          lambda v: v._guardar())
 
     abrir("alta de parcela", lambda: P.VentanaAltaParcela(panel),
           lambda v: [b.invoke() for t, b in _botones(v) if "guardar" not in t.lower()]
