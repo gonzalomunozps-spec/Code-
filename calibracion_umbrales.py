@@ -62,12 +62,13 @@ ETIQUETA_AMBITO = {"parcela": "Solo esta parcela",
                    "global": "Siempre (todos mis cultivos)"}
 
 # Indices con umbral en la tabla de fases: son los unicos que se pueden calibrar.
-# Los demas (EVI, SAVI, GNDVI, MSAVI) se usan por CONTRASTE entre ellos, no contra
-# una constante, asi que no hay umbral que mover. Se muestran y se anota lo que
-# diga el usuario, pero hoy no cambian el diagnostico.
+# EVI, SAVI y GNDVI NO estan aqui a proposito: se usan por CONTRASTE entre ellos
+# (NDVI/EVI, GNDVI/NDVI...), no contra una constante, asi que no hay umbral que
+# mover. Se muestran en el dialogo y se anota lo que diga el usuario, pero hoy no
+# cambian el diagnostico, y ahi se dice.
+# MSAVI si esta: es EL indice de la copa en lenosos, porque corrige el efecto del
+# suelo y mide el arbol y no la calle. Su umbral es el mas util de calibrar ahi.
 CALIBRABLES = {"NDVI": ("lo", "hi"), "NDMI": ("ndmi_min", None), "LAI": ("lai_min", None),
-               # MSAVI es EL indice de la copa en lenosos: corrige el suelo, asi que
-               # mide el arbol y no la calle. Su umbral es el mas util de calibrar ahi.
                "MSAVI": ("msavi_min", None)}
 
 MIN_OBSERVACIONES = 2       # igual que el aprendizaje del diagnostico
