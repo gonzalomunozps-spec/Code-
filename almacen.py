@@ -55,7 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 4
+ESQUEMA_VERSION = 5
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -161,6 +161,11 @@ def _crear_tablas():
             nombre TEXT, campana TEXT, fecha TEXT,
             datos TEXT,                -- JSON con VV, VH y RVI (Sentinel-1, atraviesa nubes)
             PRIMARY KEY(nombre, campana, fecha));
+        CREATE TABLE IF NOT EXISTS pixeles(
+            nombre TEXT, campana TEXT, fecha TEXT,
+            datos TEXT,                -- JSON de rejilla.codificar(): NDVI por pixel
+            PRIMARY KEY(nombre, campana, fecha));
+        CREATE INDEX IF NOT EXISTS ix_pixeles_np ON pixeles(nombre, campana);
         CREATE TABLE IF NOT EXISTS eventos(
             id TEXT PRIMARY KEY,
             nombre TEXT, campana TEXT, fecha TEXT,
@@ -264,9 +269,29 @@ def _migracion_4(c):
               "ON validaciones_indice(indice, especie, fase, regimen, densidad)")
 
 
+def _migracion_5(c):
+    """Rejilla de NDVI por pasada: el valor de CADA pixel, no solo la media.
+
+    Con la media y los percentiles se sabe QUE parte de la parcela va peor, pero
+    no DONDE. La rejilla guarda el NDVI pixel a pixel junto con su
+    georreferenciacion, de modo que el (i,j) de dos fechas sea el mismo trozo de
+    terreno y se puedan comparar en el tiempo.
+
+    Solo NDVI: guardar los siete indices multiplicaria el tamano por siete sin
+    aportar nada a esto. Medido, una parcela de 5-10 ha ocupa 0.9-1.5 KB por
+    pasada (ver rejilla.py)."""
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS pixeles(
+            nombre TEXT, campana TEXT, fecha TEXT,
+            datos TEXT,                -- JSON de rejilla.codificar()
+            PRIMARY KEY(nombre, campana, fecha))""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_pixeles_np ON pixeles(nombre, campana)")
+
+
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
-_MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4}
+_MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4,
+                5: _migracion_5}
 
 
 def _migrar_esquema():
@@ -447,7 +472,7 @@ def eliminar_parcela(nombre):
         # TODAS las tablas que referencian la parcela. Si se olvida alguna, sus filas
         # quedan huerfanas y una parcela nueva con el mismo nombre heredaria los datos
         # de la anterior (le pasaba a pasadas_radar y a validaciones).
-        for t in ("pasadas", "pasadas_radar", "cultivos", "eventos",
+        for t in ("pasadas", "pasadas_radar", "pixeles", "cultivos", "eventos",
                   "validaciones", "validaciones_indice", "parcelas"):
             c.execute(f"DELETE FROM {t} WHERE nombre=?", (nombre,))
         c.commit()
@@ -644,6 +669,68 @@ def eliminar_evento(parcela, campana, evento_id):
         c.execute("DELETE FROM eventos WHERE id=? AND nombre=? AND campana=?",
                   (evento_id, parcela, campana))
         c.commit()
+
+
+# ---------------------------------------------------------------------------
+# REJILLA DE PIXELES (NDVI pixel a pixel, para comparar en el tiempo)
+# ---------------------------------------------------------------------------
+def guardar_rejilla(nombre, campana, fecha, datos):
+    """Guarda la rejilla de una pasada. INSERT OR REPLACE: volver a descargarla
+    -por ejemplo al rellenar el historico- la actualiza sin duplicar."""
+    c = _c()
+    with _LOCK:
+        c.execute("INSERT OR REPLACE INTO pixeles(nombre,campana,fecha,datos) VALUES(?,?,?,?)",
+                  (nombre, campana, fecha, json.dumps(datos, ensure_ascii=False)))
+        c.commit()
+
+
+def fechas_con_rejilla(nombre, campana):
+    """Fechas de esa campana que YA tienen rejilla. Lo usa la descarga para no
+    volver a pedir lo que ya esta."""
+    c = _c()
+    with _LOCK:
+        return {r["fecha"] for r in c.execute(
+            "SELECT fecha FROM pixeles WHERE nombre=? AND campana=?", (nombre, campana))}
+
+
+def rejillas(nombre, campana=None):
+    """Rejillas guardadas, ordenadas por fecha. Sin `campana`, todas las campanas
+    (es lo que hace falta para comparar un ano con otro).
+
+    Devuelve la lista TAL CUAL esta guardada. Quien compare debe pasar por
+    `rejilla.comparables` para no mezclar reticulas distintas."""
+    c = _c()
+    sql = "SELECT campana,fecha,datos FROM pixeles WHERE nombre=?"
+    args = [nombre]
+    if campana:
+        sql += " AND campana=?"
+        args.append(campana)
+    with _LOCK:
+        filas = list(c.execute(sql + " ORDER BY campana,fecha", args))
+    out = []
+    for r in filas:
+        try:
+            d = json.loads(r["datos"]) if r["datos"] else None
+        except ValueError:
+            log.warning("rejilla ilegible en %s %s %s", nombre, r["campana"], r["fecha"])
+            continue
+        if d:
+            d["campana"], d["fecha"] = r["campana"], r["fecha"]
+            out.append(d)
+    return out
+
+
+def tamano_rejillas(nombre=None):
+    """(n_rejillas, bytes) de lo que ocupan. Sirve para vigilar el gasto de disco."""
+    c = _c()
+    sql = "SELECT COUNT(*), COALESCE(SUM(LENGTH(datos)),0) FROM pixeles"
+    args = []
+    if nombre:
+        sql += " WHERE nombre=?"
+        args.append(nombre)
+    with _LOCK:
+        n, b = c.execute(sql, args).fetchone()
+    return int(n), int(b)
 
 
 # ---------------------------------------------------------------------------

@@ -867,6 +867,124 @@ def pruebas_lenosos():
 
 
 # =====================================================================
+# 4d. REJILLA DE PIXELES (NDVI pixel a pixel y su georreferenciacion)
+# =====================================================================
+def pruebas_rejilla():
+    import json as _json
+    import math as _math
+    import random as _random
+    import statistics as _stat
+    import rejilla as R
+    import almacen as DB
+
+    GEO = {"crs": "EPSG:32630", "escala": 10.0, "i0": 399123, "j0": 455678,
+           "filas": 4, "columnas": 5}
+    vals = [0.60, 0.62, 0.58, 0.61, 0.59, 0.63, 0.65, 0.61, 0.60, 0.62,
+            0.58, 0.30, 0.29, 0.57, 0.59, 0.61, 0.60, 0.62, 0.61, 0.63]
+    validos = [True] * 20
+    validos[3] = False                       # un pixel tapado por nube
+
+    def _ida_vuelta():
+        d = R.decodificar(R.codificar(vals, validos, GEO))
+        return all(abs(a - b) <= 1.0 / R.ESCALA_NDVI
+                   for a, b, ok in zip(d["valores"], vals, validos) if ok)
+    check("rejilla: el NDVI vuelve con la precision declarada", _ida_vuelta,
+          lambda r: r is True)
+    check("rejilla: un pixel con nube vuelve como None, NO como NDVI bajo",
+          lambda: R.decodificar(R.codificar(vals, validos, GEO))["valores"][3],
+          lambda r: r is None)
+    check("rejilla: la mascara de validos se conserva",
+          lambda: R.decodificar(R.codificar(vals, validos, GEO))["validos"],
+          lambda r: r == validos)
+    check("rejilla: un NDVI de 0.0 legitimo NO se confunde con invalido",
+          lambda: R.decodificar(R.codificar([0.0] * 20, [True] * 20, GEO))["valores"][0],
+          lambda r: r == 0.0)
+    check("rejilla: la georreferenciacion se guarda entera",
+          lambda: R.decodificar(R.codificar(vals, validos, GEO))["geo"],
+          lambda r: r == GEO)
+    check("rejilla: si el tamano no cuadra con filas x columnas, se rechaza",
+          lambda: _lanza(R.codificar, ValueError, vals[:5], validos[:5], GEO),
+          lambda r: r is True)
+    check("rejilla: un formato desconocido no se interpreta a lo loco",
+          lambda: R.decodificar(dict(R.codificar(vals, validos, GEO), v=99)),
+          lambda r: r is None)
+
+    # --- comparabilidad: el nucleo del asunto
+    otra_zona = dict(GEO, crs="EPSG:32629")
+    desplazada = dict(GEO, i0=GEO["i0"] + 1)
+    check("rejilla: misma reticula -> comparables",
+          lambda: R.misma_geometria(GEO, dict(GEO)), lambda r: r is True)
+    check("rejilla: otro huso UTM -> NO comparables",
+          lambda: R.misma_geometria(GEO, otra_zona), lambda r: r is False)
+    check("rejilla: desplazada un solo pixel -> NO comparables",
+          lambda: R.misma_geometria(GEO, desplazada), lambda r: r is False)
+
+    def _filtra():
+        rs = [{"geo": GEO, "fecha": "2026-01-10"}, {"geo": dict(GEO), "fecha": "2026-02-10"},
+              {"geo": otra_zona, "fecha": "2026-03-10"}, {"geo": dict(GEO), "fecha": "2026-04-10"}]
+        buenas, fuera = R.comparables(rs)
+        return [r["fecha"] for r in buenas], [r["fecha"] for r in fuera]
+    check("rejilla: se descarta la fecha que no comparte reticula, no todo el historico",
+          _filtra,
+          lambda r: r == (["2026-01-10", "2026-02-10", "2026-04-10"], ["2026-03-10"]))
+    check("rejilla: sin ninguna geometria valida no se compara nada",
+          lambda: R.comparables([{"geo": {}}, {"geo": None}]), lambda r: r[0] == [])
+
+    # --- TAMANO: el requisito era 1.5-2 KB por pasada en 5-10 ha
+    def _tam(ha, relacion, rugosidad=0.05, semilla=3):
+        _random.seed(semilla)
+        area = ha * 10000.0
+        ancho, alto = _math.sqrt(area * relacion), _math.sqrt(area / relacion)
+        cols, filas = int(_math.ceil(ancho / 10)) + 1, int(_math.ceil(alto / 10)) + 1
+        g = [[0.0] * cols for _ in range(filas)]
+        for i in range(filas):
+            for j in range(cols):
+                vec = [x for x in (g[i - 1][j] if i else None, g[i][j - 1] if j else None) if x]
+                g[i][j] = max(0.0, min(0.95, (_stat.fmean(vec) if vec else 0.62)
+                                       + _random.gauss(0, rugosidad)))
+        planos = [x for f in g for x in f]
+        mask = [_random.random() > 0.05 for _ in planos]
+        d = R.codificar(planos, mask, dict(GEO, filas=filas, columnas=cols))
+        return len(_json.dumps(d, ensure_ascii=False).encode("utf-8"))
+
+    for ha in (5, 10):
+        for rel, etiq in ((1.0, "cuadrada"), (5.0, "alargada 5:1"), (10.0, "alargada 10:1")):
+            check(f"rejilla: {ha} ha {etiq} cabe en 2 KB",
+                  lambda ha=ha, rel=rel: _tam(ha, rel), lambda t: t <= 2048)
+    check("rejilla: un campo muy heterogeneo (que comprime mal) tambien cabe",
+          lambda: _tam(10, 1.0, rugosidad=0.20), lambda t: t <= 2048)
+    check("rejilla: la cota superior teorica avisa antes de descargar",
+          lambda: R.tamano_estimado(33, 33), lambda t: 1500 <= t <= 2500)
+
+    # --- persistencia
+    d_e = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d_e, "rej.db"))
+    DB.guardar_ficha("P", {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 8})
+    DB.guardar_rejilla("P", "2025-2026", "2026-04-10", R.codificar(vals, validos, GEO))
+    DB.guardar_rejilla("P", "2024-2025", "2025-04-10", R.codificar(vals, validos, GEO))
+    check("almacen: las rejillas se leen ordenadas y de todas las campanas",
+          lambda: [(r["campana"], r["fecha"]) for r in DB.rejillas("P")],
+          lambda r: r == [("2024-2025", "2025-04-10"), ("2025-2026", "2026-04-10")])
+    check("almacen: se puede pedir solo una campana",
+          lambda: len(DB.rejillas("P", "2025-2026")), lambda r: r == 1)
+    check("almacen: fechas_con_rejilla evita volver a descargar lo que ya esta",
+          lambda: DB.fechas_con_rejilla("P", "2025-2026"), lambda r: r == {"2026-04-10"})
+    check("almacen: guardar la misma fecha la sustituye, no la duplica",
+          lambda: (DB.guardar_rejilla("P", "2025-2026", "2026-04-10",
+                                      R.codificar(vals, validos, GEO)),
+                   len(DB.rejillas("P", "2025-2026")))[1], lambda r: r == 1)
+    check("almacen: el espacio ocupado se puede consultar",
+          lambda: DB.tamano_rejillas("P"), lambda r: r[0] == 2 and r[1] > 0)
+    check("almacen: una rejilla ilegible se salta sin tumbar la lectura",
+          lambda: (DB._c().execute("INSERT OR REPLACE INTO pixeles VALUES(?,?,?,?)",
+                                   ("P", "2025-2026", "2026-05-01", "{roto")),
+                   DB._c().commit(), len(DB.rejillas("P")))[2], lambda r: r == 2)
+    check("almacen: las rejillas se borran con la parcela",
+          lambda: (DB.eliminar_parcela("P"), DB.tamano_rejillas("P"))[1],
+          lambda r: r == (0, 0))
+
+
+# =====================================================================
 # 5. CREDENCIALES (degradacion sin librerias externas)
 # =====================================================================
 def pruebas_credenciales():
@@ -1815,7 +1933,7 @@ def pruebas_geo():
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
-              pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
+              pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_rejilla, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente):
         try:
