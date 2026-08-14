@@ -1592,6 +1592,158 @@ class _EeFalso:
         return {"features": object.__getattribute__(self, "_features")}
 
 
+class _EeRejilla:
+    """Doble de `ee` para probar la descarga de la REJILLA sin red.
+
+    A diferencia de `_EeFalso`, aqui hacen falta varias respuestas distintas: la
+    proyeccion nativa, las areas (para decidir el buffer), la envolvente y las
+    matrices de cada fecha. Se devuelven en el orden en que las pide el codigo, y
+    cada llamada a `getInfo` consume la siguiente.
+    """
+    def __init__(self, respuestas):
+        object.__setattr__(self, "_pendientes", list(respuestas))
+        object.__setattr__(self, "_pedidas", [])
+
+    def __getattr__(self, nombre):
+        object.__getattribute__(self, "_pedidas").append(nombre)
+        return self
+
+    def __call__(self, *a, **k):
+        return self
+
+    def getInfo(self):
+        pend = object.__getattribute__(self, "_pendientes")
+        if not pend:
+            raise AssertionError("el codigo pidio mas getInfo de los previstos")
+        return pend.pop(0)
+
+
+def _matriz(filas, columnas, valor=0.6, invalidos=()):
+    ndvi = [[valor] * columnas for _ in range(filas)]
+    val = [[1] * columnas for _ in range(filas)]
+    for i, j in invalidos:
+        val[i][j] = 0
+    return ndvi, val
+
+
+def pruebas_rejilla_descarga():
+    """La descarga de la rejilla, con `ee` sustituido por un doble."""
+    import gee_cliente as G
+    import almacen as DB
+    import rejilla as R
+
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "rd.db"))
+    DB.guardar_ficha("P", {"propietario": "x", "superficie_ha": 8,
+                           "coordenadas": [[-4.10, 41.65], [-4.093, 41.65],
+                                           [-4.093, 41.654], [-4.10, 41.654]]})
+    TR = [10.0, 0.0, 399960.0, 0.0, -10.0, 4600020.0]
+    ESQ = [[[400120.0, 4599730.0], [400290.0, 4599730.0],
+            [400290.0, 4599880.0], [400120.0, 4599880.0]]]
+    # 15x17 = 255 pixeles segun el encaje de esa envolvente
+    i0, j0, filas, columnas, _rect = R.encajar(ESQ[0], TR)
+
+    def _monta(area_buf=90000.0, crs_por_fecha=None, forma=None):
+        nd, va = _matriz(*(forma or (filas, columnas)), invalidos=[(0, 0), (1, 1)])
+        fechas = ["2026-04-10", "2026-04-20"]
+        rasgos = []
+        for f in fechas:
+            rasgos.append({"properties": {"fecha": f, "ndvi": nd, "valido": va,
+                                          "crs": (crs_por_fecha or {}).get(f, "EPSG:32630")}})
+        return _EeRejilla([
+            {"crs": "EPSG:32630", "transform": TR},        # proyeccion nativa
+            {"buf": area_buf, "todo": 100000.0},           # areas: decide el buffer
+            ESQ,                                           # envolvente en ese CRS
+            {"features": rasgos},                          # las matrices
+        ]), fechas
+
+    orig = G.ee
+    try:
+        G.ee, fechas = _monta()
+        n = G._descargar_rejillas("P", "2025-2026", G.ee, fechas)
+        check("rejilla/descarga: guarda una rejilla por fecha", lambda: n, lambda r: r == 2)
+        guardadas = DB.rejillas("P", "2025-2026")
+        check("rejilla/descarga: la georreferenciacion sale de la reticula nativa",
+              lambda: {k: guardadas[0][k] for k in ("crs", "escala", "i0", "j0",
+                                                    "filas", "columnas")},
+              lambda r: r == {"crs": "EPSG:32630", "escala": 10.0, "i0": i0, "j0": j0,
+                              "filas": filas, "columnas": columnas})
+        check("rejilla/descarga: las dos fechas comparten reticula",
+              lambda: len(R.comparables(guardadas)[0]), lambda r: r == 2)
+        check("rejilla/descarga: la mascara de nubes llega hasta el dato guardado",
+              lambda: R.decodificar(guardadas[0])["valores"][0], lambda r: r is None)
+        check("rejilla/descarga: con buffer amplio se aplica el buffer interior",
+              lambda: (guardadas[0]["sin_buffer"], guardadas[0]["buffer_m"]),
+              lambda r: r == (False, G.BUFFER_INTERIOR_M))
+        check("rejilla/descarga: cabe en el presupuesto de 2 KB",
+              lambda: DB.tamano_rejillas("P")[1] / 2.0, lambda b: b <= 2048)
+
+        # buffer que deja la parcela por debajo del minimo -> se guarda sin buffer
+        DB.conectar(os.path.join(d, "rd2.db"))
+        DB.guardar_ficha("P", {"propietario": "x", "superficie_ha": 0.3,
+                               "coordenadas": [[-4.10, 41.65], [-4.099, 41.65],
+                                               [-4.099, 41.6505], [-4.10, 41.6505]]})
+        G.ee, fechas = _monta(area_buf=500.0)          # 5 pixeles: por debajo de 20
+        G._descargar_rejillas("P", "2025-2026", G.ee, fechas)
+        check("rejilla/descarga: si el buffer deja menos de 20 pixeles, se marca",
+              lambda: [(r["sin_buffer"], r["buffer_m"]) for r in DB.rejillas("P")],
+              lambda r: r and all(x == (True, 0) for x in r))
+
+        # una fecha que llega en OTRO huso no se guarda con la geometria de las demas
+        DB.conectar(os.path.join(d, "rd3.db"))
+        DB.guardar_ficha("P", {"propietario": "x", "superficie_ha": 8,
+                               "coordenadas": [[-4.10, 41.65], [-4.093, 41.65],
+                                               [-4.093, 41.654], [-4.10, 41.654]]})
+        G.ee, fechas = _monta(crs_por_fecha={"2026-04-20": "EPSG:32629"})
+        n3 = G._descargar_rejillas("P", "2025-2026", G.ee, fechas)
+        check("rejilla/descarga: la fecha de otro huso UTM se omite, no se guarda mal",
+              lambda: (n3, [r["fecha"] for r in DB.rejillas("P")]),
+              lambda r: r == (1, ["2026-04-10"]))
+
+        # matriz con otra forma -> se descarta esa fecha
+        DB.conectar(os.path.join(d, "rd4.db"))
+        DB.guardar_ficha("P", {"propietario": "x", "superficie_ha": 8,
+                               "coordenadas": [[-4.10, 41.65], [-4.093, 41.65],
+                                               [-4.093, 41.654], [-4.10, 41.654]]})
+        G.ee, fechas = _monta(forma=(filas - 1, columnas))
+        n4 = G._descargar_rejillas("P", "2025-2026", G.ee, fechas)
+        check("rejilla/descarga: una matriz de otra forma se descarta (no se desplaza)",
+              lambda: (n4, DB.tamano_rejillas("P")[0]), lambda r: r == (0, 0))
+
+        # LO MAS IMPORTANTE: si la rejilla falla, las pasadas NO se pierden y el
+        # mensaje que ve el usuario no cambia. La rejilla es un extra.
+        class _EeRejillaRota:
+            def __init__(self):
+                object.__setattr__(self, "n", 0)
+
+            def __getattr__(self, _n):
+                return self
+
+            def __call__(self, *a, **k):
+                return self
+
+            def getInfo(self):
+                object.__setattr__(self, "n", object.__getattribute__(self, "n") + 1)
+                if object.__getattribute__(self, "n") == 1:
+                    return {"features": [{"properties": {
+                        "fecha": "2026-04-10", "cobertura_valida": 0.95, "ndvi": 0.55,
+                        "evi": 0.3, "savi": 0.4, "gndvi": 0.4, "lai": 2.0, "msavi": 0.4,
+                        "ndmi": 0.2, "ndvi_std": 0.05, "n_pixeles": 800}}]}
+                raise RuntimeError("Earth Engine dice que no")
+
+        DB.conectar(os.path.join(d, "rd5.db"))
+        DB.guardar_ficha("P", {"propietario": "x", "superficie_ha": 8,
+                               "coordenadas": [[-4.10, 41.65], [-4.093, 41.65],
+                                               [-4.093, 41.654], [-4.10, 41.654]]})
+        G.ee = _EeRejillaRota()
+        res = G.sincronizar_parcela("P", "2025-2026")
+        check("rejilla/descarga: si la rejilla falla, la pasada SI se guarda",
+              lambda: (res, len(DB.pasadas("P", "2025-2026")), DB.tamano_rejillas("P")[0]),
+              lambda r: r == ((1, "anadidas 1 fechas nuevas"), 1, 0))
+    finally:
+        G.ee = orig
+
+
 def pruebas_gee_cliente():
     import gee_cliente as G
     import almacen as DB
@@ -1935,7 +2087,7 @@ def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_rejilla, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
-              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente):
+              pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga):
         try:
             f()
         except Exception as e:

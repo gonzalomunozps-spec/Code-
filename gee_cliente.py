@@ -29,6 +29,8 @@ from datetime import datetime, timedelta
 import requests
 
 import almacen as DB
+import rejilla
+from bitacora import log
 from campanas import rango_campana
 from sentinel1 import (cross_ratio_db, error_estandar, fiabilidad_radar,
                        rvi_incertidumbre)
@@ -178,6 +180,129 @@ def descargar_mapa_radar(coords, iso, param, metros, png_destino):
     return dim
 
 
+# =====================================================================
+# REJILLA DE NDVI: el valor de CADA pixel, comparable entre fechas
+# =====================================================================
+# La media y los percentiles dicen QUE parte de la parcela va peor, pero no
+# DONDE. La rejilla guarda el NDVI pixel a pixel. Para que sirva de algo, el
+# pixel (i,j) tiene que ser el mismo trozo de terreno en todas las fechas:
+#
+#   - Se usa la RETICULA NATIVA de Sentinel-2, sin reproyectar ni remuestrear.
+#     El rectangulo se encaja sobre bordes de pixel a partir del `transform` de
+#     la propia imagen (ver rejilla.encajar).
+#   - Se guarda la georreferenciacion (crs, escala, i0, j0, filas, columnas) con
+#     los datos, y al leer se exige que coincida. Una parcela a caballo entre dos
+#     husos UTM puede llegar en husos distintos segun la pasada; en ese caso la
+#     comparacion se DESCARTA en vez de hacerse mal.
+#   - Se guarda tambien la mascara de pixeles validos: un pixel tapado por nube
+#     no es un pixel anomalo, y sin la mascara se confundirian.
+#
+# Buffer interior de 15 m para no meter pixeles de borde, mezclados con lindero o
+# camino. Si el buffer deja la parcela por debajo de MIN_PIXELES_BUFFER, se
+# guarda sin buffer y se marca, que es mejor que quedarse sin rejilla.
+BUFFER_INTERIOR_M = 15
+MIN_PIXELES_BUFFER = 20
+# Tope de seguridad. Medido: una parcela de 5-10 ha ocupa 0.9-1.5 KB por pasada,
+# y el tamano crece con la superficie. 60.000 pixeles son 600 ha, muy por encima
+# de cualquier parcela real; sirve para que una geometria disparatada no llene la
+# base ni reviente el limite de `sampleRectangle`.
+MAX_PIXELES_REJILLA = 60000
+
+
+def _dia_siguiente(iso):
+    return (datetime.strptime(iso, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _info_rejilla(geom, col):
+    """Proyeccion nativa y geometria de trabajo. Dos viajes a Earth Engine.
+
+    Devuelve (crs, transform, esquinas, sin_buffer) o None si no se puede."""
+    proj = ee.Image(col.first()).select("B4").projection().getInfo()
+    crs, transform = proj.get("crs"), proj.get("transform")
+    if not crs or not transform:
+        return None
+    geom_buf = geom.buffer(-BUFFER_INTERIOR_M)
+    areas = ee.Dictionary({"buf": geom_buf.area(1), "todo": geom.area(1)}).getInfo()
+    lado = abs(float(transform[0])) or 10.0
+    # el buffer puede dejar la parcela en nada (parcelas estrechas o pequenas)
+    sin_buffer = (areas.get("buf") or 0) / (lado * lado) < MIN_PIXELES_BUFFER
+    usada = geom if sin_buffer else geom_buf
+    esquinas = usada.transform(crs, 1).bounds().coordinates().getInfo()[0]
+    return crs, transform, esquinas, sin_buffer, usada
+
+
+def _descargar_rejillas(nombre, campana, geom, fechas):
+    """Descarga y guarda la rejilla de NDVI de esas fechas. Devuelve cuantas.
+
+    Se llama DESPUES de guardar las pasadas y va en su propio try: la rejilla es
+    un extra, y si Earth Engine la niega no puede costarnos los datos buenos.
+    """
+    if not fechas:
+        return 0
+    # Ventana justa que cubre las fechas pedidas. Puede colarse alguna imagen de
+    # por medio que no se queria: se descarta abajo, al comprobar la fecha. Es mas
+    # simple y mucho mas robusto que componer un filtro por cada dia.
+    col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+           .filterBounds(geom)
+           .filterDate(min(fechas), _dia_siguiente(max(fechas)))
+           .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+           .sort("system:time_start", True))
+    info = _info_rejilla(geom, col)
+    if not info:
+        log.warning("rejilla: sin proyeccion utilizable en %s %s", nombre, campana)
+        return 0
+    crs, transform, esquinas, sin_buffer, geom_uso = info
+    i0, j0, filas, columnas, rect = rejilla.encajar(esquinas, transform)
+    if filas * columnas > MAX_PIXELES_REJILLA:
+        log.warning("rejilla: %s ocupa %sx%s pixeles, por encima del tope; se omite",
+                    nombre, filas, columnas)
+        return 0
+
+    lado = abs(float(transform[0]))
+    region = ee.Geometry.Rectangle(rect, crs, False, False)
+
+    def con_rejilla(img):
+        # MISMO enmascarado SCL que usa la sincronizacion: si aqui se filtrara
+        # distinto, la rejilla y la estadistica hablarian de pixeles distintos.
+        scl = img.select("SCL")
+        ok = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
+        ndvi = img.updateMask(ok).normalizedDifference(["B8", "B4"]).clip(geom_uso)
+        valido = ndvi.mask().rename("valido")
+        par = ndvi.unmask(0).rename("ndvi").addBands(valido.unmask(0))
+        muestra = par.sampleRectangle(region=region, defaultValue=0)
+        return ee.Feature(None, {"fecha": img.date().format("yyyy-MM-dd"),
+                                 "crs": img.select("B4").projection().crs(),
+                                 "ndvi": muestra.get("ndvi"),
+                                 "valido": muestra.get("valido")})
+
+    datos = col.map(con_rejilla).getInfo()["features"]
+    geo = {"crs": crs, "escala": lado, "i0": i0, "j0": j0,
+           "filas": filas, "columnas": columnas}
+    guardadas = 0
+    for f in datos:
+        p = f.get("properties") or {}
+        fecha = p.get("fecha")
+        if not fecha or fecha not in fechas:
+            continue
+        # una pasada que llega en OTRO huso no comparte reticula: no se guarda
+        # georreferenciada con la de las demas, que seria mentir sobre donde esta
+        if p.get("crs") and p["crs"] != crs:
+            log.warning("rejilla: %s %s llega en %s y no en %s; se omite esa fecha",
+                        nombre, fecha, p["crs"], crs)
+            continue
+        plano = rejilla.desde_arrays(p.get("ndvi"), p.get("valido"), filas, columnas)
+        if not plano:
+            log.warning("rejilla: %s %s devuelve una matriz de otra forma; se omite",
+                        nombre, fecha)
+            continue
+        valores, validos = plano
+        DB.guardar_rejilla(nombre, campana, fecha,
+                           rejilla.codificar(valores, validos, geo, sin_buffer=sin_buffer,
+                                             buffer_m=0 if sin_buffer else BUFFER_INTERIOR_M))
+        guardadas += 1
+    return guardadas
+
+
 def sincronizar_parcela(nombre, campana, silencioso=True):
     """
     Sincronizacion INCREMENTAL: mira hasta que fecha hay datos guardados y solo
@@ -288,6 +413,19 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
         # INSERT OR IGNORE: anade solo las fechas nuevas y conserva las existentes
         # (con su interpretacion). Es atomico y no pisa lo que otro hilo guardara.
         DB.anadir_pasadas(nombre, campana, nuevos)
+
+        # La rejilla va DESPUES y en su propio try: es un extra, y si Earth Engine
+        # la niega no puede costarnos las pasadas, que son el dato de verdad. El
+        # mensaje que ve el usuario no cambia; lo que pase aqui va a la bitacora.
+        try:
+            n_rej = _descargar_rejillas(nombre, campana, geom,
+                                        sorted(p["fecha"] for p in nuevos))
+            if n_rej:
+                log.info("rejilla: %s %s, %s fecha(s) guardadas", nombre, campana, n_rej)
+        except Exception:
+            log.warning("rejilla: no se pudo descargar en %s %s (las pasadas si estan)",
+                        nombre, campana, exc_info=True)
+
         return (len(nuevos), f"anadidas {len(nuevos)} fechas nuevas")
     except Exception as e:
         ULTIMO_SYNC.update(estado="fallo", msg=f"{e}")

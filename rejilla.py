@@ -45,6 +45,7 @@ El objetivo es no pasar de ~2 KB por pasada en una parcela de 5-10 ha:
 """
 
 import base64
+import math
 import zlib
 
 FORMATO = 1                 # version del formato; se guarda con los datos
@@ -178,6 +179,56 @@ def comparables(rejillas):
     buenas = grupos[mejor]
     descartadas = [r for r in (rejillas or []) if r not in buenas]
     return buenas, descartadas
+
+
+# ---------------------------------------------------------------------------
+# Encaje en la reticula nativa
+# ---------------------------------------------------------------------------
+def encajar(esquinas, transform):
+    """De la envolvente de la parcela a INDICES ENTEROS de la reticula nativa.
+
+    `esquinas` son puntos [x, y] de la envolvente, ya en el CRS de la imagen.
+    `transform` es el afin de Earth Engine: [a, 0, x0, 0, d, y0], donde `a` es el
+    lado del pixel y `d` el mismo lado en negativo (la Y crece hacia abajo).
+
+    Devuelve (i0, j0, filas, columnas, rectangulo). El rectangulo cae EXACTAMENTE
+    sobre bordes de pixel, asi que no hay que reproyectar ni remuestrear nada: el
+    pixel (i,j) de dos fechas cualesquiera es el mismo trozo de terreno mientras
+    coincidan CRS y transform. Se redondea hacia fuera para no perder los bordes.
+    """
+    a, x0, d, y0 = float(transform[0]), float(transform[2]), float(transform[4]), float(transform[5])
+    if a <= 0 or d == 0:
+        raise ValueError(f"transform con lado de pixel invalido: {transform}")
+    lado_y = abs(d)
+    xs = [float(p[0]) for p in esquinas]
+    ys = [float(p[1]) for p in esquinas]
+    i0 = int(math.floor((min(xs) - x0) / a))
+    i1 = int(math.ceil((max(xs) - x0) / a))
+    j0 = int(math.floor((y0 - max(ys)) / lado_y))
+    j1 = int(math.ceil((y0 - min(ys)) / lado_y))
+    columnas, filas = max(1, i1 - i0), max(1, j1 - j0)
+    rect = [x0 + i0 * a, y0 - (j0 + filas) * lado_y,
+            x0 + (i0 + columnas) * a, y0 - j0 * lado_y]
+    return i0, j0, filas, columnas, rect
+
+
+def desde_arrays(arr_ndvi, arr_validos, filas, columnas):
+    """Aplana las dos matrices que devuelve Earth Engine y comprueba la forma.
+
+    Si las dimensiones no son las pedidas, devuelve None: mejor quedarse sin
+    rejilla que guardar una cuyo (i,j) no es el trozo de terreno que dice ser.
+    """
+    if not arr_ndvi or not arr_validos:
+        return None
+    if len(arr_ndvi) != filas or len(arr_validos) != filas:
+        return None
+    valores, validos = [], []
+    for f_v, f_m in zip(arr_ndvi, arr_validos):
+        if len(f_v) != columnas or len(f_m) != columnas:
+            return None
+        valores.extend(f_v)
+        validos.extend(bool(x) for x in f_m)
+    return valores, validos
 
 
 def tamano_estimado(filas, columnas):
