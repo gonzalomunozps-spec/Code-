@@ -167,6 +167,25 @@ todas las parcelas.
    como una capa encima (`calibracion_umbrales`), acotada y reversible. Donde la
    tabla dice `ndmi_min: None` («aquí este índice no significa nada») no se
    inventa un umbral por muchas validaciones que haya.
+12. **Las bandas se escalan a reflectancia antes de entrar en cualquier fórmula.**
+   `COPERNICUS/S2_SR_HARMONIZED` entrega las bandas espectrales como enteros
+   UINT16 con la reflectancia multiplicada por 10.000: un 0,28 llega como 2800.
+   `gee_cliente.reflectancia()` deshace ese factor (`ESCALA_SR = 0.0001`) y
+   **todos** los índices se calculan sobre el resultado.
+   NDVI, GNDVI y NDMI son cocientes normalizados `(a-b)/(a+b)`: multiplicar las
+   dos bandas por la misma constante no cambia el resultado, así que salían bien
+   incluso sin escalar y siguen dando **exactamente** el mismo número que antes
+   (hay pruebas que lo fijan). SAVI, EVI, MSAVI y LAI llevan **constantes
+   aditivas** —el `L = 0.5` de SAVI, el `+1.0` de EVI, el `+1` de dentro de la
+   raíz de MSAVI—, pensadas para reflectancia en `[0,1]`: frente a valores de
+   2800 son despreciables y el índice degenera en otra magnitud, fuera del rango
+   físico. Sobre un olivar típico el EVI daba 1,07 donde vale 0,33, y el MSAVI
+   0,68 donde vale 0,30 —justo por encima de los `msavi_min` de bibliografía, que
+   así no disparaban nunca—. Se escala también los tres normalizados, aunque no
+   lo necesiten, para que el escalado no dependa de por qué rama pase el código.
+   Fuera de `construir_indice` hay dos sitios que **no** escalan, a propósito: el
+   fondo RGB de `descargar_mapa_indice` (pinta la imagen natural, no un índice) y
+   el NDVI de la rejilla (normalizado). El radar tampoco: Sentinel-1 llega en dB.
 8. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
    cambiarlo hay que subir `ESQUEMA_VERSION` y añadir su migración a
    `_MIGRACIONES` (receta completa en el docstring de `almacen.py`).
@@ -216,8 +235,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 416, sin `informe_anual` 405,
-sin `herbicida_contexto` 414, sin `calibracion_umbrales` 394 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 493, sin `informe_anual` 482,
+sin `herbicida_contexto` 491, sin `calibracion_umbrales` 471 — los cuatro en verde.
 
 ---
 
@@ -225,7 +244,7 @@ sin `herbicida_contexto` 414, sin `calibracion_umbrales` 394 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 416 pruebas, sin pantalla ni red
+python pruebas.py          # 493 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
@@ -246,6 +265,14 @@ python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py 
 - **No cubren Earth Engine ni la red**: requieren credenciales. `sigpac` sí se
   prueba porque la petición se inyecta; `descargar_mapa_*` **no tiene cobertura**
   (es la deuda técnica más clara que queda).
+- **La interpretación se prueba con entradas ya dadas por buenas.** Casi todas las
+  pruebas de fenología parten de diccionarios sintéticos (`"ndvi": 0.55`,
+  `"lai": 1.8`), así que comprueban el razonamiento pero no de dónde salen esos
+  números. Ahí se coló el fallo de escala de las bandas. `pruebas_escala_indices`
+  tapa ese agujero para los siete índices: entra bandas crudas de la colección,
+  fija el valor exacto que sale (valores de oro sobre olivar, cereal en encañado
+  y suelo desnudo), comprueba el rango físico y detecta la regresión si alguien
+  vuelve a quitar el escalado. Cualquier índice nuevo debería entrar por ahí.
 - Algunas pruebas del panel extraen funciones del fuente con expresiones regulares.
   Al mover código de sitio, revisa esos anclajes (o mejor: extrae la función a un
   módulo puro e impórtala, como ya se hizo con fechas/geo/campanas/sigpac/cultivo).

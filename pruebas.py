@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import json
+import math
 import tempfile
 import threading
 
@@ -2239,12 +2240,204 @@ def pruebas_geo():
 
 
 # =====================================================================
+# 24. ESCALA DE LAS BANDAS: los indices, con numeros de verdad
+# =====================================================================
+# El agujero que dejo pasar el fallo de escala fue que TODAS las pruebas de
+# interpretacion parten de diccionarios ya bien escalados ("ndvi": 0.55, "lai":
+# 1.8). Se comprobaba el razonamiento dando por buena la entrada, y la entrada era
+# justo lo que estaba mal. Aqui se entra un escalon mas abajo: bandas crudas tal
+# como las entrega la coleccion, y se fija el numero que sale.
+class _ImgNum:
+    """Doble de `ee.Image` que SI CALCULA, sobre un unico pixel.
+
+    A diferencia de `_EeFalso`, que se limita a devolverse a si mismo, este
+    implementa las cuatro operaciones que usa `construir_indice` (`select`,
+    `multiply`, `normalizedDifference`, `expression`) con aritmetica de Python.
+    Asi se puede fijar el VALOR del indice, no solo que la cadena de llamadas no
+    reviente. La formula de `expression` se evalua tal cual, que es lo que hace
+    Earth Engine con esa misma cadena de texto.
+    """
+    def __init__(self, bandas, valor=None):
+        self.bandas = dict(bandas)
+        self.valor = valor            # resultado, cuando ya es un indice
+
+    def select(self, b):
+        if isinstance(b, (list, tuple)):
+            return _ImgNum({k: self.bandas[k] for k in b})
+        return _ImgNum({b: self.bandas[b]}, self.bandas[b])
+
+    def multiply(self, k):
+        return _ImgNum({n: v * k for n, v in self.bandas.items()},
+                       None if self.valor is None else self.valor * k)
+
+    def normalizedDifference(self, par):
+        a, b = self.bandas[par[0]], self.bandas[par[1]]
+        return _ImgNum({}, (a - b) / (a + b))
+
+    def expression(self, formula, variables):
+        ns = {n: (im.valor if isinstance(im, _ImgNum) else im)
+              for n, im in variables.items()}
+        ns["sqrt"] = math.sqrt
+        return _ImgNum({}, eval(formula, {"__builtins__": {}}, ns))
+
+    def rename(self, _n):
+        return self
+
+
+# Tres escenas con reflectancias de bibliografia, en [0,1]. Son las que se
+# convierten a enteros de la coleccion para alimentar al codigo.
+_ESCENAS = {
+    "olivar":   {"B2": 0.05, "B3": 0.10, "B4": 0.09, "B8": 0.28, "B11": 0.20},
+    "encanado": {"B2": 0.03, "B3": 0.09, "B4": 0.05, "B8": 0.45, "B11": 0.18},
+    "desnudo":  {"B2": 0.13, "B3": 0.16, "B4": 0.19, "B8": 0.22, "B11": 0.28},
+}
+
+# VALORES DE ORO. Calculados a mano con las formulas sobre reflectancia. Si un
+# cambio los mueve, o la formula ha cambiado o el escalado se ha vuelto a perder;
+# en ninguno de los dos casos vale con actualizar el numero sin mirar por que.
+_ORO = {
+    "olivar":   {"NDVI": 0.5135, "EVI": 0.3287, "SAVI": 0.3276, "GNDVI": 0.4737,
+                 "LAI": 1.0713, "MSAVI": 0.3021, "NDMI": 0.1667},
+    "encanado": {"NDVI": 0.8000, "EVI": 0.6557, "SAVI": 0.6000, "GNDVI": 0.6667,
+                 "LAI": 2.2545, "MSAVI": 0.6298, "NDMI": 0.4286},
+    "desnudo":  {"NDVI": 0.0732, "EVI": 0.0542, "SAVI": 0.0495, "GNDVI": 0.1579,
+                 "LAI": 0.0779, "MSAVI": 0.0429, "NDMI": -0.1200},
+}
+
+# Rango FISICO de cada indice: fuera de aqui el numero no es un indice mal
+# calibrado, es un numero imposible.
+_RANGO_FISICO = {
+    "NDVI":  (-1.0, 1.0),      # cociente normalizado
+    "GNDVI": (-1.0, 1.0),
+    "NDMI":  (-1.0, 1.0),
+    "EVI":   (-1.0, 1.0),      # con reflectancia valida no se sale de ahi
+    "SAVI":  (-1.0, 1.5),      # el 1.5 es el factor (1+L) de la formula
+    "MSAVI": (-1.0, 1.5),
+    "LAI":   (0.0, 10.0),      # indice de area foliar: nunca negativo
+}
+
+
+def pruebas_escala_indices():
+    import gee_cliente as G
+
+    def cruda(refl):
+        """La escena, en enteros de la coleccion (reflectancia / 0.0001)."""
+        return _ImgNum({b: v / G.ESCALA_SR for b, v in refl.items()})
+
+    def valor(refl, idx):
+        return G.construir_indice(cruda(refl), idx).valor
+
+    check("escala: la constante es la del catalogo (SR escalada por 10000)",
+          lambda: G.ESCALA_SR, lambda r: r == 0.0001)
+
+    # --- 1. VALORES DE ORO: el numero exacto de los siete indices ---
+    for esc, refl in _ESCENAS.items():
+        for idx in G.INDICES_ORDEN:
+            check(f"indice {idx} sobre {esc}: vale {_ORO[esc][idx]:.4f}",
+                  lambda r=refl, i=idx: valor(r, i),
+                  lambda v, e=esc, i=idx: abs(v - _ORO[e][i]) < 5e-4)
+
+    # --- 2. RANGO FISICO ---
+    for esc, refl in _ESCENAS.items():
+        for idx in G.INDICES_ORDEN:
+            check(f"indice {idx} sobre {esc}: dentro de su rango fisico",
+                  lambda r=refl, i=idx: valor(r, i),
+                  lambda v, i=idx: _RANGO_FISICO[i][0] <= v <= _RANGO_FISICO[i][1])
+
+    # --- 3. LOS RANGOS DE PINTADO CUBREN LO QUE SALE ---
+    # Un rango de paleta por debajo de lo que el indice alcanza satura el mapa;
+    # muy por encima lo deja plano. Se comprueba contra la escena mas verde.
+    for idx in G.INDICES_ORDEN:
+        check(f"paleta {idx}: el rango cubre la escena de dosel cerrado",
+              lambda i=idx: (valor(_ESCENAS["encanado"], i), G.INDICES[i]["rango"]),
+              lambda r: r[1][0] <= r[0] <= r[1][1])
+    check("paleta: ningun rango triplica el valor de dosel cerrado (mapas planos)",
+          lambda: [i for i in G.INDICES_ORDEN
+                   if G.INDICES[i]["rango"][1] > 3 * abs(valor(_ESCENAS["encanado"], i))],
+          lambda r: r == [])
+
+    # --- 4. INVARIANZA DE ESCALA: los tres normalizados no se enteran ---
+    # NDVI, GNDVI y NDMI dan lo MISMO con enteros que con reflectancia. Esto fija
+    # que el arreglo no les ha cambiado el valor: su historico sigue valiendo.
+    for idx in ("NDVI", "GNDVI", "NDMI"):
+        for esc, refl in _ESCENAS.items():
+            check(f"{idx} sobre {esc}: invariante de escala (mismo valor sin escalar)",
+                  lambda r=refl, i=idx: (G.construir_indice(_ImgNum(r), i).valor,
+                                         valor(r, i)),
+                  lambda p: abs(p[0] - p[1]) < 1e-12)
+
+    # --- 5. REGRESION: si se quita el escalado, se nota ---
+    # Los cuatro indices con constante aditiva TIENEN que dar distinto sobre
+    # enteros. Si esta prueba pasara a dar "igual", es que construir_indice ha
+    # dejado de escalar y el fallo ha vuelto.
+    for idx in ("SAVI", "EVI", "MSAVI", "LAI"):
+        for esc, refl in _ESCENAS.items():
+            check(f"{idx} sobre {esc}: sin escalar da otra cosa (deteccion de regresion)",
+                  lambda r=refl, i=idx: (_sin_escalar(r, i), valor(r, i)),
+                  lambda p: abs(p[0] - p[1]) > 0.01)
+    # y en concreto, el valor inflado que se estaba guardando hasta ahora
+    check("regresion: EVI sin escalar sobre olivar se salia del rango fisico (1.07)",
+          lambda: _sin_escalar(_ESCENAS["olivar"], "EVI"),
+          lambda v: abs(v - 1.0672) < 5e-4 and v > 1.0)
+    check("regresion: MSAVI sin escalar sobre olivar daba 0.68 (umbral lenoso 0.26-0.38)",
+          lambda: _sin_escalar(_ESCENAS["olivar"], "MSAVI"),
+          lambda v: abs(v - 0.6785) < 5e-4)
+    check("regresion: LAI sin escalar sobre olivar daba 3.74 (umbral lenoso 1.0-3.5)",
+          lambda: _sin_escalar(_ESCENAS["olivar"], "LAI"),
+          lambda v: abs(v - 3.7430) < 5e-4)
+
+    # --- 6. EL UMBRAL DE BIBLIOGRAFIA AHORA DISPARA ---
+    # Es el sentido agronomico de todo esto: con el indice bien, los umbrales de
+    # fenologia_especies (que no se han tocado) caen dentro del rango del indice.
+    import fenologia_especies as FE
+
+    def _umbrales(clave):
+        """Todos los valores de ese umbral en UMBRALES_LENOSO (especie/fase/regimen).
+
+        Las fases sin hoja lo tienen a None: ahi no se mira el indice."""
+        return [u[clave]
+                for fases in FE.UMBRALES_LENOSO.values()
+                for regs in fases.values()
+                for u in regs.values()
+                if u.get(clave) is not None]
+
+    msavis = _umbrales("msavi_min")
+    check("umbral: los msavi_min de bibliografia caen dentro del MSAVI real",
+          lambda: (min(msavis), max(msavis), valor(_ESCENAS["desnudo"], "MSAVI"),
+                   valor(_ESCENAS["encanado"], "MSAVI")),
+          lambda r: r[2] < r[0] and r[1] < r[3])
+    lais = _umbrales("lai_min")
+    check("umbral: los lai_min de bibliografia caen dentro del LAI real",
+          lambda: (min(lais), max(lais), valor(_ESCENAS["desnudo"], "LAI"),
+                   valor(_ESCENAS["encanado"], "LAI")),
+          lambda r: r[2] < r[0] and r[1] < r[3])
+
+
+def _sin_escalar(refl, idx):
+    """El indice como se calculaba ANTES: la formula directa sobre los enteros.
+
+    No llama a `gee_cliente`; replica el codigo viejo a proposito, para que la
+    prueba de regresion siga midiendo lo mismo aunque el modulo cambie."""
+    import gee_cliente as G
+    nir = refl["B8"] / G.ESCALA_SR
+    red = refl["B4"] / G.ESCALA_SR
+    blue = refl["B2"] / G.ESCALA_SR
+    if idx == "SAVI":
+        return ((nir - red) / (nir + red + 0.5)) * 1.5
+    if idx == "MSAVI":
+        return (2 * nir + 1 - math.sqrt((2 * nir + 1) ** 2 - 8 * (nir - red))) / 2
+    evi = 2.5 * ((nir - red) / (nir + 6.0 * red - 7.5 * blue + 1.0))
+    return evi if idx == "EVI" else 3.618 * evi - 0.118
+
+
+# =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_rejilla, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
-              pruebas_rejilla_coherencia, pruebas_buffer_y_zonas):
+              pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
+              pruebas_escala_indices):
         try:
             f()
         except Exception as e:

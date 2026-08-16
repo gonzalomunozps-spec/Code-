@@ -61,13 +61,26 @@ PAL_VEG = ['a50026', 'd73027', 'f46d43', 'fdae61', 'fee08b',
 PAL_HUM = ['8c510a', 'bf812d', 'dfc27d', 'f6e8c3', 'f7f7f7',
            'c7eae5', '80cdc1', '35978f', '01665e']
 
+# Los rangos son los del indice BIEN ESCALADO (ver ESCALA_SR y construir_indice).
+# Cada uno se fija por el maximo que el indice alcanza de verdad sobre cultivo, no
+# por su maximo teorico: un rango demasiado ancho deja todos los mapas planos, en
+# la mitad baja de la paleta.
+#   NDVI, GNDVI: normalizados; sobre cultivo cerrado no pasan de ~0.9.
+#   NDMI: normalizado y con signo; el agua en dosel se mueve en +-0.5.
+#   SAVI: 1.5*(NIR-RED)/(NIR+RED+0.5). Con dosel denso (NIR 0.50, RED 0.03) da
+#         0.68; el 1.5 teorico no se alcanza. Tope 0.8.
+#   MSAVI: con ese mismo dosel da 0.76. Tope 0.8.
+#   EVI:  con ese dosel da 0.77 (olivar tipico, 0.33). Tope 0.8. El 1.0 anterior
+#         venia de los valores sin escalar, que se salian del rango fisico.
+#   LAI = 3.618*EVI - 0.118, luego con EVI 0.77 da 2.7. Tope 3.0; el 6.0 anterior
+#         solo tenia sentido con los valores inflados.
 INDICES = {
     "NDVI":  {"rango": (0.0, 0.9),  "paleta": PAL_VEG},
-    "EVI":   {"rango": (0.0, 1.0),  "paleta": PAL_VEG},
-    "SAVI":  {"rango": (0.0, 1.0),  "paleta": PAL_VEG},
+    "EVI":   {"rango": (0.0, 0.8),  "paleta": PAL_VEG},
+    "SAVI":  {"rango": (0.0, 0.8),  "paleta": PAL_VEG},
     "GNDVI": {"rango": (0.0, 0.9),  "paleta": PAL_VEG},
-    "LAI":   {"rango": (0.0, 6.0),  "paleta": PAL_VEG},
-    "MSAVI": {"rango": (0.0, 0.9),  "paleta": PAL_VEG},
+    "LAI":   {"rango": (0.0, 3.0),  "paleta": PAL_VEG},
+    "MSAVI": {"rango": (0.0, 0.8),  "paleta": PAL_VEG},
     "NDMI":  {"rango": (-0.5, 0.5), "paleta": PAL_HUM},
 }
 
@@ -102,27 +115,58 @@ def dimensiones_para(coords, metros_px):
     return int(max(64, min(MAX_PIXELES, round(lado_m / max(1, metros_px)))))
 
 
+# =====================================================================
+# ESCALA DE LAS BANDAS: de enteros de la coleccion a reflectancia [0,1]
+# =====================================================================
+# COPERNICUS/S2_SR_HARMONIZED guarda las bandas espectrales como enteros UINT16
+# con la reflectancia multiplicada por 10000 (catalogo de Earth Engine: "12 UINT16
+# spectral bands representing SR scaled by 10000"). Es decir, una reflectancia de
+# 0.28 llega como 2800.
+#
+# Esto NO da igual segun el indice:
+#   - NDVI, GNDVI y NDMI son cocientes normalizados, (a-b)/(a+b). Multiplicar las
+#     dos bandas por la misma constante no cambia el resultado: son invariantes de
+#     escala y salian bien incluso sin escalar.
+#   - SAVI, EVI, MSAVI y LAI llevan CONSTANTES ADITIVAS en la formula (el L=0.5 de
+#     SAVI, el +1.0 de EVI, el +1 de dentro de la raiz de MSAVI). Esas constantes
+#     estan pensadas para reflectancia en [0,1]: frente a valores de 2800 son
+#     despreciables y el indice degenera en otra cosa, con otra magnitud y fuera
+#     del rango fisico (EVI daba 1.07 donde el valor real es 0.33).
+#
+# Por eso se escala SIEMPRE, para todos los indices, antes de entrar en la formula.
+# Aplicarlo tambien a los tres normalizados no cambia su valor y evita que el
+# escalado dependa de por que rama pase el codigo.
+ESCALA_SR = 0.0001
+BANDAS_OPTICAS = ["B2", "B3", "B4", "B8", "B11"]   # las que usan los siete indices
+
+
+def reflectancia(img):
+    """Bandas opticas de la imagen en reflectancia [0,1] (ver ESCALA_SR)."""
+    return img.select(BANDAS_OPTICAS).multiply(ESCALA_SR)
+
+
 def construir_indice(img, indice):
-    nir, red, green, blue = img.select("B8"), img.select("B4"), img.select("B3"), img.select("B2")
+    ref = reflectancia(img)
+    nir, red, green, blue = ref.select("B8"), ref.select("B4"), ref.select("B3"), ref.select("B2")
     if indice == "NDVI":
-        return img.normalizedDifference(["B8", "B4"]).rename("IDX")
+        return ref.normalizedDifference(["B8", "B4"]).rename("IDX")
     if indice == "GNDVI":
-        return img.normalizedDifference(["B8", "B3"]).rename("IDX")
+        return ref.normalizedDifference(["B8", "B3"]).rename("IDX")
     if indice == "NDMI":
-        return img.normalizedDifference(["B8", "B11"]).rename("IDX")
+        return ref.normalizedDifference(["B8", "B11"]).rename("IDX")
     if indice == "SAVI":
-        return img.expression("((NIR-RED)/(NIR+RED+0.5))*1.5", {"NIR": nir, "RED": red}).rename("IDX")
+        return ref.expression("((NIR-RED)/(NIR+RED+0.5))*1.5", {"NIR": nir, "RED": red}).rename("IDX")
     if indice == "EVI":
-        return img.expression("2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))",
+        return ref.expression("2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))",
                               {"NIR": nir, "RED": red, "BLUE": blue}).rename("IDX")
     if indice == "MSAVI":
-        return img.expression("(2*NIR+1-sqrt((2*NIR+1)**2-8*(NIR-RED)))/2",
+        return ref.expression("(2*NIR+1-sqrt((2*NIR+1)**2-8*(NIR-RED)))/2",
                               {"NIR": nir, "RED": red}).rename("IDX")
     if indice == "LAI":
-        evi = img.expression("2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))",
+        evi = ref.expression("2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))",
                              {"NIR": nir, "RED": red, "BLUE": blue})
         return evi.expression("3.618*EVI-0.118", {"EVI": evi}).rename("IDX")
-    return img.normalizedDifference(["B8", "B4"]).rename("IDX")
+    return ref.normalizedDifference(["B8", "B4"]).rename("IDX")
 
 
 def descargar_mapa_indice(coords, iso, idx, metros, png_destino):
@@ -135,6 +179,10 @@ def descargar_mapa_indice(coords, iso, idx, metros, png_destino):
     d1 = (datetime.strptime(iso, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     img = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
            .filterBounds(geom).filterDate(iso, d1).first())
+    # El fondo es la imagen NATURAL, no un indice: se pinta sobre las bandas tal
+    # como vienen, y por eso su 0-3000 sigue en enteros de la coleccion (= 0-0.30
+    # de reflectancia). La capa del indice de abajo si va escalada, porque pasa
+    # por construir_indice.
     fondo = img.visualize(bands=["B4", "B3", "B2"], min=0, max=3000).getThumbURL(
         {"region": region, "dimensions": dim, "format": "png"})
     fondo = Image.open(io.BytesIO(_HTTP.get(fondo, timeout=90).content)).convert("RGBA")
@@ -148,7 +196,11 @@ def descargar_mapa_indice(coords, iso, idx, metros, png_destino):
 
 
 def imagen_param_radar(img, param):
-    """Banda del parametro de radar pedido (VV, VH en dB, o RVI en lineal)."""
+    """Banda del parametro de radar pedido (VV, VH en dB, o RVI en lineal).
+
+    No le afecta el escalado optico: Sentinel-1 GRD entrega VV y VH en dB, ya en
+    unidades fisicas, y el RVI se calcula pasando esos dB a lineal. Aqui no hay
+    enteros escalados por 10000 que deshacer."""
     vv, vh = img.select("VV"), img.select("VH")
     if param == "VH":
         return vh
@@ -292,6 +344,9 @@ def _descargar_rejillas(nombre, campana, geom, fechas, buffer_m=None):
         # distinto, la rejilla y la estadistica hablarian de pixeles distintos.
         scl = img.select("SCL")
         ok = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))
+        # NDVI directo sobre las bandas sin escalar: es un cociente normalizado y
+        # da lo mismo con enteros que con reflectancia (ver ESCALA_SR). Si algun
+        # dia se guardara aqui otro indice, tendria que pasar por reflectancia().
         ndvi = img.updateMask(ok).normalizedDifference(["B8", "B4"]).clip(geom_uso)
         valido = ndvi.mask().rename("valido")
         par = ndvi.unmask(0).rename("ndvi").addBands(valido.unmask(0))
