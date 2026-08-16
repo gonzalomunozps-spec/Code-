@@ -536,6 +536,15 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
             props["ndvi_p75"] = m.get("NDVI_p75")
             props["ndvi_p90"] = m.get("NDVI_p90")
             props["n_pixeles"] = m.get("NDVI_count")
+            # ...y del MSAVI, que en lenosos es el indice que juzga la copa. Hasta
+            # ahora el vigor de copa se reconstruia como `p90_ndvi - brecha`, con
+            # la brecha NDVI-MSAVI de la MEDIA de la parcela; pero esa brecha es
+            # pequena en los pixeles de copa y grande en los de calle, asi que la
+            # traslacion INFRAVALORA la copa. Con el p90 del propio MSAVI no hay
+            # que trasladar nada. Son tres numeros mas por pasada.
+            props["msavi_p10"] = m.get("MSAVI_p10")
+            props["msavi_p50"] = m.get("MSAVI_p50")
+            props["msavi_p90"] = m.get("MSAVI_p90")
             return ee.Feature(None, props)
 
         data = col.map(feat).getInfo()["features"]

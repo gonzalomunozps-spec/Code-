@@ -197,15 +197,23 @@ def separacion_copa_cubierta(serie, fase_esp, reg=None):
 
     # --- vigor de copa: MSAVI, y con el p90 cuando se puede -----------------
     msavi = _g(reg, "msavi")
-    # el p90 es de NDVI; se traslada a escala MSAVI con la brecha observada, que
-    # es exactamente lo que el MSAVI le quita al NDVI en esta parcela y este dia
     brecha = c.get("brecha_suelo")
     copa_ndvi = p90 if hay_perc else ndvi
-    copa_msavi = None
-    if copa_ndvi is not None and brecha is not None:
-        copa_msavi = round(max(0.0, copa_ndvi - brecha), 3)
+    # 1) Lo mejor: el p90 del PROPIO MSAVI, que la sincronizacion guarda desde
+    #    hoy. No hay que trasladar nada.
+    # 2) Si la pasada es anterior y no lo trae, se traslada el p90 de NDVI con la
+    #    brecha NDVI-MSAVI observada. Es una aproximacion que INFRAVALORA la copa
+    #    -la brecha de la media es mayor que la de los pixeles de copa-, pero es
+    #    mejor que quedarse con la media.
+    # 3) Y si no hay percentiles de ninguno, la media, diciendolo (confianza).
+    msavi_p90 = _g(reg, "msavi_p90")
+    copa_msavi, copa_origen = None, "sin dato"
+    if msavi_p90 is not None:
+        copa_msavi, copa_origen = round(msavi_p90, 3), "p90 de MSAVI"
+    elif copa_ndvi is not None and brecha is not None and hay_perc:
+        copa_msavi, copa_origen = round(max(0.0, copa_ndvi - brecha), 3), "p90 de NDVI trasladado"
     elif msavi is not None:
-        copa_msavi = msavi
+        copa_msavi, copa_origen = msavi, "media de la parcela"
 
     # --- cuanto verde hay en la calle ---------------------------------------
     calle = p10 if hay_perc else None
@@ -270,7 +278,8 @@ def separacion_copa_cubierta(serie, fase_esp, reg=None):
     # bandera explicita: quien consume NO debe buscar la palabra "cubierta" dentro
     # del texto. Se hacia asi y bastaba cambiar una frase para alterar el juicio.
     return {"veredicto": veredicto, "cubierta_domina": domina, "confianza": confianza,
-            "copa_msavi": copa_msavi, "copa_ndvi_p90": p90, "calle_ndvi_p10": p10,
+            "copa_msavi": copa_msavi, "copa_origen": copa_origen,
+            "copa_ndvi_p90": p90, "calle_ndvi_p10": p10,
             "mediana": p50, "amplitud": amplitud,
             "evidencias_cubierta": ev_cubierta, "evidencias_copa": ev_copa,
             "contrastes": c,

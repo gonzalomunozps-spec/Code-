@@ -855,6 +855,30 @@ def pruebas_lenosos():
     check("copa/cubierta: y por tanto la copa NO se juzga con la media de la parcela",
           lambda: _sep_desde_la_base()[0],
           lambda s: s["copa_msavi"] is not None and s["copa_msavi"] > 0.109)
+    # --- el p90 del PROPIO MSAVI, cuando la pasada lo trae ---
+    def _sep_msavi(con_p90_msavi):
+        reg = {"fecha": "2026-07-20", "ndvi": 0.52, "msavi": 0.36, "lai": 1.3,
+               "evi": 0.28, "gndvi": 0.50, "savi": 0.44, "ndmi": 0.22,
+               "ndvi_p10": 0.42, "ndvi_p50": 0.52, "ndvi_p90": 0.66}
+        if con_p90_msavi:
+            reg["msavi_p90"] = 0.58
+        serie = [dict(reg, fecha="2026-07-05", ndvi=0.42, msavi=0.30), reg]
+        fase = FEN.fase_lenoso("OLIVO", reg["fecha"], 14.0, 14.0, "SECANO")
+        return separacion_copa_cubierta(serie, fase, reg)
+    check("copa: si la pasada trae msavi_p90, es lo que se usa (sin trasladar nada)",
+          lambda: _sep_msavi(True),
+          lambda s: s["copa_msavi"] == 0.58 and s["copa_origen"] == "p90 de MSAVI")
+    check("copa: sin msavi_p90 se traslada el p90 de NDVI, y se dice que es eso",
+          lambda: _sep_msavi(False),
+          lambda s: s["copa_origen"] == "p90 de NDVI trasladado" and s["copa_msavi"] is not None)
+    check("copa: la traslacion INFRAVALORA la copa frente al p90 real de MSAVI",
+          lambda: (_sep_msavi(False)["copa_msavi"], _sep_msavi(True)["copa_msavi"]),
+          lambda r: r[0] < r[1])
+    check("copa: sin ningun percentil se cae a la media, y se dice",
+          lambda: separacion_copa_cubierta(
+              [{"fecha": "2026-07-20", "ndvi": 0.52, "msavi": 0.36, "lai": 1.3, "evi": 0.28}] * 2,
+              FEN.fase_lenoso("OLIVO", "2026-07-20", 14.0, 14.0, "SECANO")),
+          lambda s: s["copa_msavi"] == 0.36 and s["copa_origen"] == "media de la parcela")
     check("copa/cubierta: sin hoja lo dice sin rodeos",
           lambda: separacion_copa_cubierta(
               [{"fecha": "2026-01-20", "ndvi": 0.30, "msavi": 0.20, "lai": 0.5, "evi": 0.15}],
