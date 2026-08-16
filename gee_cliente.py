@@ -457,6 +457,58 @@ def rellenar_rejillas(nombre, campanas=None, silencioso=True):
         return (0, f"error: {e}")
 
 
+def _feature_pasada(img, geom):
+    """Los siete indices y la estadistica intraparcela de UNA imagen.
+
+    Esta aparte porque lo usan dos caminos: la sincronizacion incremental y la
+    resincronizacion de las pasadas guardadas con la escala vieja. Si hubiera dos
+    copias, una acabaria calculando distinto de la otra y las series dejarian de
+    ser comparables, que es justo el problema que se esta arreglando."""
+    # --- 1. ENMASCARADO DE NUBES CON SCL (por pixel, no por escena) ---
+    # La banda SCL clasifica cada pixel. Nos quedamos solo con lo utilizable:
+    #   4 = vegetacion, 5 = suelo desnudo, 6 = agua, 7 = nube baja probabilidad,
+    #   11 = nieve/hielo.  Se DESCARTAN:
+    #   0 = sin dato, 1 = saturado/defectuoso, 2 = sombra oscura, 3 = sombra de nube,
+    #   8 = nube media prob., 9 = nube alta prob., 10 = cirros.
+    scl = img.select("SCL")
+    valido = (scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7)))
+    img_m = img.updateMask(valido)
+
+    comp = img_m
+    for k in INDICES_ORDEN:
+        comp = comp.addBands(construir_indice(img_m, k).rename(k))
+
+    # --- 2. COBERTURA VALIDA DENTRO DE LA PARCELA ---
+    # Fraccion de pixeles de la parcela que sobreviven al enmascarado.
+    # Es la nubosidad REAL sobre la finca, no la de la escena entera.
+    cobertura = (valido.rename("OK").unmask(0)
+                 .reduceRegion(ee.Reducer.mean(), geom, scale=10, bestEffort=True)
+                 .get("OK"))
+
+    # --- 3. ESTADISTICA INTRAPARCELA: media + desviacion + percentiles ---
+    # La media sola oculta la heterogeneidad. Con la desviacion y los percentiles
+    # se detecta si una PARTE de la parcela va mucho peor que el resto.
+    reductor = (ee.Reducer.mean()
+                .combine(ee.Reducer.stdDev(), sharedInputs=True)
+                .combine(ee.Reducer.percentile([10, 25, 50, 75, 90]), sharedInputs=True)
+                .combine(ee.Reducer.count(), sharedInputs=True))
+    m = comp.reduceRegion(reductor, geom, scale=10, bestEffort=True)
+
+    props = {"fecha": img.date().format("yyyy-MM-dd"),
+             "cobertura_valida": cobertura}
+    for k in INDICES_ORDEN:
+        props[k.lower()] = m.get(k + "_mean")
+    # estadistica espacial completa solo del NDVI (es el indice de referencia)
+    props["ndvi_std"] = m.get("NDVI_stdDev")
+    props["ndvi_p10"] = m.get("NDVI_p10")
+    props["ndvi_p25"] = m.get("NDVI_p25")
+    props["ndvi_p50"] = m.get("NDVI_p50")
+    props["ndvi_p75"] = m.get("NDVI_p75")
+    props["ndvi_p90"] = m.get("NDVI_p90")
+    props["n_pixeles"] = m.get("NDVI_count")
+    return ee.Feature(None, props)
+
+
 def sincronizar_parcela(nombre, campana, silencioso=True):
     """
     Sincronizacion INCREMENTAL: mira hasta que fecha hay datos guardados y solo
@@ -493,52 +545,7 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
                .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))   # prefiltro amplio;
                .sort("system:time_start", True))                       # el SCL decide de verdad
 
-        def feat(img):
-            # --- 1. ENMASCARADO DE NUBES CON SCL (por pixel, no por escena) ---
-            # La banda SCL clasifica cada pixel. Nos quedamos solo con lo utilizable:
-            #   4 = vegetacion, 5 = suelo desnudo, 6 = agua, 7 = nube baja probabilidad,
-            #   11 = nieve/hielo.  Se DESCARTAN:
-            #   0 = sin dato, 1 = saturado/defectuoso, 2 = sombra oscura, 3 = sombra de nube,
-            #   8 = nube media prob., 9 = nube alta prob., 10 = cirros.
-            scl = img.select("SCL")
-            valido = (scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7)))
-            img_m = img.updateMask(valido)
-
-            comp = img_m
-            for k in INDICES_ORDEN:
-                comp = comp.addBands(construir_indice(img_m, k).rename(k))
-
-            # --- 2. COBERTURA VALIDA DENTRO DE LA PARCELA ---
-            # Fraccion de pixeles de la parcela que sobreviven al enmascarado.
-            # Es la nubosidad REAL sobre la finca, no la de la escena entera.
-            cobertura = (valido.rename("OK").unmask(0)
-                         .reduceRegion(ee.Reducer.mean(), geom, scale=10, bestEffort=True)
-                         .get("OK"))
-
-            # --- 3. ESTADISTICA INTRAPARCELA: media + desviacion + percentiles ---
-            # La media sola oculta la heterogeneidad. Con la desviacion y los percentiles
-            # se detecta si una PARTE de la parcela va mucho peor que el resto.
-            reductor = (ee.Reducer.mean()
-                        .combine(ee.Reducer.stdDev(), sharedInputs=True)
-                        .combine(ee.Reducer.percentile([10, 25, 50, 75, 90]), sharedInputs=True)
-                        .combine(ee.Reducer.count(), sharedInputs=True))
-            m = comp.reduceRegion(reductor, geom, scale=10, bestEffort=True)
-
-            props = {"fecha": img.date().format("yyyy-MM-dd"),
-                     "cobertura_valida": cobertura}
-            for k in INDICES_ORDEN:
-                props[k.lower()] = m.get(k + "_mean")
-            # estadistica espacial completa solo del NDVI (es el indice de referencia)
-            props["ndvi_std"] = m.get("NDVI_stdDev")
-            props["ndvi_p10"] = m.get("NDVI_p10")
-            props["ndvi_p25"] = m.get("NDVI_p25")
-            props["ndvi_p50"] = m.get("NDVI_p50")
-            props["ndvi_p75"] = m.get("NDVI_p75")
-            props["ndvi_p90"] = m.get("NDVI_p90")
-            props["n_pixeles"] = m.get("NDVI_count")
-            return ee.Feature(None, props)
-
-        data = col.map(feat).getInfo()["features"]
+        data = col.map(lambda img: _feature_pasada(img, geom)).getInfo()["features"]
         # el getInfo ha ido bien -> la conexion con GEE funciona
         ULTIMO_SYNC.update(estado="ok", msg="conexion con GEE correcta")
 
@@ -583,6 +590,72 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
         return (len(nuevos), f"anadidas {len(nuevos)} fechas nuevas")
     except Exception as e:
         ULTIMO_SYNC.update(estado="fallo", msg=f"{e}")
+        if not silencioso:
+            raise
+        return (0, f"error: {e}")
+
+
+# =====================================================================
+# RESINCRONIZACION: volver a bajar lo guardado con la escala vieja
+# =====================================================================
+# Las pasadas anteriores al arreglo del escalado tienen SAVI, EVI, MSAVI y LAI
+# inflados, y eso no se puede deshacer con una cuenta: hay que volver a pedir las
+# bandas. Mientras una campana mezcle las dos escalas, las diferencias entre
+# pasadas de esa campana no significan nada.
+#
+# Se rebajan SOLO las fechas marcadas, con la MISMA cadena de calculo que la
+# sincronizacion normal (`_feature_pasada`), y se sobrescribe unicamente el JSON
+# de indices de esas filas. No se borra ninguna fila, ni eventos, ni validaciones,
+# ni rejillas: la rejilla es NDVI y no le afecta el arreglo.
+LOTE_RESYNC = 20        # fechas por peticion, como en las rejillas
+
+
+def resincronizar_escala(nombre, campana, silencioso=True):
+    """Vuelve a bajar las pasadas de esa campana marcadas con la escala vieja.
+
+    Devuelve (n_actualizadas, mensaje). Es idempotente: al terminar, esas fechas
+    quedan marcadas como correctas y una segunda llamada no encuentra nada."""
+    if not hay_ee():
+        return (0, "earthengine-api no disponible")
+    pendientes = DB.fechas_escala_vieja(nombre, campana)
+    if not pendientes:
+        return (0, "no hay pasadas con la escala anterior")
+    try:
+        ficha = DB.ficha(nombre)
+        if not ficha or not ficha.get("coordenadas"):
+            return (0, "parcela sin geometria")
+        geom = ee.Geometry.Polygon(ficha["coordenadas"])
+        quiero = set(pendientes)
+        arreglados = 0
+        for i in range(0, len(pendientes), LOTE_RESYNC):
+            lote = pendientes[i:i + LOTE_RESYNC]
+            col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                   .filterBounds(geom)
+                   .filterDate(lote[0], _dia_siguiente(lote[-1]))
+                   .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+                   .sort("system:time_start", True))
+            data = col.map(lambda img: _feature_pasada(img, geom)).getInfo()["features"]
+            # La ventana puede traer fechas de por medio que no se pidieron: se
+            # ignoran. Aqui NO se anaden pasadas nuevas, solo se corrigen las que
+            # ya estaban (anadirlas es trabajo de sincronizar_parcela).
+            rehechas = [f["properties"] for f in data
+                        if f["properties"].get("fecha") in quiero
+                        and f["properties"].get("ndvi") is not None]
+            for p in rehechas:
+                if p.get("cobertura_valida") is not None:
+                    p["cobertura_valida"] = round(p["cobertura_valida"], 3)
+            arreglados += DB.reemplazar_pasadas(nombre, campana, rehechas)
+        quedan = len(DB.fechas_escala_vieja(nombre, campana))
+        log.info("escala: %s %s, %s pasada(s) recalculadas, quedan %s",
+                 nombre, campana, arreglados, quedan)
+        if quedan:
+            # Una fecha que ya no devuelve imagen (la escena se retiro del catalogo)
+            # se queda marcada. Es correcto: sigue siendo un valor de la escala
+            # vieja, y con la marca puesta nadie lo compara con uno nuevo.
+            return (arreglados, f"recalculadas {arreglados}; {quedan} sin imagen disponible")
+        return (arreglados, f"recalculadas {arreglados} pasadas")
+    except Exception as e:
+        log.warning("escala: no se pudo resincronizar %s %s", nombre, campana, exc_info=True)
         if not silencioso:
             raise
         return (0, f"error: {e}")

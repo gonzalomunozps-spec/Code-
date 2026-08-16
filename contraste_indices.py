@@ -55,6 +55,41 @@ def _g(reg, k):
     return None if v is None else float(v)
 
 
+# =====================================================================
+# SERIES QUE MEZCLAN LAS DOS ESCALAS DE LOS INDICES
+# =====================================================================
+# Las pasadas guardadas antes de que se escalaran las bandas a reflectancia
+# tienen SAVI, EVI, MSAVI y LAI inflados (ver el invariante de escalado en
+# ARQUITECTURA.md §4). Compararlas con las nuevas da diferencias disparatadas:
+# una caida de MSAVI de 0.68 a 0.30 no es una caida, es un cambio de unidades.
+#
+# Mientras esas pasadas no se vuelvan a bajar, sus cuatro indices afectados se
+# ponen a None para RAZONAR: un hueco es algo que el resto del programa ya sabe
+# tratar, y un numero incomparable no. El NDVI, el GNDVI y el NDMI de esas mismas
+# pasadas se conservan intactos, porque el arreglo no les cambia el valor: se
+# pierde lo que estaba mal, no la fecha entera.
+#
+# Esto NO toca la base: es una vista para calcular. Lo guardado se sigue viendo
+# tal cual en el historico, marcado.
+ESCALA_INDICES = 1
+INDICES_AFECTADOS_ESCALA = ("savi", "evi", "msavi", "lai")
+
+
+def serie_comparable(serie):
+    """La serie, con los indices no comparables de las pasadas viejas a None."""
+    salida = []
+    for reg in serie or []:
+        esc = reg.get("escala_indices", ESCALA_INDICES)
+        if esc == ESCALA_INDICES:
+            salida.append(reg)
+            continue
+        limpio = dict(reg)
+        for k in INDICES_AFECTADOS_ESCALA:
+            limpio[k] = None
+        salida.append(limpio)
+    return salida
+
+
 def _delta(serie, k, n=1):
     """Variacion del indice k entre la ultima pasada y n pasadas atras."""
     if len(serie) <= n:

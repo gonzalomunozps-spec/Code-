@@ -70,7 +70,7 @@ import gee_cliente
 _EE = gee_cliente.hay_ee()      # el panel ya no importa `ee`: se lo pregunta al cliente
 from gee_cliente import (INDICES, INDICES_ORDEN, RADAR_VIS,
                          descargar_mapa_indice, descargar_mapa_radar,
-                         sincronizar_parcela)
+                         sincronizar_parcela, resincronizar_escala)
 from mapas_cache import DIR_MAPAS, nombre_seguro, ruta_cache_mapa, ruta_cache_radar
 import mapas_cache
 import sincronizacion
@@ -1060,7 +1060,14 @@ class PanelGestionParcelas(ttk.Frame):
         FichaParcela(self.vista_ficha, self, nombre, self.campana)
 
     def _historico(self, nombre):
-        return DB.pasadas(nombre, self.campana)
+        """La serie de la parcela, ya COMPARABLE entre fechas.
+
+        Las pasadas anteriores al arreglo del escalado de las bandas llegan con
+        SAVI, EVI, MSAVI y LAI a None (ver contraste_indices.serie_comparable):
+        mezclarlas con las nuevas daria diferencias que no existieron. Todo lo que
+        razona con la serie pasa por aqui; el unico sitio que quiere los valores
+        crudos es la tabla del historico, que los pide a DB.pasadas y los marca."""
+        return CI.serie_comparable(DB.pasadas(nombre, self.campana))
 
     def _ultimo_valido(self, nombre, clave):
         regs = sorted(self._historico(nombre), key=lambda r: r.get("fecha", ""))
@@ -1763,7 +1770,15 @@ class DialogoValidacionIndices(tk.Toplevel):
             cb.set(anterior or (visto if visto in _CALIB.ESTADOS else "normal"))
             cb.grid(row=fila, column=3, sticky="w", pady=1)
             self.combos[idx] = cb
-            if not lec.get("calibrable"):
+            # Una validacion anterior hecha sobre la escala vieja de las bandas
+            # sigue guardada y se ve, pero ya no mueve el umbral: se dijo mirando
+            # un valor que no era el real. Se marca para que se pueda rehacer.
+            prev = previas.get(idx) or {}
+            if prev and prev.get("escala_indices") == DB.ESCALA_VIEJA:
+                tk.Label(tabla, text="sin validar (escala anterior)", bg=TEMA["surface"],
+                         fg=TEMA["warn_fg"], font=FUENTES["small"]).grid(
+                             row=fila, column=4, sticky="w", padx=(8, 0))
+            elif not lec.get("calibrable"):
                 tk.Label(tabla, text="(se anota, hoy no mueve umbral)", bg=TEMA["surface"],
                          fg=TEMA["text_muted"], font=FUENTES["small"]).grid(
                              row=fila, column=4, sticky="w", padx=(8, 0))
@@ -2369,6 +2384,46 @@ class FichaParcela:
         enlazar_rueda(cuerpo, scroll.rueda)
 
         self.refrescar()
+        self._resincronizar_escala_si_hace_falta()
+
+    # ---- puesta al dia de las pasadas con la escala vieja de los indices ----
+    # Las pasadas guardadas antes del arreglo del escalado tienen SAVI, EVI, MSAVI
+    # y LAI inflados. Mientras la campana mezcle las dos escalas, las diferencias
+    # entre fechas de esa campana no significan nada, asi que al abrir la parcela
+    # se vuelven a bajar solas, en segundo plano y sin preguntar. Solo se toca el
+    # JSON de indices de esas fechas: no se borra nada.
+    _RESYNC_INTENTADO = set()      # (parcela, campana) ya probados en esta sesion
+
+    def _resincronizar_escala_si_hace_falta(self):
+        if not _EE:
+            return                 # sin Earth Engine no hay nada que bajar
+        clave = (self.nombre, self.campana)
+        if clave in FichaParcela._RESYNC_INTENTADO:
+            return                 # ya se intento; si fallo, no se insiste en bucle
+        if not DB.hay_escala_vieja(self.nombre):
+            return
+        if not DB.fechas_escala_vieja(self.nombre, self.campana):
+            return                 # esta campana ya esta al dia (habra otras)
+        FichaParcela._RESYNC_INTENTADO.add(clave)
+        self._avisar_escala("Actualizando los indices de las pasadas anteriores…")
+        threading.Thread(target=self._resync_escala, daemon=True).start()
+
+    def _resync_escala(self):
+        n, msg = resincronizar_escala(self.nombre, self.campana, silencioso=True)
+        def fin():
+            if not hasattr(self, "tv") or not self.tv.winfo_exists():
+                return             # la ficha se cerro mientras se descargaba
+            # refrescar vuelve a poner el aviso que toque: el resumen de las que
+            # sigan en gris, o nada si ya no queda ninguna.
+            self._avisar_escala("")
+            self.refrescar()
+        self.master.after(0, fin)
+        if not n:
+            log.info("escala: %s %s sin recalcular (%s)", self.nombre, self.campana, msg)
+
+    def _avisar_escala(self, texto):
+        if hasattr(self, "lbl_escala") and self.lbl_escala.winfo_exists():
+            self.lbl_escala.config(text=texto)
 
     def _titulo(self, parent, texto):
         tk.Label(parent, text=texto, bg=TEMA["surface"], fg=TEMA["text"],
@@ -2384,8 +2439,15 @@ class FichaParcela:
             self.tv.heading(c, text=c.upper())
             self.tv.column(c, width=88 if c == "fecha" else 56,
                            anchor="w" if c == "fecha" else "center")
-        self.tv.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.tv.pack(fill="both", expand=True, padx=12, pady=(0, 4))
         self.tv.tag_configure("ult", background="#fffaf0")
+        # Pasadas con los indices de antes del arreglo de escala: se marcan en gris
+        # hasta que se vuelven a bajar. No se ocultan -son datos del usuario- pero
+        # tiene que verse que su SAVI/EVI/MSAVI/LAI no es comparable con el resto.
+        self.tv.tag_configure("escala_vieja", foreground=TEMA["text_muted"])
+        self.lbl_escala = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                   font=FUENTES["small"], anchor="w", justify="left")
+        self.lbl_escala.pack(fill="x", padx=12, pady=(0, 8))
 
     # Columnas de la tabla de estadistica espacial: (clave, titulo, ancho, decimales)
     COLS_ESTAD = [("fecha", "FECHA", 88, None), ("media", "MEDIA", 62, 3),
@@ -2629,14 +2691,28 @@ class FichaParcela:
         # muertos: sin esta comprobacion salta TclError (invalid command name).
         if not hasattr(self, "tv") or not self.tv.winfo_exists():
             return
+        # La tabla ensena lo GUARDADO, sin tocar: si una pasada trae los indices de
+        # la escala vieja, se ve lo que hay en la base y se marca. Lo que calcula
+        # va aparte, sobre la serie comparable (self.panel._historico).
+        crudas = sorted(DB.pasadas(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
         regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
         self._radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
         self.tv.delete(*self.tv.get_children())       # vaciado en UNA llamada a Tk
-        for k, r in enumerate(regs):
-            tag = ("ult",) if k == len(regs) - 1 else ()
+        viejas = 0
+        for k, r in enumerate(crudas):
+            if r.get("escala_indices") != DB.ESCALA_INDICES:
+                tag = ("escala_vieja",)
+                viejas += 1
+            else:
+                tag = ("ult",) if k == len(crudas) - 1 else ()
             self.tv.insert("", tk.END, tags=tag, values=[r.get("fecha", "")] +
                            [f"{r.get(x.lower()):.3f}" if r.get(x.lower()) is not None else "-"
                             for x in INDICES_ORDEN])
+        self._avisar_escala(
+            "" if not viejas else
+            f"{viejas} pasada(s) en gris: SAVI, EVI, MSAVI y LAI se calcularon con la "
+            "escala anterior de las bandas y no son comparables con las demas. Se "
+            "vuelven a bajar solas al abrir la parcela; NDVI, GNDVI y NDMI no cambian.")
         self._map_fechas = {self._fmt(r["fecha"]): r["fecha"] for r in regs if r.get("fecha")}
         self.cb_dia["values"] = list(self._map_fechas.keys())
         if self._map_fechas:

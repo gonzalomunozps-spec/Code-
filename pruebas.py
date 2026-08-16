@@ -2413,6 +2413,194 @@ def pruebas_escala_indices():
           lambda r: r[2] < r[0] and r[1] < r[3])
 
 
+# =====================================================================
+# 25. EL HISTORICO GUARDADO CON LA ESCALA VIEJA
+# =====================================================================
+# Mezclar en una serie pasadas de las dos escalas es PEOR que el fallo original:
+# entre una pasada vieja y una nueva sale una caida de MSAVI que nunca ocurrio.
+# Aqui se comprueba que se distinguen, que no se borra nada y que lo viejo deja de
+# contar donde no debe contar.
+def pruebas_escala_historico():
+    import sqlite3 as _sq
+    import almacen as DB
+    import gee_cliente as G
+    import contraste_indices as CI
+
+    d = tempfile.mkdtemp()
+
+    # --- 1. LA MIGRACION MARCA, NO BORRA ---
+    p6 = os.path.join(d, "v6.db")
+    c0 = _sq.connect(p6)
+    c0.executescript("""
+        CREATE TABLE pasadas(nombre TEXT, campana TEXT, fecha TEXT, datos TEXT,
+            interpretacion TEXT, PRIMARY KEY(nombre, campana, fecha));
+        CREATE TABLE validaciones_indice(id TEXT PRIMARY KEY, nombre TEXT, campana TEXT,
+            fecha TEXT, indice TEXT, valor REAL, especie TEXT, fase TEXT,
+            dijo_sistema TEXT, dijo_usuario TEXT, ambito TEXT, clave_ambito TEXT,
+            regimen TEXT, densidad TEXT, ts TEXT);""")
+    c0.execute("INSERT INTO pasadas VALUES('P','2025-2026','2026-03-01',"
+               "'{\"ndvi\":0.51,\"msavi\":0.68,\"lai\":3.74}','texto viejo')")
+    for i, idx in enumerate(("NDVI", "NDMI", "MSAVI", "LAI")):
+        c0.execute("INSERT INTO validaciones_indice(id,nombre,campana,fecha,indice,valor,"
+                   "dijo_usuario,ambito,clave_ambito,ts) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   (f"v{i}", "P", "2025-2026", "2026-03-01", idx, 0.5,
+                    "bajo", "parcela", "P", "2026-03-02 10:00"))
+    c0.execute("PRAGMA user_version=6")
+    c0.commit(); c0.close()
+
+    DB.conectar(p6)
+    check("escala/migracion: la pasada anterior queda MARCADA como escala vieja",
+          lambda: DB.pasadas("P", "2025-2026")[0],
+          lambda r: r["escala_indices"] == DB.ESCALA_VIEJA and r["msavi"] == 0.68)
+    check("escala/migracion: no se borra ni una fila ni la interpretacion guardada",
+          lambda: (len(DB.pasadas("P", "2025-2026")),
+                   DB.pasadas("P", "2025-2026")[0].get("interpretacion"),
+                   len(DB.validaciones_indice(incluir_escala_vieja=True))),
+          lambda r: r == (1, "texto viejo", 4))
+    check("escala/migracion: las validaciones de NDVI y NDMI siguen valiendo",
+          lambda: sorted(v["indice"] for v in DB.validaciones_indice()),
+          lambda r: r == ["NDMI", "NDVI"])
+    check("escala/migracion: las de MSAVI y LAI quedan fuera del calibrado",
+          lambda: sorted(v["indice"] for v in DB.validaciones_indice(incluir_escala_vieja=True)
+                         if v["escala_indices"] == DB.ESCALA_VIEJA),
+          lambda r: r == ["LAI", "MSAVI"])
+    check("escala/migracion: pero siguen VIENDOSE en la pasada (no se ocultan)",
+          lambda: sorted(DB.validaciones_indice_de_pasada("P", "2025-2026", "2026-03-01")),
+          lambda r: r == ["LAI", "MSAVI", "NDMI", "NDVI"])
+    DB.cerrar()
+    # idempotente: volver a abrirla no vuelve a marcar lo ya corregido
+    DB.conectar(p6)
+    DB.reemplazar_pasadas("P", "2025-2026", [{"fecha": "2026-03-01", "ndvi": 0.51, "msavi": 0.30}])
+    DB.cerrar()
+    DB.conectar(p6)
+    check("escala/migracion: reabrir la base no vuelve a marcar lo ya recalculado",
+          lambda: DB.pasadas("P", "2025-2026")[0]["escala_indices"],
+          lambda r: r == DB.ESCALA_INDICES)
+    DB.cerrar()
+
+    # --- 2. LO QUE SE GUARDA HOY NACE BIEN ---
+    DB.conectar(os.path.join(d, "nueva.db"))
+    DB.guardar_ficha("P", {"propietario": "x", "coordenadas": [[0, 0], [0, 1], [1, 1]]})
+    DB.anadir_pasadas("P", "2025-2026", [{"fecha": "2026-04-01", "ndvi": 0.6, "msavi": 0.35}])
+    check("escala: una pasada nueva se guarda con la escala correcta",
+          lambda: DB.pasadas("P", "2025-2026")[0]["escala_indices"],
+          lambda r: r == DB.ESCALA_INDICES)
+    check("escala: una base nueva no tiene nada pendiente de recalcular",
+          lambda: (DB.hay_escala_vieja(), DB.fechas_escala_vieja("P", "2025-2026")),
+          lambda r: r == (0, []))
+
+    # --- 3. REEMPLAZAR: pisa el dato malo, y SOLO ese ---
+    c = DB._c()
+    c.execute("UPDATE pasadas SET escala_indices=?, interpretacion='vieja' "
+              "WHERE fecha='2026-04-01'", (DB.ESCALA_VIEJA,))
+    c.commit()
+    check("escala: se localiza la fecha pendiente",
+          lambda: (DB.hay_escala_vieja("P"), DB.fechas_escala_vieja("P", "2025-2026")),
+          lambda r: r == (1, ["2026-04-01"]))
+    n1 = DB.reemplazar_pasadas("P", "2025-2026", [{"fecha": "2026-04-01", "ndvi": 0.6, "msavi": 0.31}])
+    check("escala: reemplazar actualiza el valor, la marca y tira la interpretacion vieja",
+          lambda: (n1, DB.pasadas("P", "2025-2026")[0]),
+          lambda r: (r[0] == 1 and r[1]["msavi"] == 0.31
+                     and r[1]["escala_indices"] == DB.ESCALA_INDICES
+                     and "interpretacion" not in r[1]))
+    check("escala: repetir el reemplazo no hace nada (ya esta al dia)",
+          lambda: DB.reemplazar_pasadas("P", "2025-2026",
+                                        [{"fecha": "2026-04-01", "ndvi": 0.9, "msavi": 0.9}]),
+          lambda r: r == 0)
+    check("escala: el valor no se pisa una segunda vez",
+          lambda: DB.pasadas("P", "2025-2026")[0]["msavi"], lambda r: r == 0.31)
+    check("escala: reemplazar NUNCA inserta una fecha que no existia",
+          lambda: (DB.reemplazar_pasadas("P", "2025-2026", [{"fecha": "2026-09-09", "ndvi": 0.1}]),
+                   len(DB.pasadas("P", "2025-2026"))),
+          lambda r: r == (0, 1))
+
+    # --- 4. UNA VALIDACION HEREDA LA ESCALA DE SU PASADA ---
+    c.execute("UPDATE pasadas SET escala_indices=? WHERE fecha='2026-04-01'", (DB.ESCALA_VIEJA,))
+    c.commit()
+    DB.guardar_validacion_indice("P", "2025-2026", "2026-04-01", "MSAVI", 0.68,
+                                 "OLIVO", "cosecha", "normal", "bajo", "parcela", "P")
+    DB.guardar_validacion_indice("P", "2025-2026", "2026-04-01", "NDVI", 0.6,
+                                 "OLIVO", "cosecha", "normal", "bajo", "parcela", "P")
+    check("escala: validar una pasada aun sin recalcular marca el MSAVI como viejo",
+          lambda: {v["indice"]: v["escala_indices"]
+                   for v in DB.validaciones_indice(incluir_escala_vieja=True)},
+          lambda r: r.get("MSAVI") == DB.ESCALA_VIEJA)
+    check("escala: el NDVI de esa misma pasada nace bueno (es invariante de escala)",
+          lambda: {v["indice"]: v["escala_indices"]
+                   for v in DB.validaciones_indice(incluir_escala_vieja=True)},
+          lambda r: r.get("NDVI") == DB.ESCALA_INDICES)
+
+    # --- 5. LA SERIE QUE SE USA PARA RAZONAR NO MEZCLA ESCALAS ---
+    serie = [{"fecha": "2026-03-01", "ndvi": 0.51, "gndvi": 0.47, "ndmi": 0.17,
+              "msavi": 0.68, "lai": 3.74, "evi": 1.07, "savi": 0.77,
+              "escala_indices": DB.ESCALA_VIEJA},
+             {"fecha": "2026-04-01", "ndvi": 0.55, "gndvi": 0.50, "ndmi": 0.19,
+              "msavi": 0.31, "lai": 1.10, "evi": 0.34, "savi": 0.33,
+              "escala_indices": DB.ESCALA_INDICES}]
+    comp = CI.serie_comparable(serie)
+    check("serie comparable: los cuatro afectados de la pasada vieja quedan a None",
+          lambda: [comp[0][k] for k in ("savi", "evi", "msavi", "lai")],
+          lambda r: r == [None, None, None, None])
+    check("serie comparable: NDVI, GNDVI y NDMI de esa pasada se conservan",
+          lambda: (comp[0]["ndvi"], comp[0]["gndvi"], comp[0]["ndmi"]),
+          lambda r: r == (0.51, 0.47, 0.17))
+    check("serie comparable: la pasada buena no se toca",
+          lambda: comp[1], lambda r: r == serie[1])
+    check("serie comparable: no muta la serie original (la tabla sigue viendo el dato)",
+          lambda: serie[0]["msavi"], lambda r: r == 0.68)
+    check("serie comparable: sin marca se supone buena (series de siempre)",
+          lambda: CI.serie_comparable([{"fecha": "x", "msavi": 0.4}])[0]["msavi"],
+          lambda r: r == 0.4)
+    check("serie comparable: el delta entre escalas distintas no existe",
+          lambda: CI._delta(comp, "msavi"), lambda r: r is None)
+
+    # --- 6. RESINCRONIZACION CON UN `ee` FALSO ---
+    DB.conectar(os.path.join(d, "resync.db"))
+    DB.guardar_ficha("R", {"propietario": "x",
+                           "coordenadas": [[-4.1, 41.65], [-4.09, 41.65], [-4.09, 41.66]]})
+    DB.anadir_pasadas("R", "2025-2026", [{"fecha": "2026-03-01", "ndvi": 0.51, "msavi": 0.68},
+                                         {"fecha": "2026-03-11", "ndvi": 0.55, "msavi": 0.70}])
+    cr = DB._c()
+    cr.execute("UPDATE pasadas SET escala_indices=? WHERE fecha='2026-03-01'", (DB.ESCALA_VIEJA,))
+    cr.commit()
+    real_ee = G.ee
+    try:
+        G.ee = _EeFalso([
+            {"properties": {"fecha": "2026-03-01", "cobertura_valida": 0.9412,
+                            "ndvi": 0.51, "msavi": 0.30, "lai": 1.07}},
+            {"properties": {"fecha": "2026-03-11", "cobertura_valida": 0.95,
+                            "ndvi": 0.55, "msavi": 0.33}},          # ya buena: NO se toca
+            {"properties": {"fecha": "2026-03-21", "cobertura_valida": 0.95,
+                            "ndvi": 0.60, "msavi": 0.35}}])         # no estaba: NO se anade
+        n, _msg = G.resincronizar_escala("R", "2025-2026")
+        ps = {p["fecha"]: p for p in DB.pasadas("R", "2025-2026")}
+        check("resync: solo se recalcula la pasada marcada",
+              lambda: (n, ps["2026-03-01"]["msavi"], ps["2026-03-01"]["escala_indices"]),
+              lambda r: r == (1, 0.30, DB.ESCALA_INDICES))
+        check("resync: la pasada que ya estaba bien no se pisa",
+              lambda: ps["2026-03-11"]["msavi"], lambda r: r == 0.70)
+        check("resync: no se anaden fechas nuevas (eso es de sincronizar_parcela)",
+              lambda: sorted(ps), lambda r: r == ["2026-03-01", "2026-03-11"])
+        check("resync: la cobertura se redondea igual que en la sincronizacion",
+              lambda: ps["2026-03-01"]["cobertura_valida"], lambda r: r == 0.941)
+        check("resync: una segunda pasada no encuentra nada que hacer",
+              lambda: G.resincronizar_escala("R", "2025-2026"),
+              lambda r: r[0] == 0 and "escala anterior" in r[1])
+    finally:
+        G.ee = real_ee
+    check("resync: sin ee disponible lo dice y no revienta",
+          lambda: (setattr(G, "ee", None), G.resincronizar_escala("R", "2025-2026"),
+                   setattr(G, "ee", real_ee))[1],
+          lambda r: r[0] == 0 and "earthengine" in r[1])
+
+    # --- 7. EL BORRADO EN CASCADA SIGUE COMPLETO ---
+    DB.eliminar_parcela("R")
+    check("escala: eliminar la parcela se lleva pasadas y validaciones (cascada intacta)",
+          lambda: (DB.pasadas("R", "2025-2026"), DB.hay_escala_vieja("R"),
+                   DB.validaciones_indice_de_pasada("R", "2025-2026", "2026-03-01")),
+          lambda r: r == ([], 0, {}))
+
+
 def _sin_escalar(refl, idx):
     """El indice como se calculaba ANTES: la formula directa sobre los enteros.
 
@@ -2437,7 +2625,7 @@ def main():
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
-              pruebas_escala_indices):
+              pruebas_escala_indices, pruebas_escala_historico):
         try:
             f()
         except Exception as e:
