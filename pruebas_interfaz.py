@@ -65,6 +65,16 @@ def _paso(nombre, fn):
         return False
 
 
+def _check(condicion, mensaje):
+    """Afirmacion dentro de un `_paso`: si no se cumple, se anota como fallo.
+
+    El arnes mide sobre todo que la interfaz no reviente. Esto permite ademas
+    comprobar lo que se ve, sin salirse del mismo mecanismo de anotacion."""
+    if not condicion:
+        raise AssertionError(mensaje)
+    return True
+
+
 class Evento:
     """Evento sintetico para invocar manejadores que Tk no deja generar."""
 
@@ -522,6 +532,77 @@ def escenario_validacion_indices(P, DB):
     return f"{n_pasadas} pasadas recorridas y validadas"
 
 
+def escenario_campanas(P, DB):
+    """El selector de campana de la ficha: cambiar de ano y llegar al archivo.
+
+    Sin Earth Engine no se descarga nada, que es justo lo que interesa comprobar:
+    elegir una campana sin datos tiene que abrir la ficha vacia igualmente, no
+    quedarse a medias porque no haya red."""
+    import tkinter as tk
+    from tkinter import ttk
+    from campanas import campana_actual, PRIMERA_CAMPANA_S2
+    root = _raiz()
+    P.aplicar_tema(root)
+    nb = ttk.Notebook(root)
+    nb.pack(fill="both", expand=True)
+    panel = P.PanelGestionParcelas(nb)
+    nb.add(panel, text="x")
+    ultima = {}
+    original = P.FichaParcela.__init__
+
+    def capturar(self, *a, **k):
+        ultima["f"] = self
+        return original(self, *a, **k)
+    P.FichaParcela.__init__ = capturar
+    root.update()
+
+    nombre = DB.nombres()[0]
+    # una campana MAS ANTIGUA que Sentinel-2: es el caso de "tengo datos que el
+    # programa ya no puede volver a pedir"
+    DB.anadir_pasadas(nombre, "2013-2014", [{"fecha": "2014-04-10", "ndvi": 0.44}])
+    panel.mostrar_ficha(nombre)
+    root.update()
+    f = ultima["f"]
+
+    cambios = 0
+    _paso("campanas: el desplegable existe y lista mas de una",
+          lambda: (_check(len(f.cb_campana_ficha["values"]) > 1,
+                          "el selector de campana no ofrece campanas anteriores")))
+    _paso("campanas: la campana en curso viene seleccionada",
+          lambda: _check(campana_actual() in f.cb_campana_ficha.get(),
+                         f"la ficha no abre en la campana en curso: {f.cb_campana_ficha.get()!r}"))
+    _paso("campanas: el archivo anterior al satelite esta en la lista",
+          lambda: _check(any("2013-2014" in v for v in f.cb_campana_ficha["values"]),
+                         "una campana guardada fuera del alcance del satelite no se ofrece"))
+    _paso("campanas: y se marca como solo archivo",
+          lambda: _check(any("2013-2014" in v and "archivo" in v
+                             for v in f.cb_campana_ficha["values"]),
+                         "la campana de archivo no se distingue de una descargable"))
+
+    def ir_a(texto):
+        f2 = ultima["f"]
+        vals = list(f2.cb_campana_ficha["values"])
+        i = next(k for k, v in enumerate(vals) if texto in v)
+        f2.cb_campana_ficha.current(i)
+        f2.cb_campana_ficha.event_generate("<<ComboboxSelected>>")
+        root.update()
+
+    for destino in ("2013-2014", PRIMERA_CAMPANA_S2, campana_actual()):
+        if _paso(f"campanas: cambiar a {destino}", lambda d=destino: ir_a(d)):
+            cambios += 1
+            _paso(f"campanas: la ficha queda en {destino}",
+                  lambda d=destino: _check(panel.campana == d,
+                                           f"se pidio {d} y el panel esta en {panel.campana}"))
+    _paso("campanas: el dialogo de descarga se abre con la lista nueva",
+          lambda: (ultima["f"]._sincronizar_anteriores(), root.update()))
+    for w in root.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            w.destroy()
+    P.FichaParcela.__init__ = original
+    _derribar(root)
+    return f"{cambios} cambios de campana, archivo incluido"
+
+
 def escenario_dialogos(P, DB):
     """Cada ventana secundaria: se abre, se toca y se cierra."""
     import tkinter as tk
@@ -678,6 +759,7 @@ def escenario_cierre(P, DB):
 ESCENARIOS = [("arranque", escenario_arranque), ("lista de parcelas", escenario_lista),
               ("fichas de parcela", escenario_fichas), ("cuaderno y cosecha", escenario_cuaderno),
               ("validacion por indice", escenario_validacion_indices),
+              ("campanas de la ficha", escenario_campanas),
               ("dialogos", escenario_dialogos), ("cierre a media sincronizacion", escenario_cierre)]
 
 

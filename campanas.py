@@ -37,3 +37,72 @@ def campanas_entre(inicio: Any, fin: str) -> List[str]:
     if a0 > a1:
         a0, a1 = a1, a0
     return [f"{y}-{y + 1}" for y in range(a1, a0 - 1, -1)]
+
+
+# =====================================================================
+# HASTA DONDE LLEGA COPERNICUS, Y QUE HACER CON LO QUE HAY MAS ATRAS
+# =====================================================================
+# El limite no lo pone el programa, lo pone el satelite: la coleccion
+# COPERNICUS/S2_SR_HARMONIZED empieza el 28-3-2017, asi que la primera campana
+# con imagenes es la 2017-2018. Y el propio catalogo de Earth Engine avisa de que
+# "2017-2018 L2 coverage in the EE collection is not yet global": en esa campana
+# puede no haber nada segun la zona. Se ofrece igualmente, marcada, porque donde
+# si hay cobertura es un ano mas de historico; la primera campana con cobertura
+# completa es la 2018-2019.
+#
+# Una parcela puede tener guardadas campanas MAS ANTIGUAS que eso (importadas de
+# otro sistema, o de una version anterior del programa). Esas no se pueden
+# sincronizar -no hay de donde-, pero los datos estan y hay que poder verlos. Por
+# eso `campanas_de_parcela` no filtra: devuelve la union, y marca cada una con lo
+# que se puede hacer con ella.
+PRIMERA_CAMPANA_S2 = "2017-2018"          # primera con imagenes (cobertura parcial)
+PRIMERA_CAMPANA_S2_GLOBAL = "2018-2019"   # primera con cobertura completa
+
+
+def campanas_sincronizables(fecha: Optional[datetime] = None,
+                            desde: str = PRIMERA_CAMPANA_S2) -> List[str]:
+    """Campanas que Copernicus puede servir hoy, de la mas reciente a la mas vieja."""
+    return campanas_entre(desde, campana_actual(fecha))
+
+
+def _anio(campana: Any, por_defecto: int = 0) -> int:
+    try:
+        return int(str(campana).split("-")[0])
+    except (ValueError, TypeError, AttributeError):
+        return por_defecto
+
+
+def campanas_de_parcela(con_datos: Any = (), fecha: Optional[datetime] = None,
+                        desde: str = PRIMERA_CAMPANA_S2) -> List[dict]:
+    """Todas las campanas que ofrecer para una parcela, mas reciente primero.
+
+    `con_datos` son las campanas que ya tienen pasadas guardadas. El resultado es
+    la UNION de esas y las sincronizables, para que en la ficha aparezcan tanto
+    las que se pueden descargar como las que ya se tienen aunque el satelite no
+    llegue tan atras. Cada entrada es un dict:
+
+        campana         'AAAA-BBBB'
+        tiene_datos     ya hay pasadas guardadas de esa campana
+        sincronizable   Copernicus la cubre: se puede descargar o completar
+        parcial         cubierta a medias segun la zona (la 2017-2018)
+        actual          es la campana en curso
+        solo_archivo    hay datos pero no se puede sincronizar: solo consultarla
+
+    `solo_archivo` es el caso que importa: dato que el programa tiene y no puede
+    volver a pedir. Nunca se oculta -es lo unico que queda de esos anos-, pero se
+    marca para que nadie espere poder actualizarlo."""
+    actual = campana_actual(fecha)
+    sincro = set(campanas_sincronizables(fecha, desde))
+    datos = {c for c in (con_datos or ()) if c}
+    a_global = _anio(PRIMERA_CAMPANA_S2_GLOBAL)
+    salida = []
+    for camp in sorted(sincro | datos, key=_anio, reverse=True):
+        tiene = camp in datos
+        puede = camp in sincro
+        salida.append({"campana": camp,
+                       "tiene_datos": tiene,
+                       "sincronizable": puede,
+                       "parcial": puede and _anio(camp) < a_global,
+                       "actual": camp == actual,
+                       "solo_archivo": tiene and not puede})
+    return salida

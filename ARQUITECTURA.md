@@ -52,7 +52,7 @@ Son la base testeable. Ninguno importa a otro.
 | `fechas.py` | Conversión ISO ↔ dd-mm-aaaa, máscara y validación al teclear. |
 | `geo.py` | Superficie de la parcela (fórmula del polígono). |
 | `rejilla.py` | Rejilla de NDVI píxel a píxel: formato compacto (1 byte/píxel + 1 bit de máscara), encaje en la retícula nativa de Sentinel-2 y reglas de comparabilidad entre fechas. |
-| `campanas.py` | Campaña agrícola (sep–ago): actual, rango, listado. |
+| `campanas.py` | Campaña agrícola (sep–ago): actual, rango, listado y qué campañas ofrecer por parcela. |
 | `cultivo.py` | Modelo de cultivo: `spec_de`, `clave_cultivo`. |
 | `sigpac.py` | Consulta de recintos SIGPAC y parseo GeoJSON. La petición HTTP se **inyecta**, por eso se prueba sin red. |
 | `herbicida_contexto.py` | Interpretación del herbicida con LAI constante. **Opcional.** |
@@ -86,7 +86,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 416 pruebas sin pantalla ni red. |
+| `pruebas.py` | 503 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -189,6 +189,18 @@ todas las parcelas.
 8. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
    cambiarlo hay que subir `ESQUEMA_VERSION` y añadir su migración a
    `_MIGRACIONES` (receta completa en el docstring de `almacen.py`).
+12. **Hasta dónde llega el histórico lo decide el satélite, no el programa.**
+   Sentinel-2 L2A empieza en la campaña **2017-2018**, y el catálogo de Earth
+   Engine avisa de que su cobertura no es global hasta **2018-2019**; ambas cosas
+   están en `campanas.PRIMERA_CAMPANA_S2` y `PRIMERA_CAMPANA_S2_GLOBAL`, no en un
+   número puesto a ojo. Antes había un tope de «5 campañas atrás» que no
+   correspondía a nada y recortaba años de histórico que sí existen.
+   Una parcela puede tener guardadas campañas **más antiguas que el satélite**
+   (importadas, o de otra versión). Esas no se pueden sincronizar —no hay de
+   dónde— pero **no se ocultan nunca**: `campanas_de_parcela` devuelve la unión de
+   lo descargable y lo guardado, y marca cada campaña con lo que se puede hacer
+   con ella (`sincronizable`, `tiene_datos`, `solo_archivo`, `parcial`). Es lo
+   único que queda de esos años; esconderlas sería perderlas.
 9. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
    superficie cosechada y el origen del dato se anotan a mano en un evento
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
@@ -235,8 +247,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 493, sin `informe_anual` 482,
-sin `herbicida_contexto` 491, sin `calibracion_umbrales` 471 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 503, sin `informe_anual` 492,
+sin `herbicida_contexto` 501, sin `calibracion_umbrales` 481 — los cuatro en verde.
 
 ---
 
@@ -244,7 +256,7 @@ sin `herbicida_contexto` 491, sin `calibracion_umbrales` 471 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 493 pruebas, sin pantalla ni red
+python pruebas.py          # 503 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

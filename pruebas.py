@@ -1451,6 +1451,44 @@ def pruebas_panel_helpers():
     check("rango_campana: 1-sep a 31-ago",
           lambda: _rc("2025-2026"), lambda r: r == ("2025-09-01", "2026-08-31"))
 
+    # --- QUE CAMPANAS OFRECER EN LA FICHA ---
+    # El limite lo pone el satelite (Sentinel-2 L2A empieza en la 2017-2018), no
+    # una constante inventada. Y lo que hay guardado mas atras NO se esconde: se
+    # marca "solo archivo", porque es lo unico que queda de esos anos.
+    from campanas import (campanas_de_parcela as cdp, campanas_sincronizables as cs,
+                          PRIMERA_CAMPANA_S2, PRIMERA_CAMPANA_S2_GLOBAL)
+    HOY = _dtc(2026, 3, 1)                    # campana en curso: 2025-2026
+    check("campanas sincronizables: de la primera de Sentinel-2 a la actual",
+          lambda: cs(HOY),
+          lambda r: r[0] == "2025-2026" and r[-1] == PRIMERA_CAMPANA_S2 and len(r) == 9)
+    todas = cdp((), HOY)
+    check("campanas ficha: sin datos se ofrecen igual todas las descargables",
+          lambda: [c["campana"] for c in todas],
+          lambda r: r == cs(HOY))
+    check("campanas ficha: la mas reciente primero y marcada como en curso",
+          lambda: (todas[0]["campana"], todas[0]["actual"], todas[1]["actual"]),
+          lambda r: r == ("2025-2026", True, False))
+    check("campanas ficha: la 2017-2018 se marca parcial (cobertura no global)",
+          lambda: {c["campana"]: c["parcial"] for c in todas},
+          lambda r: r[PRIMERA_CAMPANA_S2] is True and r[PRIMERA_CAMPANA_S2_GLOBAL] is False)
+    con = cdp(["2024-2025", "2013-2014"], HOY)
+    check("campanas ficha: una campana con datos se marca con datos",
+          lambda: [c for c in con if c["campana"] == "2024-2025"][0],
+          lambda c: c["tiene_datos"] and c["sincronizable"] and not c["solo_archivo"])
+    check("campanas ficha: una campana anterior al satelite NO se pierde de la lista",
+          lambda: [c for c in con if c["campana"] == "2013-2014"],
+          lambda r: len(r) == 1)
+    check("campanas ficha: y sale como solo archivo (se ve, no se sincroniza)",
+          lambda: [c for c in con if c["campana"] == "2013-2014"][0],
+          lambda c: c["solo_archivo"] and c["tiene_datos"] and not c["sincronizable"])
+    check("campanas ficha: el archivo va al final, detras de las descargables",
+          lambda: [c["campana"] for c in con][-1], lambda r: r == "2013-2014")
+    check("campanas ficha: una campana guardada sin cobertura no inventa 'con datos'",
+          lambda: [c["tiene_datos"] for c in cdp((), HOY)], lambda r: not any(r))
+    check("campanas ficha: entrada vacia o None no revienta",
+          lambda: (len(cdp(None, HOY)), len(cdp(["", None], HOY))),
+          lambda r: r == (9, 9))
+
     # ruta_cache_mapa: ficha y comparador deben usar la MISMA ruta de cache.
     # Vive en mapas_cache.py: se importa, no se extrae del panel.
     from mapas_cache import ruta_cache_mapa as rc, ruta_cache_radar as rcr

@@ -80,7 +80,8 @@ from bitacora import log      # registro de incidencias (nunca escribe en consol
 from fechas import (iso_a_ddmmaaaa, ddmmaaaa_a_iso, enmascarar_fecha,
                     filtrar_fecha_digitos)
 from geo import superficie_ha    # area de la parcela (shoelace), logica compartida
-from campanas import campana_actual, campanas_entre   # logica de campana
+from campanas import (campana_actual, campanas_de_parcela, PRIMERA_CAMPANA_S2,
+                      PRIMERA_CAMPANA_S2_GLOBAL)      # logica de campana
 from sigpac import sigpac_consultar, _sigpac_get, SigpacError         # consulta de recintos SIGPAC
 from cultivo import spec_de, clave_cultivo                            # modelo de cultivo (puro)
 
@@ -1821,37 +1822,37 @@ class DialogoSincronizarCampanas(tk.Toplevel):
         self.after(0, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
-        ficha = DB.ficha(nombre) or {}
-        actual = campana_actual()
-        a0 = int(actual.split("-")[0])
-        tope = f"{a0 - 5}-{a0 - 4}"                 # Copernicus: 5 campanas hacia atras
-        inicio = ficha.get("anio_inicio_monitoreo") or tope
-        try:                                        # no ofrecer campanas mas alla de 5 anos
-            if int(inicio.split("-")[0]) < a0 - 5:
-                inicio = tope
-        except (ValueError, IndexError):
-            inicio = tope
-        camps = campanas_entre(inicio, actual)     # mas reciente primero
-        con_datos = {c for c in camps if DB.ultima_fecha(nombre, c)}   # campanas ya descargadas
+        # El limite lo pone el satelite, no el programa: Sentinel-2 L2A empieza en
+        # la campana 2017-2018 (ver campanas.PRIMERA_CAMPANA_S2). Las campanas mas
+        # antiguas que eso, si las hay guardadas, salen listadas pero sin casilla:
+        # no se pueden descargar, solo consultarlas desde la ficha.
+        camps = campanas_de_parcela(DB.campanas_de(nombre))
 
         tk.Label(self, text=f"Parcela: {nombre.replace('_', ' ')}", bg=TEMA["surface"],
                  fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
-        tk.Label(self, text="Copernicus cubre hasta 5 campanas atras. Marca las que quieras descargar\n"
-                            "(incremental, no repite). Si una campana no tiene datos de satelite, se\n"
-                            "avisara al sincronizar. Para VER una, seleccionala luego en el panel.",
+        tk.Label(self, text=f"Copernicus llega hasta la campana {PRIMERA_CAMPANA_S2} "
+                            f"(cobertura completa desde {PRIMERA_CAMPANA_S2_GLOBAL}).\n"
+                            "Marca las que quieras descargar (incremental, no repite). Si una campana\n"
+                            "no tiene datos de satelite, se avisara al sincronizar. Para VER una,\n"
+                            "seleccionala en el desplegable de campana de la ficha.",
                  bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"],
                  justify="left").pack(anchor="w", padx=16)
 
         cont, interior = marco_scroll(self, bg=TEMA["surface"], rueda_global=True)
-        cont.configure(height=180, width=300)
+        cont.configure(height=180, width=320)
         cont.pack(fill="x", padx=16, pady=8)
         cont.pack_propagate(False)
         self.vars = {}
         for c in camps:
-            v = tk.BooleanVar(value=(c == campana_ficha))
-            self.vars[c] = v
-            etiqueta = c + ("   (actual)" if c == actual else
-                            "   ✓ con datos" if c in con_datos else "   · sin descargar")
+            etiqueta = FichaParcela._etiqueta_campana(c)
+            if not c["sincronizable"]:
+                # guardada pero fuera del alcance del satelite: se ensena para que
+                # se sepa que esta ahi, sin casilla porque no hay nada que pedir
+                tk.Label(interior, text="      " + etiqueta, bg=TEMA["surface"],
+                         fg=TEMA["text_muted"], font=FUENTES["small"]).pack(anchor="w", pady=1)
+                continue
+            v = tk.BooleanVar(value=(c["campana"] == campana_ficha))
+            self.vars[c["campana"]] = v
             ttk.Checkbutton(interior, text=etiqueta, variable=v).pack(anchor="w", pady=1)
 
         self.lbl_prog = tk.Label(self, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
@@ -2315,8 +2316,9 @@ class FichaParcela:
         cab.pack(fill="x")
         ttk.Button(cab, text="  \u2190 Volver  ", style="Ghost.TButton",
                    command=panel.mostrar_lista).pack(side="left", padx=12, pady=10)
-        tk.Label(cab, text=f"{nombre.replace('_',' ')}   ·   Campana {campana}",
+        tk.Label(cab, text=nombre.replace("_", " "),
                  bg=TEMA["header_bg"], fg="#fff", font=FUENTES["h2"]).pack(side="left")
+        self._build_selector_campana(cab)
         ttk.Button(cab, text="  \u21BB Sincronizar Copernicus  ", style="Ghost.TButton",
                    command=self.sincronizar).pack(side="right", padx=(0, 12), pady=10)
         ttk.Button(cab, text="  \U0001F4E1 Sentinel-1 (radar)  ", style="Ghost.TButton",
@@ -2369,6 +2371,121 @@ class FichaParcela:
         enlazar_rueda(cuerpo, scroll.rueda)
 
         self.refrescar()
+
+    # =================================================================
+    # SELECTOR DE CAMPANA DE LA FICHA
+    # =================================================================
+    # En la cabecera, al lado del nombre. Ofrece TODAS las campanas de la parcela,
+    # no solo la actual:
+    #   - las que Copernicus puede servir (de la 2017-2018 a la de hoy), tengan
+    #     datos o no: elegir una sin descargar ofrece descargarla ahi mismo;
+    #   - y las que estan guardadas pero el satelite ya no alcanza, marcadas
+    #     "solo archivo". Esas no se pueden actualizar, pero son lo unico que
+    #     queda de esos anos y hay que poder consultarlas.
+    # Cambiar de campana aqui cambia tambien la del panel: la ficha lee la serie a
+    # traves de `panel._historico`, asi que las dos tienen que ir a la vez o la
+    # ficha ensenaria una campana y la lista otra.
+    def _build_selector_campana(self, cab):
+        marco = tk.Frame(cab, bg=TEMA["header_bg"])
+        marco.pack(side="left", padx=(14, 0))
+        tk.Label(marco, text="Campana", bg=TEMA["header_bg"], fg=TEMA["header_sub"],
+                 font=FUENTES["small"]).pack(side="left", padx=(0, 6))
+        self.cb_campana_ficha = ttk.Combobox(marco, state="readonly", width=26)
+        self.cb_campana_ficha.pack(side="left")
+        self.cb_campana_ficha.bind("<<ComboboxSelected>>", self._cambiar_campana)
+        self._refrescar_campanas()
+
+    def _campanas_ficha(self):
+        return campanas_de_parcela(DB.campanas_de(self.nombre))
+
+    @staticmethod
+    def _etiqueta_campana(c, n_pasadas=None):
+        """Una linea que dice de un vistazo que se puede hacer con esa campana."""
+        marca = c["campana"]
+        if c["actual"]:
+            marca += "  ·  en curso"
+        if c["solo_archivo"]:
+            return marca + "  ·  solo archivo"
+        if c["tiene_datos"]:
+            return marca + (f"  ✓ {n_pasadas} pasadas" if n_pasadas else "  ✓ con datos")
+        return marca + ("  ·  sin descargar (parcial)" if c["parcial"]
+                        else "  ·  sin descargar")
+
+    def _refrescar_campanas(self):
+        if not hasattr(self, "cb_campana_ficha") or not self.cb_campana_ficha.winfo_exists():
+            return
+        self._campanas_disp = self._campanas_ficha()
+        # el numero de pasadas solo de la campana abierta: contarlas todas seria
+        # una consulta por campana cada vez que se refresca la ficha
+        etiquetas = [self._etiqueta_campana(
+            c, len(DB.pasadas(self.nombre, c["campana"])) if c["campana"] == self.campana else None)
+            for c in self._campanas_disp]
+        self.cb_campana_ficha["values"] = etiquetas
+        for i, c in enumerate(self._campanas_disp):
+            if c["campana"] == self.campana:
+                self.cb_campana_ficha.current(i)
+                break
+
+    def _cambiar_campana(self, _=None):
+        i = self.cb_campana_ficha.current()
+        if not (0 <= i < len(getattr(self, "_campanas_disp", []))):
+            return
+        elegida = self._campanas_disp[i]
+        camp = elegida["campana"]
+        if camp == self.campana:
+            return
+        # Sin datos y descargable: se ofrece bajarla, que es a lo que se venia.
+        # Si se dice que no, se abre igual (vacia): elegir una campana no puede
+        # quedarse a medias porque no haya red.
+        if not elegida["tiene_datos"] and elegida["sincronizable"] and _EE:
+            aviso = (f"La campana {camp} no esta descargada.\n\n¿La descargo ahora "
+                     f"de Copernicus?")
+            if elegida["parcial"]:
+                aviso += (f"\n\nAviso: en {PRIMERA_CAMPANA_S2} la cobertura de "
+                          f"Sentinel-2 aun no era global y puede no haber imagenes "
+                          f"de esta zona.")
+            if messagebox.askyesno("Campanas", aviso, parent=self.master):
+                self._abrir_campana(camp)
+                return self._sincronizar_campana(camp)
+        self._abrir_campana(camp)
+
+    def _abrir_campana(self, camp):
+        """Cambia la campana del panel y vuelve a montar la ficha en ella."""
+        self.panel.campana = camp
+        if hasattr(self.panel, "cb_campana") and self.panel.cb_campana.winfo_exists():
+            # el selector del panel solo lista campanas CON datos; si se abre una
+            # vacia hay que meterla o quedaria puesta una campana que no esta en la
+            # lista y el desplegable ensenaria otra cosa
+            self.panel.cb_campana["values"] = sorted(
+                set(self.panel._campanas()) | {camp}, reverse=True)
+            self.panel.cb_campana.set(camp)
+        self.panel.mostrar_ficha(self.nombre)
+
+    def _sincronizar_campana(self, camp):
+        """Descarga UNA campana desde la ficha ya abierta en ella."""
+        if not _EE:
+            return messagebox.showwarning("GEE", "earthengine-api no disponible.")
+        ficha = self.panel.vista_ficha
+        def worker():
+            n, msg = sincronizar_parcela(self.nombre, camp, silencioso=True)
+            if ULTIMO_SYNC.get("estado") != "fallo":
+                sincronizacion.marca_guardar()
+            def fin():
+                if not ficha.winfo_exists():
+                    return          # se cerro la ficha mientras descargaba
+                self.panel._refrescar()
+                self.panel._actualizar_estado_sync()
+                if self.panel.campana == camp:
+                    self.panel.mostrar_ficha(self.nombre)
+                if n:
+                    messagebox.showinfo("Campanas", f"{camp}: {msg}.")
+                else:
+                    messagebox.showinfo(
+                        "Campanas",
+                        f"{camp}: no hay pasadas de Copernicus utilizables para esta "
+                        f"parcela en esa campana.\n\n({msg})")
+            ficha.after(0, fin)
+        threading.Thread(target=worker, daemon=True).start()
 
     def _titulo(self, parent, texto):
         tk.Label(parent, text=texto, bg=TEMA["surface"], fg=TEMA["text"],
@@ -2641,6 +2758,7 @@ class FichaParcela:
         self.cb_dia["values"] = list(self._map_fechas.keys())
         if self._map_fechas:
             self.cb_dia.current(len(self._map_fechas) - 1)
+        self._refrescar_campanas()
         self._pintar_leyenda()
         self._pintar_graficas(regs)
         self._pintar_interp(regs)
