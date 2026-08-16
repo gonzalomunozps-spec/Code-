@@ -186,30 +186,9 @@ todas las parcelas.
    Fuera de `construir_indice` hay dos sitios que **no** escalan, a propósito: el
    fondo RGB de `descargar_mapa_indice` (pinta la imagen natural, no un índice) y
    el NDVI de la rejilla (normalizado). El radar tampoco: Sentinel-1 llega en dB.
-13. **Una serie no mezcla las dos escalas de los índices.** Lo que se guardó antes
-   del arreglo lleva SAVI, EVI, MSAVI y LAI inflados, y eso **no se puede deshacer
-   con una cuenta**: el EVI inflado no es función del EVI bueno, hay que volver a
-   bajar las bandas. Así que no se reescribe ni se borra nada: se **marca**
-   (`pasadas.escala_indices`, migración 7) y quien lee decide.
-   Comparar una pasada marcada con una nueva daría una caída de MSAVI de 0,68 a
-   0,30 que nunca ocurrió —peor que el fallo original—, así que todo lo que razona
-   pide la serie a `Panel._historico`, que la pasa por
-   `contraste_indices.serie_comparable`: en las pasadas viejas esos cuatro índices
-   van a `None`, un hueco que el resto del programa ya sabe tratar. El NDVI, el
-   GNDVI y el NDMI de esas mismas fechas se conservan intactos, porque el arreglo
-   no les cambia el valor. La **tabla del histórico es la excepción**: enseña lo
-   que hay guardado, en gris, porque es dato del usuario.
-   Al abrir una parcela con pasadas marcadas se vuelven a bajar solas en segundo
-   plano (`gee_cliente.resincronizar_escala` → `almacen.reemplazar_pasadas`), que
-   es la única escritura que pisa datos de `pasadas` y solo actúa sobre filas que
-   ya existen y siguen marcadas. Las validaciones por índice hechas contra un
-   valor de la escala vieja **siguen guardadas y se ven** en la ficha, marcadas
-   «sin validar», pero salen de `validaciones_indice()` y por tanto no mueven
-   ningún umbral: se dijeron mirando un número que no era el real.
 8. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
    cambiarlo hay que subir `ESQUEMA_VERSION` y añadir su migración a
-   `_MIGRACIONES` (receta completa en el docstring de `almacen.py`). Va por la
-   **7**: `escala_indices` en `pasadas` y en `validaciones_indice`.
+   `_MIGRACIONES` (receta completa en el docstring de `almacen.py`).
 9. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
    superficie cosechada y el origen del dato se anotan a mano en un evento
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
@@ -256,8 +235,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 521, sin `informe_anual` 510,
-sin `herbicida_contexto` 519, sin `calibracion_umbrales` 499 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 493, sin `informe_anual` 482,
+sin `herbicida_contexto` 491, sin `calibracion_umbrales` 471 — los cuatro en verde.
 
 ---
 
@@ -265,7 +244,7 @@ sin `herbicida_contexto` 519, sin `calibracion_umbrales` 499 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 521 pruebas, sin pantalla ni red
+python pruebas.py          # 493 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

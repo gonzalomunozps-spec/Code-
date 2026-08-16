@@ -55,28 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 7
-
-# =====================================================================
-# ESCALA CON LA QUE SE CALCULARON LOS INDICES DE UNA FILA
-# =====================================================================
-# Hasta la version 6 los indices se calculaban metiendo en las formulas los
-# enteros que entrega Sentinel-2 (reflectancia x 10000) sin deshacer ese factor.
-# NDVI, GNDVI y NDMI son cocientes normalizados y salian bien igualmente; SAVI,
-# EVI, MSAVI y LAI llevan constantes aditivas y salian inflados (ver el invariante
-# de escalado en ARQUITECTURA.md §4).
-#
-# Esa diferencia no es recuperable a posteriori: el EVI inflado no es funcion del
-# EVI bueno, hace falta volver a bajar las bandas. Asi que lo guardado NO se
-# reescribe ni se borra: se MARCA, y quien lee decide.
-#   0 = calculado antes del arreglo (los cuatro con constante aditiva, inflados)
-#   1 = calculado sobre reflectancia, correcto
-# En los tres normalizados las dos escalas coinciden, asi que una fila suya con
-# marca 0 sigue siendo tan buena como una con marca 1.
-ESCALA_VIEJA = 0
-ESCALA_INDICES = 1                 # la que se escribe hoy
-# Los que SI cambian de valor con el arreglo. Los otros tres son invariantes.
-INDICES_AFECTADOS = ("SAVI", "EVI", "MSAVI", "LAI")
+ESQUEMA_VERSION = 6
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -179,7 +158,6 @@ def _crear_tablas():
             nombre TEXT, campana TEXT, fecha TEXT,
             datos TEXT,                -- JSON con los indices y la estadistica espacial
             interpretacion TEXT,
-            escala_indices INTEGER,    -- 0 = indices de antes del arreglo de escala; 1 = correctos
             PRIMARY KEY(nombre, campana, fecha));
         CREATE TABLE IF NOT EXISTS pasadas_radar(
             nombre TEXT, campana TEXT, fecha TEXT,
@@ -216,7 +194,6 @@ def _crear_tablas():
             clave_ambito TEXT,
             regimen TEXT,              -- REGADIO | SECANO (lenosos); vacio = comodin
             densidad TEXT,             -- tradicional | intensivo | seto; vacio = comodin
-            escala_indices INTEGER,    -- 0 = validada contra un valor de la escala vieja
             ts TEXT);
         CREATE INDEX IF NOT EXISTS ix_vidx_busca
             ON validaciones_indice(indice, especie, fase, ambito, clave_ambito);
@@ -329,41 +306,10 @@ def _migracion_6(c):
             c.execute(f"ALTER TABLE parcelas ADD COLUMN {col} {tipo}")
 
 
-def _migracion_7(c):
-    """Marca lo guardado con la escala VIEJA de los indices.
-
-    Hasta ahora los indices se calculaban sobre los enteros de Sentinel-2 sin
-    deshacer el factor 10000, y SAVI, EVI, MSAVI y LAI salian inflados (ver
-    ESCALA_INDICES arriba). Mezclar en una misma serie valores de las dos escalas
-    es PEOR que el fallo original -las diferencias entre pasadas salen
-    disparatadas-, asi que hay que poder distinguirlos.
-
-    No se toca ni una fila de datos: solo se anade la marca. Las pasadas viejas se
-    quedan enteras y se pueden volver a bajar cuando se quiera.
-
-    En `validaciones_indice` la marca depende del indice: las de NDVI, GNDVI y
-    NDMI se validaron contra un valor que el arreglo NO cambia, asi que nacen ya
-    como buenas (1). Las de los otros cuatro se marcan 0: siguen guardadas y se
-    ven, pero dejan de mover umbrales hasta que se revaliden."""
-    for tabla in ("pasadas", "validaciones_indice"):
-        ya = {r[1] for r in c.execute(f"PRAGMA table_info({tabla})")}
-        if "escala_indices" not in ya:
-            c.execute(f"ALTER TABLE {tabla} ADD COLUMN escala_indices INTEGER")
-    c.execute("UPDATE pasadas SET escala_indices=? WHERE escala_indices IS NULL",
-              (ESCALA_VIEJA,))
-    marcas = ",".join("?" * len(INDICES_AFECTADOS))
-    c.execute(f"UPDATE validaciones_indice SET escala_indices="
-              f"CASE WHEN UPPER(indice) IN ({marcas}) THEN ? ELSE ? END "
-              f"WHERE escala_indices IS NULL",
-              (*INDICES_AFECTADOS, ESCALA_VIEJA, ESCALA_INDICES))
-    c.execute("CREATE INDEX IF NOT EXISTS ix_pasadas_escala "
-              "ON pasadas(nombre, campana, escala_indices)")
-
-
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
 _MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4,
-                5: _migracion_5, 6: _migracion_6, 7: _migracion_7}
+                5: _migracion_5, 6: _migracion_6}
 
 
 def _migrar_esquema():
@@ -569,11 +515,6 @@ def _pasada_from_row(r):
     d["fecha"] = r["fecha"]
     if r["interpretacion"] is not None:
         d["interpretacion"] = r["interpretacion"]
-    # La escala viaja CON la pasada: quien compare dos fechas tiene que poder ver
-    # que una es de antes del arreglo. Las filas anteriores a la migracion 7 y las
-    # que llegan sin columna cuentan como viejas, que es el supuesto prudente.
-    esc = r["escala_indices"] if "escala_indices" in r.keys() else None
-    d["escala_indices"] = ESCALA_VIEJA if esc is None else int(esc)
     return d
 
 
@@ -582,8 +523,8 @@ def pasadas(nombre, campana):
     c = _c()
     with _LOCK:
         return [_pasada_from_row(r) for r in c.execute(
-            "SELECT fecha,datos,interpretacion,escala_indices FROM pasadas "
-            "WHERE nombre=? AND campana=? ORDER BY fecha", (nombre, campana))]
+            "SELECT fecha,datos,interpretacion FROM pasadas WHERE nombre=? AND campana=? ORDER BY fecha",
+            (nombre, campana))]
 
 
 def pasadas_de_campana(campana):
@@ -591,35 +532,10 @@ def pasadas_de_campana(campana):
     c = _c()
     with _LOCK:
         out = {}
-        for r in c.execute("SELECT nombre,fecha,datos,interpretacion,escala_indices "
-                           "FROM pasadas WHERE campana=? ORDER BY fecha", (campana,)):
+        for r in c.execute("SELECT nombre,fecha,datos,interpretacion FROM pasadas "
+                           "WHERE campana=? ORDER BY fecha", (campana,)):
             out.setdefault(r["nombre"], []).append(_pasada_from_row(r))
         return out
-
-
-def fechas_escala_vieja(nombre, campana):
-    """Fechas de esa campana cuyos indices son de antes del arreglo de escala.
-
-    Es lo que hay que volver a bajar. Ordenadas, para pedirlas por lotes."""
-    c = _c()
-    with _LOCK:
-        return [r["fecha"] for r in c.execute(
-            "SELECT fecha FROM pasadas WHERE nombre=? AND campana=? "
-            "AND (escala_indices IS NULL OR escala_indices<>?) AND fecha<>'' "
-            "ORDER BY fecha", (nombre, campana, ESCALA_INDICES))]
-
-
-def hay_escala_vieja(nombre=None):
-    """Cuantas pasadas quedan con la escala vieja (de una parcela o de todas)."""
-    c = _c()
-    sql = ("SELECT COUNT(*) FROM pasadas WHERE "
-           "(escala_indices IS NULL OR escala_indices<>?)")
-    args = [ESCALA_INDICES]
-    if nombre:
-        sql += " AND nombre=?"
-        args.append(nombre)
-    with _LOCK:
-        return int(c.execute(sql, args).fetchone()[0])
 
 
 def ultima_fecha(nombre, campana):
@@ -638,49 +554,11 @@ def anadir_pasadas(nombre, campana, nuevas):
             fecha = p.get("fecha")
             if not fecha:
                 continue
-            datos = {k: v for k, v in p.items()
-                     if k not in ("fecha", "interpretacion", "escala_indices")}
-            c.execute("INSERT OR IGNORE INTO pasadas("
-                      "nombre,campana,fecha,datos,interpretacion,escala_indices) "
-                      "VALUES(?,?,?,?,?,?)",
-                      (nombre, campana, fecha, json.dumps(datos, ensure_ascii=False),
-                       p.get("interpretacion"), ESCALA_INDICES))
+            datos = {k: v for k, v in p.items() if k not in ("fecha", "interpretacion")}
+            c.execute("INSERT OR IGNORE INTO pasadas(nombre,campana,fecha,datos,interpretacion) "
+                      "VALUES(?,?,?,?,?)",
+                      (nombre, campana, fecha, json.dumps(datos, ensure_ascii=False), p.get("interpretacion")))
         c.commit()
-
-
-def reemplazar_pasadas(nombre, campana, nuevas):
-    """Vuelve a escribir pasadas que YA existen, con los indices bien escalados.
-
-    Es la unica escritura que pisa datos de `pasadas`, y existe solo para esto:
-    cambiar unos indices mal calculados por los mismos indices bien calculados,
-    del MISMO dia y la MISMA parcela. Solo actua sobre filas que existen (nunca
-    inserta) y solo si siguen marcadas con la escala vieja, asi que repetirla no
-    hace nada la segunda vez.
-
-    Se borra la `interpretacion` cacheada de esas fechas: se redacto leyendo los
-    valores viejos, y dejarla seria mostrar una frase que ya no se deduce de lo
-    que hay en la tabla. Se vuelve a calcular sola al abrir la ficha. Nada mas se
-    toca: eventos, validaciones, rejillas y la ficha se quedan como estan.
-
-    Devuelve cuantas filas se han actualizado."""
-    c = _c()
-    n = 0
-    with _LOCK:
-        for p in nuevas or []:
-            fecha = p.get("fecha")
-            if not fecha:
-                continue
-            datos = {k: v for k, v in p.items()
-                     if k not in ("fecha", "interpretacion", "escala_indices")}
-            cur = c.execute(
-                "UPDATE pasadas SET datos=?, interpretacion=NULL, escala_indices=? "
-                "WHERE nombre=? AND campana=? AND fecha=? "
-                "AND (escala_indices IS NULL OR escala_indices<>?)",
-                (json.dumps(datos, ensure_ascii=False), ESCALA_INDICES,
-                 nombre, campana, fecha, ESCALA_INDICES))
-            n += cur.rowcount
-        c.commit()
-    return n
 
 
 def set_interpretacion(nombre, campana, fecha, texto):
@@ -910,45 +788,27 @@ def guardar_validacion_indice(nombre, campana, fecha, indice, valor, especie, fa
     c = _c()
     clave = f"{nombre}|{campana}|{fecha}|{indice}|{ambito}|{clave_ambito or ''}"
     with _LOCK:
-        # La marca sale de la PASADA que se esta validando, no del momento en que
-        # se pulsa el boton: si esa fecha todavia no se ha vuelto a bajar, lo que
-        # el usuario tiene delante es el valor viejo y la validacion nace vieja.
-        r = c.execute("SELECT escala_indices FROM pasadas WHERE nombre=? AND campana=? "
-                      "AND fecha=?", (nombre, campana, fecha)).fetchone()
-        escala = ESCALA_INDICES if r is None or r[0] is None else int(r[0])
-        if indice and indice.upper() not in INDICES_AFECTADOS:
-            escala = ESCALA_INDICES     # normalizado: las dos escalas coinciden
         c.execute("INSERT OR REPLACE INTO validaciones_indice(id,nombre,campana,fecha,indice,"
                   "valor,especie,fase,dijo_sistema,dijo_usuario,ambito,clave_ambito,"
-                  "regimen,densidad,escala_indices,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "regimen,densidad,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (clave, nombre, campana, fecha, indice,
                    None if valor is None else float(valor), especie or "", fase or "",
                    dijo_sistema or "", dijo_usuario or "", ambito or "parcela",
-                   clave_ambito or "", regimen or "", densidad or "", escala,
+                   clave_ambito or "", regimen or "", densidad or "",
                    datetime.now().strftime("%Y-%m-%d %H:%M")))
         c.commit()
     return clave
 
 
 def validaciones_indice(indice=None, especie=None, fase=None, ambitos=None,
-                        regimen=None, densidad=None, incluir_escala_vieja=False):
+                        regimen=None, densidad=None):
     """Validaciones por indice, filtrando por lo que se necesite.
 
     `ambitos` es una lista de pares (ambito, clave) -por ejemplo
     [("parcela","La Vega"), ("municipio","47/186"), ("global","")]-. Devolver
-    todas juntas permite a quien llama decidir la precedencia.
-
-    Por defecto NO salen las validaciones hechas con la escala vieja de los
-    indices. Estan guardadas y se ven en la ficha, pero no pueden mover un umbral:
-    se dijeron mirando un MSAVI que leia 0.68 donde el valor real era 0.30, asi
-    que la correccion que implican no se dedujo de nada real. Vuelven a contar en
-    cuanto se revalida esa pasada con el valor bueno (ver ESCALA_INDICES).
-    `incluir_escala_vieja=True` las devuelve todas, para poder ENSENARLAS."""
+    todas juntas permite a quien llama decidir la precedencia."""
     sql = "SELECT * FROM validaciones_indice WHERE 1=1"
     args = []
-    if not incluir_escala_vieja:
-        sql += " AND (escala_indices IS NULL OR escala_indices=?)"
-        args.append(ESCALA_INDICES)
     for col, val in (("indice", indice), ("especie", especie), ("fase", fase)):
         if val:
             sql += f" AND {col}=?"
@@ -969,11 +829,7 @@ def validaciones_indice(indice=None, especie=None, fase=None, ambitos=None,
 
 
 def validaciones_indice_de_pasada(nombre, campana, fecha):
-    """Lo que el usuario dijo de cada indice en una pasada concreta.
-
-    Aqui SI salen las de la escala vieja: esto alimenta la ficha, y lo que el
-    usuario anoto tiene que seguir viendose aunque ya no mueva ningun umbral. Cada
-    fila trae su `escala_indices` para poder marcarla."""
+    """Lo que el usuario dijo de cada indice en una pasada concreta."""
     c = _c()
     with _LOCK:
         return {r["indice"]: dict(r) for r in c.execute(
