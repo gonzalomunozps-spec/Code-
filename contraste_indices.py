@@ -179,7 +179,14 @@ def separacion_copa_cubierta(serie, fase_esp, reg=None):
     if ndvi is None:
         return None
 
-    p10, p50, p90 = _g(reg, "p10"), _g(reg, "p50"), _g(reg, "p90")
+    # OJO CON EL NOMBRE. La pasada guarda los percentiles como `ndvi_p10`,
+    # `ndvi_p50` y `ndvi_p90` (ver gee_cliente). Esta funcion los pedia como
+    # `p10`, `p50` y `p90` -que es como los deja `estadisticas_pasada` para la
+    # tabla- y por tanto NO LOS ENCONTRABA NUNCA: `hay_perc` salia siempre False,
+    # la confianza siempre "baja", y el vigor de copa acababa siendo la MEDIA de
+    # la parcela, justo lo que este modulo dice en su cabecera que hay que evitar.
+    # Se lee el nombre de la BASE, que es de donde vienen las pasadas de verdad.
+    p10, p50, p90 = _g(reg, "ndvi_p10"), _g(reg, "ndvi_p50"), _g(reg, "ndvi_p90")
     hay_perc = None not in (p10, p90)
     marco = fase_esp.get("marco_calle") or 0
     # el pixel separa copa de calle si la calle es ancha, O si el dosel es continuo

@@ -785,7 +785,11 @@ def pruebas_lenosos():
         reg = {"fecha": f"2026-{mes:02d}-20", "ndvi": 0.52, "msavi": 0.36, "lai": 1.3,
                "evi": 0.28, "gndvi": 0.50, "savi": 0.44, "ndmi": 0.22}
         if con_percentiles:
-            reg.update({"p10": 0.42, "p50": 0.52, "p90": 0.66})
+            # los nombres que USA LA BASE (gee_cliente los guarda asi). Antes esta
+            # prueba ponia p10/p50/p90, que es como los deja `estadisticas_pasada`
+            # para la tabla, y con eso el camino del p90 salia verde en las
+            # pruebas mientras estaba muerto sobre datos reales.
+            reg.update({"ndvi_p10": 0.42, "ndvi_p50": 0.52, "ndvi_p90": 0.66})
         serie = [dict(reg, fecha=f"2026-{mes:02d}-01", ndvi=0.42, msavi=0.30), reg]
         fase = FEN.fase_lenoso("OLIVO", reg["fecha"], marco, marco, "SECANO")
         return separacion_copa_cubierta(serie, fase, reg)
@@ -814,7 +818,8 @@ def pruebas_lenosos():
             for ndvi, msavi in ((0.25, 0.20), (0.45, 0.28), (0.60, 0.50), (0.70, 0.44)):
                 reg = {"fecha": f"2026-{mes:02d}-20", "ndvi": ndvi, "msavi": msavi,
                        "lai": 1.5, "ndmi": 0.18, "evi": ndvi * 0.6, "savi": ndvi * 0.85,
-                       "gndvi": ndvi * 0.95, "p10": ndvi - 0.08, "p50": ndvi, "p90": ndvi + 0.08}
+                       "gndvi": ndvi * 0.95, "ndvi_p10": ndvi - 0.08,
+                       "ndvi_p50": ndvi, "ndvi_p90": ndvi + 0.08}
                 serie = [dict(reg, fecha=f"2026-{mes:02d}-05"), reg]
                 d = evaluar_parcela("LENOSO", "INTENSIVO", serie,
                                     spec={"especie": "OLIVO", "marco_calle": 14.0,
@@ -826,6 +831,30 @@ def pruebas_lenosos():
         return malos
     check("copa/cubierta: la cabecera y el juicio nunca se contradicen",
           _coherencia, lambda r: r == [])
+    # REGRESION. Esta es la prueba que faltaba: la pasada NO se fabrica, se pide a
+    # la base. El camino del p90 estuvo muerto porque la funcion buscaba `p90` y la
+    # base guarda `ndvi_p90`; con registros fabricados a medida no se veia.
+    def _sep_desde_la_base():
+        import almacen as _DB
+        import gee_cliente as _G
+        _DB.conectar(os.path.join(tempfile.mkdtemp(), "sep.db"))
+        _DB.guardar_ficha("Olivar_p90", {"propietario": "x", "coordenadas": [[0, 0], [0, 1], [1, 1]]})
+        # las MISMAS claves que escribe la sincronizacion (props de gee_cliente)
+        pasada = {"fecha": "2026-07-15", "cobertura_valida": 0.95,
+                  "ndvi": 0.161, "msavi": 0.109, "ndmi": 0.05, "lai": 0.6,
+                  "evi": 0.20, "savi": 0.16, "gndvi": 0.20, "ndvi_std": 0.08,
+                  "ndvi_p10": 0.09, "ndvi_p25": 0.12, "ndvi_p50": 0.15,
+                  "ndvi_p75": 0.21, "ndvi_p90": 0.276, "n_pixeles": 800}
+        _DB.anadir_pasadas("Olivar_p90", "2025-2026", [pasada])
+        serie = _DB.pasadas("Olivar_p90", "2025-2026")
+        fase = FEN.fase_lenoso("OLIVO", "2026-07-15", 14.0, 12.0, "SECANO")
+        return separacion_copa_cubierta(serie, fase, serie[-1]), _G.INDICES_ORDEN
+    check("copa/cubierta: los percentiles se leen de la pasada REAL, no de un dict a medida",
+          lambda: _sep_desde_la_base()[0],
+          lambda s: s["copa_ndvi_p90"] == 0.276 and s["confianza"] == "alta")
+    check("copa/cubierta: y por tanto la copa NO se juzga con la media de la parcela",
+          lambda: _sep_desde_la_base()[0],
+          lambda s: s["copa_msavi"] is not None and s["copa_msavi"] > 0.109)
     check("copa/cubierta: sin hoja lo dice sin rodeos",
           lambda: separacion_copa_cubierta(
               [{"fecha": "2026-01-20", "ndvi": 0.30, "msavi": 0.20, "lai": 0.5, "evi": 0.15}],
