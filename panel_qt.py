@@ -24,8 +24,8 @@ Hecho:   ventana principal, cabecera, barra de herramientas, LISTA de parcelas
          con busqueda, orden, resumen por estado y menu contextual, y la FICHA
          de parcela (historico, interpretacion, graficas y estadistica) en
          `panel_qt_ficha.py`.
-Pendiente: dialogos de alta/edicion y de correccion, cuaderno de campo, mapas y
-         radar.
+Pendiente: el mapa para DIBUJAR una parcela a mano en el alta, que en Tkinter
+         venia de `tkintermapview` (ver panel_qt_alta).
 Mientras tanto, `panel_gestion_parcelas.py` (Tkinter) sigue siendo la interfaz
 completa y no se ha tocado.
 
@@ -263,6 +263,11 @@ class PantallaLista(QWidget):
         self.cb_orden.currentTextChanged.connect(self.refrescar)
         lay.addWidget(self.cb_orden)
 
+        nueva = QPushButton("Nueva parcela")
+        nueva.setObjectName("Primario")
+        nueva.clicked.connect(self.alta_parcela)
+        lay.addWidget(nueva)
+
         self.insignias = QHBoxLayout()
         self.insignias.setSpacing(T.ESP["xs"])
         lay.addLayout(self.insignias)
@@ -324,12 +329,32 @@ class PantallaLista(QWidget):
         menu = QMenu(self)
         abrir = QAction("Abrir ficha", self)
         abrir.triggered.connect(lambda: self._abrir(fila))
+        editar = QAction("Editar parcela…", self)
+        editar.triggered.connect(self._editar)
         borrar = QAction("Eliminar parcela…", self)
         borrar.triggered.connect(self._eliminar)
         menu.addAction(abrir)
+        menu.addAction(editar)
         menu.addSeparator()
         menu.addAction(borrar)
         return menu
+
+    def alta_parcela(self, editar=None):
+        """Alta de una parcela nueva, o edicion de la seleccionada."""
+        from panel_qt_alta import DialogoParcela
+        dlg = DialogoParcela(self, self.campana, editar=editar)
+        if dlg.exec():
+            self.cb_campana.blockSignals(True)
+            self.cb_campana.clear()
+            self.cb_campana.addItems(self._campanas())
+            self.cb_campana.setCurrentText(self.campana)
+            self.cb_campana.blockSignals(False)
+            self.refrescar()
+
+    def _editar(self):
+        r = self._seleccionada()
+        if r:
+            self.alta_parcela(editar=r["id"])
 
     def _menu_contextual(self, punto):
         ix = self.tabla.indexAt(punto)

@@ -69,6 +69,17 @@ def _sin_modales():
             DIALOGOS.append((tipo, str(titulo), " ".join(str(texto).split())[:90]))
             return valor
         return staticmethod(f)
+    # Los QDialog propios tienen el mismo problema que las cajas de mensaje:
+    # `exec()` abre un bucle y espera a una persona. Se responde CANCELAR, que es
+    # lo que hace quien se lo piensa; el camino de "guardar" se prueba aparte,
+    # llamando al metodo del dialogo, que es donde esta la logica.
+    from PySide6.QtWidgets import QDialog
+
+    def _exec(self, *a, **k):
+        DIALOGOS.append(("dialogo", self.windowTitle(), ""))
+        return QDialog.Rejected
+    QDialog.exec = _exec
+
     QMessageBox.information = reg("info", QMessageBox.Ok)
     QMessageBox.warning = reg("aviso", QMessageBox.Ok)
     QMessageBox.critical = reg("error", QMessageBox.Ok)
@@ -181,9 +192,10 @@ def escenario_lista(P, DB, app):
         _check(lista._seleccionada() is not None, "no hay fila seleccionada")))
     # el menu se CONSTRUYE aqui, no se muestra: `exec` abriria su propio bucle de
     # eventos y el arnes se colgaria esperando a que alguien lo cerrase
-    _paso("lista: el menu de una fila ofrece abrir y eliminar", lambda: (
+    _paso("lista: el menu de una fila ofrece abrir, editar y eliminar", lambda: (
         _check([a.text() for a in lista.menu_de_fila(0).actions() if a.text()] ==
-               ["Abrir ficha", "Eliminar parcela…"], "el menu contextual ha cambiado")))
+               ["Abrir ficha", "Editar parcela…", "Eliminar parcela…"],
+               "el menu contextual ha cambiado")))
     _paso("lista: no hay menu para una fila que no existe",
           lambda: _check(lista.menu_de_fila(9999) is None, "deberia no haber menu"))
     _paso("lista: un clic contextual en el hueco vacio no hace nada",
@@ -358,11 +370,249 @@ def escenario_ficha_y_logica(P, DB, app):
     return "las dos interfaces sobre el mismo modulo"
 
 
+def _calib():
+    try:
+        import calibracion_umbrales
+        return calibracion_umbrales
+    except Exception:
+        return None
+
+
+def _indices():
+    try:
+        from gee_cliente import INDICES_ORDEN
+        return INDICES_ORDEN
+    except Exception:
+        return ["NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"]
+
+
+def escenario_dialogos(P, DB, app):
+    """Correccion, validacion por indice y cuaderno, por su LOGICA.
+
+    Los dialogos no se abren con `exec()` -eso espera a una persona-: se
+    construyen y se llama al metodo que guarda, que es donde estan las decisiones.
+    Que el `exec` de verdad no reviente ya lo cubre el escenario de la ficha."""
+    from panel_qt_dialogos import DialogoCorreccion, DialogoValidacionIndices, Cuaderno
+    import vista_ficha as VF
+    import registro_parcela as REG
+    nombre = DB.nombres()[0]
+    camp = sorted(DB.campanas_de(nombre) or ["2025-2026"])[-1]
+    regs = sorted(DB.pasadas(nombre, camp), key=lambda r: r.get("fecha", ""))
+    ctx = VF.contexto(nombre, camp, regs)
+    if ctx is None:
+        return "la parcela de prueba no tiene pasadas"
+
+    # --- corregir un diagnostico ---
+    val = dict(ctx["val_ctx"], campana=camp)
+    dlg = DialogoCorreccion(None, nombre, val)
+    _paso("correccion: viene preseleccionado lo que dijo el sistema",
+          lambda: _check(dlg.cb.currentText() == val["estado"],
+                         f"{dlg.cb.currentText()} != {val['estado']}"))
+    _paso("correccion: por defecto se aplica al cultivo, no solo a la parcela",
+          lambda: _check(dlg.rb_cultivo.isChecked() and not dlg.rb_parcela.isChecked(),
+                         "el ambito por defecto ha cambiado"))
+    otro = [e for e in VF.ESTADOS_VALIDABLES if e != val["estado"]][0]
+    _paso("correccion: guardar deja la validacion anotada", lambda: (
+        dlg.cb.setCurrentText(otro), dlg.nota.setPlainText("probando"),
+        dlg.rb_parcela.setChecked(True), dlg._guardar(),
+        _check((DB.validacion_de(nombre, camp, val["fecha"]) or {}).get("estado_real") == otro,
+               "no se guardo la correccion")))
+    _paso("correccion: y tira la interpretacion cacheada de esa pasada", lambda: (
+        _check(all(r.get("interpretacion") is None
+                   for r in DB.pasadas(nombre, camp) if r.get("fecha") == val["fecha"]),
+               "la interpretacion cacheada sigue ahi")))
+    _paso("correccion: acotada a la parcela, no contamina al cultivo", lambda: (
+        _check("@" in (DB.validacion_de(nombre, camp, val["fecha"]) or {}).get("cultivo", ""),
+               "la clave no quedo acotada a la parcela")))
+
+    # --- validacion por indice (solo con el modulo opcional) ---
+    ctx_idx = VF.contexto(nombre, camp, regs, calib=_calib(), indices=_indices())
+    if _calib() is not None and (ctx_idx or {}).get("idx_ctx"):
+        d2 = DialogoValidacionIndices(None, nombre, camp, ctx_idx["idx_ctx"])
+        _paso("indices: hay un desplegable por cada indice medido ese dia",
+              lambda: _check(len(d2.combos) > 0, "ningun indice validable"))
+        _paso("indices: guardar anota una validacion por indice", lambda: (
+            d2._guardar(),
+            _check(len(DB.validaciones_indice_de_pasada(nombre, camp,
+                                                        ctx_idx["idx_ctx"]["fecha"])) > 0,
+                   "no se anoto ninguna validacion por indice")))
+
+    # --- cuaderno de campo ---
+    cua = Cuaderno(nombre, camp)
+    antes = len(REG.eventos_de(nombre, camp) or [])
+    _paso("cuaderno: un PRODUCTO sin nombre se rechaza", lambda: (
+        cua.tipo.setCurrentText("PRODUCTO"), cua.producto.setText(""), cua._anotar(),
+        _check(len(REG.eventos_de(nombre, camp) or []) == antes,
+               "se anoto un producto sin nombre")))
+    _paso("cuaderno: un PRODUCTO completo se anota", lambda: (
+        cua.producto.setText("Cobre"), cua.dosis.setText("2 l/ha"),
+        cua.notas.setText("prueba"), cua._anotar(),
+        _check(len(REG.eventos_de(nombre, camp) or []) == antes + 1,
+               "no se anoto el producto")))
+    _paso("cuaderno: y aparece en la tabla",
+          lambda: _check(cua.modelo.rowCount() == len(REG.eventos_de(nombre, camp) or []),
+                         "la tabla no cuadra con los eventos"))
+    _paso("cuaderno: al elegir COSECHA cambian los campos", lambda: (
+        cua.tipo.setCurrentText("COSECHA"),
+        _check(cua.especificos.currentIndex() == 1, "no se ensenan los campos de cosecha")))
+    _paso("cuaderno: un rendimiento que no es un numero se rechaza", lambda: (
+        cua.rendimiento.setText("mucho"), cua._anotar(),
+        _check(len(REG.eventos_de(nombre, camp) or []) == antes + 1,
+               "se colo un rendimiento que no es numero")))
+    _paso("cuaderno: una cosecha con datos validos se anota", lambda: (
+        cua.rendimiento.setText("4200"), cua.superficie.setText("12.4"), cua._anotar(),
+        _check(len(REG.eventos_de(nombre, camp) or []) == antes + 2,
+               "no se anoto la cosecha")))
+    _paso("cuaderno: los tipos sin campos propios no ensenan ninguno", lambda: [
+        (cua.tipo.setCurrentText(t), app.processEvents(),
+         _check(cua.especificos.currentIndex() == 2, f"{t} no deberia tener campos"))
+        for t in ("RIEGO", "LABOREO", "SIEMBRA", "OTRO")])
+    return "correccion, indices y cuaderno recorridos"
+
+
+def escenario_mapa(P, DB, app):
+    """El visor de mapas: sin credenciales de Earth Engine y con una imagen local.
+
+    Lo que NO se puede probar aqui es la descarga real: no hay credenciales. Lo
+    que si: que sin ellas se dice y no se deja un hueco mudo, y que el visor
+    carga, hace zoom y se ajusta con un PNG de verdad."""
+    from panel_qt_mapa import Mapa, Visor, RESOLUCION_M
+    from PySide6.QtGui import QPixmap
+    import mapas_cache
+    nombre = DB.nombres()[0]
+    camp = sorted(DB.campanas_de(nombre) or ["2025-2026"])[-1]
+    fechas = [r["fecha"] for r in DB.pasadas(nombre, camp) if r.get("fecha")]
+
+    m = Mapa(nombre, camp)
+    _paso("mapa: se ofrecen todos los indices",
+          lambda: _check(m.cb_idx.count() == 7, f"{m.cb_idx.count()} indices"))
+    _paso("mapa: sin fechas lo dice, no deja un hueco mudo", lambda: (
+        m.poner_fechas([]),
+        _check("todavia no tiene pasadas" in m.estado.text(), m.estado.text())))
+    _paso("mapa: con fechas queda elegida la ultima", lambda: (
+        m.poner_fechas(fechas),
+        _check(m.cb_dia.currentText() == fechas[-1], "no se eligio la ultima")))
+    _paso("mapa: sin mapa descargado ni Earth Engine, se explica", lambda: (
+        _check("Earth Engine" in m.estado.text() or "descargando" in m.estado.text().lower(),
+               m.estado.text())))
+    _paso("mapa: recorrer los indices no revienta", lambda: [
+        (m.cb_idx.setCurrentText(i), app.processEvents()) for i in
+        [m.cb_idx.itemText(k) for k in range(m.cb_idx.count())]])
+    _paso("mapa: la leyenda sale de la misma tabla que la descarga", lambda: (
+        m.leyenda.poner("NDVI"),
+        _check("⟶" in m.leyenda.text(), f"leyenda vacia: {m.leyenda.text()!r}")))
+
+    # el visor, con una imagen de verdad puesta en la cache
+    ruta = mapas_cache.ruta_cache_mapa(nombre, "NDVI", fechas[-1], RESOLUCION_M)
+    os.makedirs(os.path.dirname(ruta), exist_ok=True)
+    pix = QPixmap(120, 90)
+    pix.fill()
+    pix.save(ruta, "PNG")
+    # el recorrido anterior dejo elegido el ultimo indice: se vuelve al que tiene
+    # imagen, que es lo que haria el usuario al elegirlo en el desplegable
+    _paso("visor: carga un PNG de la cache", lambda: (
+        m.cb_idx.setCurrentText("NDVI"), m.poner_fechas(fechas),
+        _check(m.visor._item is not None, "el visor no cargo la imagen")))
+    _paso("visor: y entonces el estado dice que dia e indice se ve",
+          lambda: _check(fechas[-1] in m.estado.text(), m.estado.text()))
+    _paso("visor: zoom dentro y fuera, y ajustar", lambda: (
+        m.visor.zoom(1.25), m.visor.zoom(1 / 1.25), m.visor.ajustar()))
+    _paso("visor: el zoom tiene topes y no se dispara", lambda: (
+        [m.visor.zoom(2.0) for _ in range(20)],
+        _check(m.visor._zoom <= 8.0 + 1e-9, f"zoom desbocado: {m.visor._zoom}")))
+    _paso("visor: un fichero que no existe no revienta, devuelve False",
+          lambda: _check(Visor().poner("/no/existe.png") is False, "deberia dar False"))
+    os.remove(ruta)
+
+    r = Mapa(nombre, camp, radar=True)
+    _paso("radar: ofrece los parametros de Sentinel-1, no los indices opticos",
+          lambda: _check(r.cb_idx.count() in (0, 3), f"{r.cb_idx.count()} parametros"))
+    _paso("radar: sin pasadas de radar lo dice", lambda: (
+        r.poner_fechas([]),
+        _check("todavia no tiene pasadas" in r.estado.text(), r.estado.text())))
+    return "visor, leyenda, zoom y radar recorridos"
+
+
+def escenario_alta(P, DB, app):
+    """Alta y edicion de una parcela, por su logica (el dialogo no se `exec`ta).
+
+    La captura por SIGPAC NO se ejercita: sale a la red. Lo que si se comprueba
+    es todo lo demas, que es donde estan las decisiones: validaciones, campos por
+    tipo, y que lo guardado quede como debe."""
+    from panel_qt_alta import DialogoParcela
+    import fenologia_especies as FEN
+    camp = "2025-2026"
+    cuadrado = [[-4.10, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.10, 41.66]]
+
+    d = DialogoParcela(None, camp)
+    _paso("alta: sin nombre ni propietario no se guarda", lambda: (
+        d._guardar(), _check("Nueva_Qt" not in DB.nombres(), "se guardo sin datos")))
+    _paso("alta: sin geometria tampoco", lambda: (
+        d.e_nombre.setText("Nueva Qt"), d.e_prop.setText("Ana"), d._guardar(),
+        _check("Nueva_Qt" not in DB.nombres(), "se guardo sin geometria")))
+    _paso("alta: al elegir LENOSO se piden marco y regimen", lambda: (
+        d.cb_tipo.setCurrentText("LENOSO"), app.processEvents(),
+        _check(d.especificos.currentIndex() == 1, "no se ensenan los campos de lenoso")))
+    _paso("alta: un lenoso sin marco no se guarda", lambda: (
+        setattr(d, "coords", cuadrado), d._guardar(),
+        _check("Nueva_Qt" not in DB.nombres(), "se guardo un lenoso sin marco")))
+    _paso("alta: el marco dice lo que implica al teclearlo", lambda: (
+        d.e_calle.setText("10"), d.e_pie.setText("10"), app.processEvents(),
+        _check("arboles/ha" in d.lbl_marco.text() and "%" in d.lbl_marco.text(),
+               f"resumen del marco: {d.lbl_marco.text()!r}")))
+    _paso("alta: y distingue copa medida de copa estimada", lambda: (
+        _check("estimada" in d.lbl_marco.text(), d.lbl_marco.text()),
+        d.e_copa.setText("7"), app.processEvents(),
+        _check("copa medida" in d.lbl_marco.text(), d.lbl_marco.text())))
+    _paso("alta: un margen que no es numero se rechaza", lambda: (
+        d.e_buffer.setText("bastante"), d._guardar(),
+        _check("Nueva_Qt" not in DB.nombres(), "se colo un margen que no es numero")))
+    _paso("alta: con todo completo se guarda", lambda: (
+        d.e_buffer.setText("20"), d._guardar(),
+        _check("Nueva_Qt" in DB.nombres(), "no se guardo la parcela")))
+    ficha = DB.ficha("Nueva_Qt") or {}
+    _paso("alta: se guarda la superficie calculada del poligono",
+          lambda: _check(ficha.get("superficie_ha", 0) > 0, "superficie sin calcular"))
+    _paso("alta: y el margen interior tecleado",
+          lambda: _check(ficha.get("buffer_m") == 20.0, f"buffer {ficha.get('buffer_m')}"))
+    cult = (ficha.get("cultivos_por_campana") or {}).get(camp) or {}
+    _paso("alta: el subtipo se DERIVA del marco, nadie lo teclea",
+          lambda: _check(cult.get("subtipo") == FEN.subtipo_canonico(
+              cult.get("especie", "OLIVO"), FEN.densidad_arboles(10.0, 10.0)),
+              f"subtipo {cult.get('subtipo')!r}"))
+    _paso("alta: el diametro de copa llega al cultivo",
+          lambda: _check(cult.get("diametro_copa") == 7.0, str(cult.get("diametro_copa"))))
+
+    # --- edicion ---
+    e = DialogoParcela(None, camp, editar="Nueva_Qt")
+    _paso("edicion: el nombre no se puede cambiar (identifica el historico)",
+          lambda: _check(e.e_nombre.isReadOnly(), "el nombre es editable"))
+    _paso("edicion: viene relleno con lo guardado", lambda: (
+        _check(e.e_prop.text() == "Ana", e.e_prop.text()),
+        _check(e.e_calle.text() == "10.0", e.e_calle.text()),
+        _check(len(e.coords) >= 3, "no cargo la geometria")))
+    _paso("edicion: guardar respeta el nombre y actualiza el propietario", lambda: (
+        e.e_prop.setText("Luis"), e._guardar(),
+        _check((DB.ficha("Nueva_Qt") or {}).get("propietario") == "Luis",
+               "no se actualizo el propietario")))
+    _paso("edicion: un BARBECHO no pide especie ni marco", lambda: (
+        e.cb_tipo.setCurrentText("BARBECHO"), app.processEvents(),
+        _check(e.especificos.currentIndex() == 2, "barbecho no deberia pedir nada"),
+        e._guardar()))
+    _paso("alta: SIGPAC sin los codigos obligatorios avisa y no sale a la red",
+          lambda: DialogoParcela(None, camp)._sigpac())
+    DB.eliminar_parcela("Nueva_Qt")
+    return "alta y edicion recorridas"
+
+
 ESCENARIOS = [("tema", escenario_tema), ("lista de parcelas", escenario_lista),
               ("lista vacia", escenario_lista_vacia), ("borrado", escenario_borrado),
               ("ficha de parcela", escenario_ficha),
               ("ficha sin pasadas", escenario_ficha_sin_pasadas),
-              ("logica compartida", escenario_ficha_y_logica)]
+              ("logica compartida", escenario_ficha_y_logica),
+              ("dialogos y cuaderno", escenario_dialogos),
+              ("mapa y radar", escenario_mapa),
+              ("alta y edicion", escenario_alta)]
 
 
 def main():

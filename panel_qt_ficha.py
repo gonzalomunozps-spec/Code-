@@ -16,8 +16,10 @@ Nada del dominio. Lo que la ficha DICE -diagnostico, encabezado, aprendizaje por
 validaciones, tablas- lo da `vista_ficha`, que es el mismo modulo que usa la
 interfaz de Tkinter. Aqui se pinta y se navega.
 
-PENDIENTE en esta etapa: cuaderno de campo, mapa de indices y radar. La version
-de Tkinter los tiene y sigue siendo la interfaz completa.
+El mapa de indices y el de radar viven en `panel_qt_mapa`. La descarga real
+contra Earth Engine NO se ha podido ejercitar donde se escribio esto (no hay
+credenciales): lo probado es el camino sin credenciales y el visor con una
+imagen local.
 """
 
 import threading
@@ -371,10 +373,32 @@ class Ficha(QWidget):
         arriba.setSizes([620, 520])
         lay.addWidget(arriba, 3)
 
+        c_map, l_map = _tarjeta("Mapa de la parcela")
+        from panel_qt_mapa import Mapa
+        self.mapa = Mapa(self.nombre, self.campana)
+        l_map.addWidget(self.mapa, 1)
+        arriba2 = QSplitter(Qt.Horizontal)
+        arriba2.addWidget(c_map)
+        c_rad, l_rad = _tarjeta("Radar (Sentinel-1)")
+        self.radar = Mapa(self.nombre, self.campana, radar=True)
+        l_rad.addWidget(self.radar, 1)
+        arriba2.addWidget(c_rad)
+        arriba2.setSizes([620, 520])
+        lay.addWidget(arriba2, 3)
+
         c_graf, l_graf = _tarjeta("Evolucion de los indices")
         self.graficas = Graficas()
         l_graf.addWidget(self.graficas, 1)
         lay.addWidget(c_graf, 2)
+
+        c_cua, l_cua = _tarjeta("Cuaderno de campo (intervenciones)")
+        from panel_qt_dialogos import Cuaderno
+        self.cuaderno = Cuaderno(self.nombre, self.campana)
+        # una intervencion nueva puede cambiar el diagnostico (el motor mira los
+        # eventos cercanos a la pasada), asi que se vuelve a interpretar
+        self.cuaderno.cambiado.connect(self.refrescar)
+        l_cua.addWidget(self.cuaderno, 1)
+        lay.addWidget(c_cua, 2)
 
         c_est, l_est = _tarjeta("Estadistica dentro de la parcela (distribucion del NDVI)")
         self.lbl_est = QLabel("")
@@ -426,6 +450,14 @@ class Ficha(QWidget):
         filas_est = VF.filas_estadistica(regs)
         self.modelo_est.poner(filas_est)
         self.lbl_est.setText(VF.PIE_ESTADISTICA if filas_est else VF.PIE_SIN_ESTADISTICA)
+        if hasattr(self, "cuaderno"):
+            self.cuaderno.refrescar()
+        if hasattr(self, "mapa"):
+            self.mapa.poner_fechas([r.get("fecha", "") for r in regs if r.get("fecha")])
+            self.radar.poner_fechas([r.get("fecha", "") for r in
+                                     sorted(DB.radar(self.nombre, self.campana),
+                                            key=lambda x: x.get("fecha", ""))
+                                     if r.get("fecha")])
         self._pintar_interp(regs)
 
     def _pintar_interp(self, regs):
@@ -507,20 +539,20 @@ class Ficha(QWidget):
             return QMessageBox.information(self, "Validar",
                                            "No hay ninguna pasada que validar.")
         if veredicto == "correcto":
-            DB.guardar_validacion(self.nombre, self.campana, ctx["fecha"], ctx["fase"],
-                                  ctx["cultivo"], ctx["estado"], "correcto")
+            VF.guardar_validacion(self.nombre, self.campana, ctx, "correcto")
             self.refrescar()
             return
-        # La correccion pide estado y observacion: es un dialogo, y va en la etapa
-        # siguiente. Se dice, en vez de tragarse la pulsacion en silencio.
-        QMessageBox.information(
-            self, "Corregir diagnostico",
-            "El dialogo de correccion todavia no esta portado a esta interfaz.\n\n"
-            "Confirmar como correcto si funciona; para corregir, usa por ahora "
-            "python panel_gestion_parcelas.py")
+        from panel_qt_dialogos import DialogoCorreccion
+        dlg = DialogoCorreccion(self, self.nombre, dict(ctx, campana=self.campana))
+        if dlg.exec():
+            self.refrescar()
 
     def _validar_indices(self):
-        QMessageBox.information(
-            self, "Validar indices",
-            "El dialogo de validacion por indice todavia no esta portado a esta "
-            "interfaz.\n\nEsta completo en python panel_gestion_parcelas.py")
+        if _CALIB is None or not self._idx_ctx:
+            return QMessageBox.information(
+                self, "Validar indices",
+                "No hay lecturas que validar en esta pasada.")
+        from panel_qt_dialogos import DialogoValidacionIndices
+        dlg = DialogoValidacionIndices(self, self.nombre, self.campana, self._idx_ctx)
+        if dlg.exec():
+            self.refrescar()

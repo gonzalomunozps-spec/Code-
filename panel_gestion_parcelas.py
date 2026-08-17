@@ -57,8 +57,7 @@ import matplotlib.dates as mdates
 # Modulo de interpretacion fenologica + deteccion de cubierta vegetal (IA)
 # El aprendizaje por validaciones y las observaciones previas se aplican dentro de
 # `vista_ficha`, que es donde vive lo que la ficha DICE; aqui ya no hacen falta.
-from interpretacion_fenologica import (evaluar_parcela, texto_interpretacion,
-                                       ambito_parcela)
+from interpretacion_fenologica import evaluar_parcela, texto_interpretacion
 import registro_parcela as REG
 import fenologia_especies as FEN
 import credenciales as CRED
@@ -997,34 +996,11 @@ class PanelGestionParcelas(ttk.Frame):
 
     def guardar_parcela(self, nombre, propietario, tipo, spec, coords, campana=None,
                         sigpac=None, buffer_m=None):
-        camp = campana or self.campana
-        cerrado = coords + [coords[0]] if coords and coords[0] != coords[-1] else coords
-        ficha = DB.ficha(nombre) or {}
-        ficha.update({"propietario": propietario, "coordenadas": cerrado,
-                      "superficie_ha": superficie_ha(cerrado),
-                      "anio_inicio_monitoreo": ficha.get("anio_inicio_monitoreo", camp)})
-        # DONDE esta la parcela. Antes los 7 codigos SIGPAC se tecleaban, servian
-        # para bajar el recinto y se tiraban. Se guardan porque provincia y
-        # municipio son la unidad en la que se corrige un umbral para una comarca.
-        if sigpac and sigpac.get("Prov") and sigpac.get("Mun"):
-            ficha["provincia"] = str(sigpac["Prov"]).strip()
-            ficha["municipio"] = f"{str(sigpac['Prov']).strip()}/{str(sigpac['Mun']).strip()}"
-            ficha["sigpac"] = {k: str(v).strip() for k, v in sigpac.items() if str(v).strip()}
-        if buffer_m is not None:
-            ficha["buffer_m"] = float(buffer_m)
-        # subtipo derivado (compatibilidad y visualizacion):
-        #   leñoso -> tipo de plantacion segun el marco; cereal -> COSECHA_GRANO
-        spec = dict(spec or {})
-        subtipo = ""
-        if tipo == "LENOSO" and spec.get("marco_calle"):
-            dens = FEN.densidad_arboles(spec["marco_calle"], spec["marco_pie"])
-            subtipo = FEN.subtipo_canonico(spec.get("especie", "OLIVO"), dens)
-        elif tipo == "EXTENSIVO":
-            subtipo = spec.get("finalidad") if spec.get("finalidad") in ("SIEGA_VERDE", "COSECHA_GRANO") else "COSECHA_GRANO"
-        cultivo = {"tipo": tipo, "subtipo": subtipo}
-        cultivo.update(spec)          # especie, fecha_siembra, marco_calle, marco_pie, finalidad
-        ficha.setdefault("cultivos_por_campana", {})[camp] = cultivo
-        DB.guardar_ficha(nombre, ficha)
+        # Las reglas (cerrar el poligono, guardar SIGPAC, derivar el subtipo) viven
+        # en `vista_parcelas`, compartidas con el alta de la interfaz Qt.
+        VP.guardar_parcela(DB, FEN, superficie_ha, nombre, propietario, tipo, spec,
+                           coords, campana or self.campana, sigpac=sigpac,
+                           buffer_m=buffer_m)
         self.cb_campana["values"] = self._campanas()
         self._refrescar()
 
@@ -2991,26 +2967,17 @@ class FichaParcela:
 
     def _validar(self, veredicto, estado_real=None, nota="", solo_parcela=False):
         ctx = getattr(self, "_val_ctx", None)
-        if not ctx or not ctx.get("fecha"):
+        # el ambito de la correccion y el descarte de la interpretacion cacheada
+        # los decide `vista_ficha`, compartido con la interfaz Qt
+        if not VF.guardar_validacion(self.nombre, self.campana, ctx, veredicto,
+                                     estado_real=estado_real, nota=nota,
+                                     solo_parcela=solo_parcela):
             return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.", parent=self.master)
-        # AMBITO: si el usuario marca "solo esta parcela", la correccion se guarda con
-        # la clave acotada y no afectara al resto de sus parcelas del mismo cultivo.
-        clave = ctx.get("cultivo")
-        if solo_parcela:
-            clave = ambito_parcela(clave, self.nombre)
-        DB.guardar_validacion(self.nombre, self.campana, ctx["fecha"], ctx.get("fase"),
-                              clave, ctx.get("estado"), veredicto,
-                              estado_real=estado_real, nota=nota)
-        # APRENDER AL MOMENTO: si corriges o escribes una observacion, se descarta la
-        # interpretacion cacheada de esta pasada para que se regenere teniendo en cuenta
-        # lo que acabas de decir; ademas se vuelve a pintar la interpretacion ya mismo.
         regs = getattr(self, "_regs_actual", None)
-        if veredicto == "incorrecto" or (nota or "").strip():
-            DB.set_interpretacion(self.nombre, self.campana, ctx["fecha"], None)
-            if regs:
-                for r in regs:
-                    if r.get("fecha") == ctx["fecha"]:
-                        r["interpretacion"] = None
+        if regs and (veredicto == "incorrecto" or (nota or "").strip()):
+            for r in regs:
+                if r.get("fecha") == ctx["fecha"]:
+                    r["interpretacion"] = None
         if regs:
             self._pintar_interp(regs)
         else:

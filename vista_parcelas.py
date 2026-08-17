@@ -111,3 +111,50 @@ def resumen(filas_lista: List[Dict[str, Any]]) -> Dict[str, int]:
     for r in filas_lista or []:
         out[r["estado"]] = out.get(r["estado"], 0) + 1
     return out
+
+
+# =====================================================================
+# ALTA Y EDICION DE UNA PARCELA
+# =====================================================================
+def guardar_parcela(db, fen, superficie, nombre, propietario, tipo, spec, coords,
+                    campana, sigpac=None, buffer_m=None):
+    """Escribe la parcela y su cultivo de esa campana. Devuelve la ficha guardada.
+
+    Estaba dentro del panel de Tkinter. Se saca porque el alta de Qt necesita
+    exactamente las mismas reglas, y son reglas de DATOS, no de ventana:
+
+      - el poligono se CIERRA si no venia cerrado, y de ahi sale la superficie;
+      - los codigos SIGPAC se guardan (provincia y municipio son la unidad en la
+        que se corrige un umbral para una comarca; antes se tecleaban, servian
+        para bajar el recinto y se tiraban);
+      - el SUBTIPO se deriva: en lenoso, del marco; en extensivo, de la finalidad.
+        Nadie lo teclea, para que no pueda contradecir al marco.
+
+    `db`, `fen` y `superficie` se inyectan (almacen, fenologia_especies y
+    geo.superficie_ha) para que este modulo siga sin dependencias propias."""
+    cerrado = coords + [coords[0]] if coords and coords[0] != coords[-1] else coords
+    ficha = db.ficha(nombre) or {}
+    ficha.update({"propietario": propietario, "coordenadas": cerrado,
+                  "superficie_ha": superficie(cerrado),
+                  "anio_inicio_monitoreo": ficha.get("anio_inicio_monitoreo", campana)})
+    if sigpac and sigpac.get("Prov") and sigpac.get("Mun"):
+        prov, mun = str(sigpac["Prov"]).strip(), str(sigpac["Mun"]).strip()
+        ficha["provincia"] = prov
+        ficha["municipio"] = f"{prov}/{mun}"
+        ficha["sigpac"] = {k: str(v).strip() for k, v in sigpac.items() if str(v).strip()}
+    if buffer_m is not None:
+        ficha["buffer_m"] = float(buffer_m)
+    spec = dict(spec or {})
+    subtipo = ""
+    if tipo == "LENOSO" and spec.get("marco_calle"):
+        dens = fen.densidad_arboles(spec["marco_calle"], spec["marco_pie"])
+        subtipo = fen.subtipo_canonico(spec.get("especie", "OLIVO"), dens)
+    elif tipo == "EXTENSIVO":
+        subtipo = (spec.get("finalidad")
+                   if spec.get("finalidad") in ("SIEGA_VERDE", "COSECHA_GRANO")
+                   else "COSECHA_GRANO")
+    cultivo = {"tipo": tipo, "subtipo": subtipo}
+    cultivo.update(spec)
+    ficha.setdefault("cultivos_por_campana", {})[campana] = cultivo
+    db.guardar_ficha(nombre, ficha)
+    return ficha

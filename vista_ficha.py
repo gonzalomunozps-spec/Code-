@@ -32,7 +32,7 @@ import contraste_indices as CI
 import registro_parcela as REG
 from cultivo import spec_de
 from interpretacion_fenologica import (evaluar_parcela, ajuste_por_validaciones,
-                                       observaciones_del_agricultor)
+                                       observaciones_del_agricultor, ambito_parcela)
 
 # Estados que el usuario puede elegir al corregir un diagnostico.
 ESTADOS_VALIDABLES = ["OK", "Vigilar", "Revisar", "Segado", "N.A."]
@@ -169,6 +169,34 @@ def encabezado(nombre: str, diag: Dict[str, Any], actual: Dict[str, Any],
         for o in previas:
             lineas.append(f"   • [{o.get('estado', '?')}] {o['nota']}")
     return "\n".join(lineas) + "\n\n"
+
+
+def guardar_validacion(nombre: str, campana: str, val_ctx: Dict[str, Any], veredicto: str,
+                       estado_real: Optional[str] = None, nota: str = "",
+                       solo_parcela: bool = False) -> bool:
+    """Anota lo que el usuario dice del diagnostico de una pasada.
+
+    Devuelve True si se guardo. Dos decisiones que NO son de interfaz y por eso
+    estan aqui, para que las dos den lo mismo:
+
+      - AMBITO. Si el usuario marca "solo esta parcela", la correccion se guarda
+        con la clave acotada (`ambito_parcela`) y no contamina al resto de sus
+        parcelas del mismo cultivo.
+      - APRENDER AL MOMENTO. Si corrige, o escribe una observacion, se tira la
+        interpretacion cacheada de esa pasada: la siguiente se redactara teniendo
+        en cuenta lo que acaba de decir. Confirmar sin nota no la tira, porque no
+        hay nada nuevo que contar."""
+    if not val_ctx or not val_ctx.get("fecha"):
+        return False
+    clave = val_ctx.get("cultivo")
+    if solo_parcela:
+        clave = ambito_parcela(clave, nombre)
+    DB.guardar_validacion(nombre, campana, val_ctx["fecha"], val_ctx.get("fase"),
+                          clave, val_ctx.get("estado"), veredicto,
+                          estado_real=estado_real, nota=nota)
+    if veredicto == "incorrecto" or (nota or "").strip():
+        DB.set_interpretacion(nombre, campana, val_ctx["fecha"], None)
+    return True
 
 
 def texto_validacion(nombre: str, campana: str, fecha: Optional[str]) -> Dict[str, str]:
