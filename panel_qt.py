@@ -21,8 +21,11 @@ especifico de PySide.
 QUE HAY AQUI Y QUE NO (estado del porte)
 ----------------------------------------
 Hecho:   ventana principal, cabecera, barra de herramientas, LISTA de parcelas
-         con busqueda, orden, resumen por estado y menu contextual.
-Pendiente: ficha de parcela, dialogos de alta/edicion, mapas y graficas.
+         con busqueda, orden, resumen por estado y menu contextual, y la FICHA
+         de parcela (historico, interpretacion, graficas y estadistica) en
+         `panel_qt_ficha.py`.
+Pendiente: dialogos de alta/edicion y de correccion, cuaderno de campo, mapas y
+         radar.
 Mientras tanto, `panel_gestion_parcelas.py` (Tkinter) sigue siendo la interfaz
 completa y no se ha tocado.
 
@@ -43,13 +46,15 @@ from PySide6.QtGui import QAction, QColor, QFont
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QLabel, QLineEdit, QComboBox,
                                QPushButton, QTableView, QHeaderView, QFrame,
-                               QMessageBox, QMenu, QAbstractItemView, QSizePolicy)
+                               QMessageBox, QMenu, QAbstractItemView, QSizePolicy,
+                               QStackedWidget)
 
 import ui_tema as T
 import almacen as DB
 import vista_parcelas as VP
 from interpretacion_fenologica import evaluar_parcela
 from campanas import campana_actual
+from panel_qt_ficha import Ficha
 from bitacora import log
 
 
@@ -364,9 +369,13 @@ class VentanaPrincipal(QMainWindow):
         raiz.setSpacing(0)
         raiz.addWidget(self._cabecera())
 
+        # La lista y la ficha son dos VISTAS de la misma ventana, apiladas.
+        self.vistas = QStackedWidget()
         self.lista = PantallaLista()
         self.lista.abrir_ficha.connect(self._abrir_ficha)
-        raiz.addWidget(self.lista, 1)
+        self.vistas.addWidget(self.lista)
+        self.ficha = None
+        raiz.addWidget(self.vistas, 1)
 
         self.setCentralWidget(central)
         self.statusBar().showMessage(f"Datos en {DB.RUTA_DB}")
@@ -393,13 +402,33 @@ class VentanaPrincipal(QMainWindow):
         return w
 
     def _abrir_ficha(self, nombre):
-        # La ficha todavia vive en la interfaz de Tkinter; hasta que se porte, se
-        # dice claramente en vez de abrir una ventana a medias.
-        QMessageBox.information(
-            self, "Ficha de parcela",
-            f"La ficha de «{nombre.replace('_', ' ')}» todavia no esta portada a "
-            f"esta interfaz.\n\nMientras tanto esta completa en la version anterior "
-            f"(python panel_gestion_parcelas.py).")
+        """Sustituye la lista por la ficha de esa parcela.
+
+        Se apila en un QStackedWidget en vez de abrir una ventana nueva: la ficha
+        es una VISTA del mismo trabajo, no una tarea aparte, y una ventana suelta
+        obliga a colocarla y a cerrarla."""
+        campanas = [self.lista.cb_campana.itemText(i)
+                    for i in range(self.lista.cb_campana.count())]
+        ficha = Ficha(nombre, self.lista.campana, campanas)
+        ficha.volver.connect(self._mostrar_lista)
+        ficha.cambiar_campana.connect(
+            lambda c, n=nombre: (self.lista.cb_campana.setCurrentText(c),
+                                 self._cerrar_ficha(), self._abrir_ficha(n)))
+        self._cerrar_ficha()
+        self.ficha = ficha
+        self.vistas.addWidget(ficha)
+        self.vistas.setCurrentWidget(ficha)
+
+    def _cerrar_ficha(self):
+        if getattr(self, "ficha", None) is not None:
+            self.vistas.removeWidget(self.ficha)
+            self.ficha.deleteLater()
+            self.ficha = None
+
+    def _mostrar_lista(self):
+        self.vistas.setCurrentWidget(self.lista)
+        self._cerrar_ficha()
+        self.lista.refrescar()
 
 
 def main(argv=None):

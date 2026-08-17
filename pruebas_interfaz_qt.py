@@ -247,8 +247,122 @@ def escenario_borrado(P, DB, app):
     return "una parcela eliminada y repuesta"
 
 
+def escenario_ficha(P, DB, app):
+    """La ficha de CADA parcela: se abre, se recorre y se vuelve."""
+    import vista_ficha as VF
+    v = P.VentanaPrincipal()
+    v.show()
+    app.processEvents()
+    abiertas = 0
+    for nombre in DB.nombres():
+        if not _paso(f"ficha '{nombre}': abrir", lambda n=nombre: (
+                v._abrir_ficha(n), app.processEvents(),
+                _check(v.ficha is not None, "no se monto la ficha"),
+                _check(v.vistas.currentWidget() is v.ficha, "la ficha no esta a la vista"))):
+            continue
+        abiertas += 1
+        f = v.ficha
+        serie = f._serie()
+        _paso(f"{nombre}: el historico tiene una fila por pasada", lambda f=f, s=serie: (
+            _check(f.modelo_idx.rowCount() == len(s),
+                   f"{f.modelo_idx.rowCount()} filas para {len(s)} pasadas")))
+        _paso(f"{nombre}: la tabla lleva fecha y los siete indices", lambda f=f: (
+            _check(f.modelo_idx.columnCount() == 8, "faltan columnas de indices")))
+        _paso(f"{nombre}: la estadistica no inventa filas", lambda f=f, s=serie: (
+            _check(f.modelo_est.rowCount() == len(VF.filas_estadistica(s)),
+                   "la tabla de estadistica no cuadra con lo que hay")))
+        _paso(f"{nombre}: el pie explica la tabla o dice por que esta vacia", lambda f=f: (
+            _check(f.lbl_est.text() in (VF.PIE_ESTADISTICA, VF.PIE_SIN_ESTADISTICA),
+                   "pie de la estadistica inesperado")))
+        _paso(f"{nombre}: hay interpretacion, no una caja en blanco", lambda f=f, s=serie: (
+            _check(len(f.interp.texto.toPlainText()) > 0, "la interpretacion esta vacia")))
+        _paso(f"{nombre}: refrescar dos veces seguidas", lambda f=f: (
+            f.refrescar(), app.processEvents(), f.refrescar(), app.processEvents()))
+        # recorrer TODAS las pasadas por el desplegable, como haria el usuario
+        if f.interp.cb_pasada is not None and f.interp.cb_pasada.count():
+            _paso(f"{nombre}: recorrer las pasadas anteriores", lambda f=f: [
+                (f.interp.cb_pasada.setCurrentIndex(i), app.processEvents())
+                for i in range(f.interp.cb_pasada.count())])
+        # marcar y desmarcar cada indice de la grafica
+        _paso(f"{nombre}: marcar y desmarcar los indices de la grafica", lambda f=f: [
+            (c.setChecked(not c.isChecked()), app.processEvents())
+            for c in f.graficas.casillas.values()])
+        _paso(f"{nombre}: apagar y encender el analisis de zonas", lambda f=f: (
+            f.interp.chk_zonas.setChecked(False), app.processEvents(),
+            f.interp.chk_zonas.setChecked(True), app.processEvents()))
+        _paso(f"{nombre}: validar como correcto", lambda f=f: (
+            f._validar("correcto"), app.processEvents()))
+        _paso(f"{nombre}: pedir la correccion (aun no portada, debe avisar)",
+              lambda f=f: f._validar("corregir"))
+        _paso(f"{nombre}: volver a la lista", lambda: (
+            v.lista.refrescar() if v.ficha is None else v.ficha.volver.emit(),
+            app.processEvents(),
+            _check(v.vistas.currentWidget() is v.lista, "no se volvio a la lista"),
+            _check(v.ficha is None, "la ficha no se solto al volver")))
+    v.close()
+    return f"{abiertas} fichas abiertas y recorridas"
+
+
+def escenario_ficha_sin_pasadas(P, DB, app):
+    """Una parcela recien dada de alta, sin ninguna pasada todavia."""
+    DB.guardar_ficha("Recien_Creada", {"propietario": "x", "superficie_ha": 3.0,
+                                       "coordenadas": [[0, 0], [0, 1], [1, 1]]})
+    v = P.VentanaPrincipal()
+    v.show()
+    app.processEvents()
+    _paso("sin pasadas: la ficha se abre igual", lambda: (
+        v._abrir_ficha("Recien_Creada"), app.processEvents(),
+        _check(v.ficha is not None, "no se monto la ficha")))
+    f = v.ficha
+    _paso("sin pasadas: las tablas quedan vacias, no a medias", lambda: (
+        _check(f.modelo_idx.rowCount() == 0 and f.modelo_est.rowCount() == 0,
+               "deberian estar vacias")))
+    _paso("sin pasadas: se dice que hay que sincronizar", lambda: (
+        _check("Sincronizar" in f.interp.texto.toPlainText(),
+               f.interp.texto.toPlainText()[:60])))
+    _paso("sin pasadas: validar no revienta, avisa", lambda: f._validar("correcto"))
+    _paso("sin pasadas: la grafica se dibuja vacia", lambda: f.graficas.poner([]))
+    v.close()
+    DB.eliminar_parcela("Recien_Creada")
+    return "ficha vacia recorrida"
+
+
+def escenario_ficha_y_logica(P, DB, app):
+    """La ficha de Qt y la de Tk piden lo MISMO al modulo compartido.
+
+    No se comparan pantallas -no se puede-, se comprueba que las dos pasan por
+    `vista_ficha` y que ninguna guarda una copia propia del encabezado."""
+    import os
+    import vista_ficha as VF
+    base = os.path.dirname(os.path.abspath(__file__))
+    tk_src = open(os.path.join(base, "panel_gestion_parcelas.py"), encoding="utf-8").read()
+    qt_src = open(os.path.join(base, "panel_qt_ficha.py"), encoding="utf-8").read()
+    _paso("compartido: la ficha de Tk usa vista_ficha",
+          lambda: _check("VF.contexto(" in tk_src, "el panel de Tk no usa el modulo"))
+    _paso("compartido: la ficha de Qt usa vista_ficha",
+          lambda: _check("VF.contexto(" in qt_src, "la ficha de Qt no usa el modulo"))
+    _paso("compartido: ninguna redacta el encabezado por su cuenta",
+          lambda: _check("Fase: " not in tk_src.split("def _pintar_interp")[1][:4000]
+                         and "Fase: " not in qt_src,
+                         "alguna interfaz vuelve a redactar el encabezado"))
+    nombre = DB.nombres()[0]
+    camp = sorted(DB.campanas_de(nombre) or ["2025-2026"])[-1]
+    regs = sorted(DB.pasadas(nombre, camp), key=lambda r: r.get("fecha", ""))
+    _paso("compartido: el contexto de una parcela real trae lo que la ficha necesita",
+          lambda: _check(regs == [] or all(
+              k in (VF.contexto(nombre, camp, regs) or {})
+              for k in ("estado", "encabezado", "val_ctx", "diag")),
+              "faltan claves en el contexto"))
+    _paso("compartido: sin pasadas el contexto es None, no un dict a medias",
+          lambda: _check(VF.contexto(nombre, camp, []) is None, "deberia ser None"))
+    return "las dos interfaces sobre el mismo modulo"
+
+
 ESCENARIOS = [("tema", escenario_tema), ("lista de parcelas", escenario_lista),
-              ("lista vacia", escenario_lista_vacia), ("borrado", escenario_borrado)]
+              ("lista vacia", escenario_lista_vacia), ("borrado", escenario_borrado),
+              ("ficha de parcela", escenario_ficha),
+              ("ficha sin pasadas", escenario_ficha_sin_pasadas),
+              ("logica compartida", escenario_ficha_y_logica)]
 
 
 def main():
