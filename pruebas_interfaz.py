@@ -661,6 +661,36 @@ def escenario_dialogos(P, DB):
     abrir("alta de parcela con margen interior", _alta_con_margen,
           lambda v: v._guardar())
 
+    def _alta_con_copa():
+        """El marco y el diametro de copa, y lo que el formulario ENSEÑA con ellos.
+
+        El campo de copa es opcional, pero es el que quita la suposicion gruesa de
+        estimarla del marco; y el texto que sale debajo es donde el usuario se
+        entera de que fraccion de suelo tapa, que es lo que traduce los umbrales."""
+        v = P.VentanaAltaParcela(panel)
+        root.update()
+        v.cb_tipo.set("LENOSO")
+        v._sub()
+        v.cb_sub.set("OLIVO")
+        root.update()
+        _teclear(v.e_calle, "10", root)
+        _teclear(v.e_pie, "10", root)
+        v._calc_marco()
+        root.update()
+        estimada = v.lbl_tipo_calc.cget("text")
+        _check("arboles/ha" in estimada, f"el marco no dice la densidad: {estimada!r}")
+        _check("%" in estimada, f"el marco no dice cuanto suelo tapa la copa: {estimada!r}")
+        _check("estimada" in estimada, f"no avisa de que la copa es estimada: {estimada!r}")
+        _teclear(v.e_copa, "7", root)
+        v._calc_marco()
+        root.update()
+        medida = v.lbl_tipo_calc.cget("text")
+        _check("copa medida" in medida, f"con copa tecleada sigue diciendo estimada: {medida!r}")
+        _check(medida != estimada, "teclear la copa no cambia lo que se ensena")
+        return v
+    abrir("alta de parcela con diametro de copa", _alta_con_copa,
+          lambda v: v._guardar())
+
     abrir("alta de parcela", lambda: P.VentanaAltaParcela(panel),
           lambda v: [b.invoke() for t, b in _botones(v) if "guardar" not in t.lower()]
           + [v._guardar()])

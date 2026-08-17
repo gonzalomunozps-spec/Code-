@@ -804,6 +804,46 @@ def pruebas_lenosos():
           lambda: (FEN.fraccion_copa("OLIVO", 10.0, 10.0),
                    FEN.fraccion_copa("OLIVO", 10.0, 10.0, diametro_copa=7.0)),
           lambda r: r[1] > r[0])
+
+    # --- DIAMETRO DE COPA: el dato que quita la ultima suposicion ---
+    # Dos olivares al MISMO marco, uno joven y otro viejo, tapan distinto suelo y
+    # por tanto no se les puede pedir el mismo MSAVI de parcela. Sin el dato se
+    # estima del marco y los dos salen iguales, que es como estaba antes.
+    _joven = FEN.fase_lenoso("OLIVO", "2026-07-15", 10.0, 10.0, "SECANO", diametro_copa=2.5)
+    _viejo = FEN.fase_lenoso("OLIVO", "2026-07-15", 10.0, 10.0, "SECANO", diametro_copa=7.0)
+    _estim = FEN.fase_lenoso("OLIVO", "2026-07-15", 10.0, 10.0, "SECANO")
+    check("copa: al mismo marco, un olivar viejo tapa mas suelo que uno joven",
+          lambda: (_joven["fraccion_copa"], _viejo["fraccion_copa"]),
+          lambda r: r[0] < r[1] and r[0] < 0.10 and r[1] > 0.35)
+    check("copa: y por eso al viejo se le exige mas MSAVI de parcela",
+          lambda: (_joven["msavi_min_parcela"], _viejo["msavi_min_parcela"]),
+          lambda r: r[0] < r[1])
+    check("copa: sin el dato se estima del marco y queda entre los dos",
+          lambda: (_joven["fraccion_copa"], _estim["fraccion_copa"], _viejo["fraccion_copa"]),
+          lambda r: r[0] < r[1] < r[2])
+    check("copa: la ficha dice si la copa esta medida o estimada",
+          lambda: (_viejo["copa_medida"], _estim["copa_medida"]),
+          lambda r: r == (True, False))
+    import cultivo as _CU
+    check("copa: el modelo de cultivo lleva el diametro (y los registros viejos, None)",
+          lambda: (_CU.spec_de({"especie": "OLIVO", "diametro_copa": 5.0})["diametro_copa"],
+                   _CU.spec_de({"especie": "OLIVO"})["diametro_copa"]),
+          lambda r: r == (5.0, None))
+    check("copa: llega hasta el diagnostico por spec, no solo hasta la tabla",
+          lambda: FEN.fase_por_especie("LENOSO", "OLIVO", "2026-07-15", marco_calle=10.0,
+                                       marco_pie=10.0, regimen="SECANO",
+                                       diametro_copa=7.0)["fraccion_copa"],
+          lambda v: v == _viejo["fraccion_copa"])
+    # el texto que se ve al teclear el marco: es donde el usuario se entera
+    check("copa: el resumen del marco dice cuanto suelo tapa la copa",
+          lambda: FEN.texto_marco("OLIVO", 10.0, 10.0, 7.0),
+          lambda t: "100 arboles/ha" in t and "tradicional" in t and "%" in t
+                    and "copa medida" in t)
+    check("copa: y avisa cuando la copa esta estimada, no medida",
+          lambda: FEN.texto_marco("OLIVO", 10.0, 10.0),
+          lambda t: "copa estimada del marco" in t)
+    check("copa: sin marco no hay resumen que dar",
+          lambda: FEN.texto_marco("OLIVO", None, None), lambda t: t == "")
     check("lenoso: el umbral de parcela es una mezcla, entre el suelo y la copa",
           lambda: FEN.umbral_en_escala_parcela(0.38, 0.20),
           lambda v: v == round(0.20 * 0.38 + 0.80 * FEN.MSAVI_SUELO, 3))

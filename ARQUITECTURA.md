@@ -86,7 +86,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 539 pruebas sin pantalla ni red. |
+| `pruebas.py` | 548 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -216,7 +216,13 @@ todas las parcelas.
    La traducción es la **mezcla del píxel**, no un porcentaje:
    `fc · umbral_copa + (1 − fc) · suelo` (`fenologia_especies.umbral_en_escala_parcela`),
    con `fc` = fracción de suelo que tapa la copa, derivada de la geometría del
-   marco y del diámetro de copa. Antes la densidad entraba como un factor
+   marco y del **diámetro de copa**, que se teclea en la ficha del cultivo junto al
+   marco. Es opcional: sin él se estima como una proporción del marco menor
+   (`PROPORCION_COPA`), que no distingue un olivar viejo de uno joven plantado
+   igual —al mismo marco de 10×10, una copa de 2,5 m tapa el 5 % del suelo y una
+   de 7 m el 38 %—. Al teclearlo, el formulario dice lo que implica
+   (`texto_marco`) y la ficha guarda si la copa está medida o estimada.
+   Antes la densidad entraba como un factor
    0,82 / 1,0 / 1,12 —un ±15 % sobre una magnitud que cambia por más del doble
    entre un tradicional y un seto, y de la forma equivocada: lo que cambia con la
    densidad no es el vigor de la copa, es **cuánto píxel es copa**—. Ese factor
@@ -288,8 +294,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 539, sin `informe_anual` 528,
-sin `herbicida_contexto` 537, sin `calibracion_umbrales` 517 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 548, sin `informe_anual` 537,
+sin `herbicida_contexto` 546, sin `calibracion_umbrales` 526 — los cuatro en verde.
 
 ---
 
@@ -297,7 +303,7 @@ sin `herbicida_contexto` 537, sin `calibracion_umbrales` 517 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 539 pruebas, sin pantalla ni red
+python pruebas.py          # 548 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

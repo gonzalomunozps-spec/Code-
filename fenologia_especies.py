@@ -504,6 +504,26 @@ def fraccion_copa(especie, marco_calle, marco_pie, diametro_copa=None):
     return round(min(FC_MAXIMA, dens * area_copa / 10000.0), 3)
 
 
+def texto_marco(especie, marco_calle, marco_pie, diametro_copa=None):
+    """Resumen legible del marco: densidad, tipo y CUANTO SUELO TAPA LA COPA.
+
+    Esa fraccion es la que traduce los umbrales de copa a la escala de la parcela,
+    asi que conviene que se vea al teclear el marco y no quede escondida en el
+    calculo. Se dice ademas si el diametro de copa esta medido o estimado, porque
+    la diferencia entre las dos cosas es justo lo que este texto sirve para
+    enseñar. Cadena vacia si el marco no da para nada."""
+    dens = densidad_arboles(marco_calle, marco_pie)
+    if not dens:
+        return ""
+    tipo, _factor = tipo_plantacion(especie or "OLIVO", dens)
+    txt = f"= {dens} arboles/ha  ->  {tipo}"
+    fc = fraccion_copa(especie or "OLIVO", marco_calle, marco_pie, diametro_copa)
+    if fc is not None:
+        origen = "copa medida" if diametro_copa else "copa estimada del marco"
+        txt += f"  ·  la copa tapa el {fc * 100:.0f} % del suelo ({origen})"
+    return txt
+
+
 def umbral_en_escala_parcela(umbral_copa, fc, suelo=MSAVI_SUELO):
     """Pasa un umbral de COPA a la escala de la MEDIA de la parcela.
 
@@ -642,13 +662,18 @@ def _nombre_fase_lenoso(esp, mes):
 
 
 def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=None,
-                p10_ndvi=None, p10_msavi=None):
+                p10_ndvi=None, p10_msavi=None, diametro_copa=None):
     """Devuelve dict con fase, rango de NDVI, densidad, tipo de plantacion y los
     umbrales de MSAVI/NDMI/LAI de esa fase y regimen hidrico.
 
     `p10_ndvi` y `p10_msavi` son el decil peor de la pasada, o sea la CALLE. Si se
     pasan, el termino de suelo de la conversion a escala de parcela se mide en la
-    propia finca en vez de suponerse (ver `suelo_de_la_parcela`)."""
+    propia finca en vez de suponerse (ver `suelo_de_la_parcela`).
+
+    `diametro_copa` es el diametro medio de copa en metros, si se conoce. Es el
+    dato que de verdad fija cuanto suelo tapa el arbol; sin el se estima a partir
+    del marco (ver `PROPORCION_COPA`), que es una aproximacion por tipo de
+    plantacion y no distingue un olivar viejo de uno joven al mismo marco."""
     info = LENOSO_ESPECIES.get(especie)
     if not info:
         return dict(umbrales_de_fase(), fase="sin especie", lo=0.30, hi=0.80,
@@ -663,7 +688,7 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
     lo, hi, caida = info["mes"][mes]
     dens = densidad_arboles(marco_calle, marco_pie)
     nombre_tipo, factor = tipo_plantacion(especie, dens)
-    fc = fraccion_copa(especie, marco_calle, marco_pie)
+    fc = fraccion_copa(especie, marco_calle, marco_pie, diametro_copa)
     # EL RANGO DE NDVI TAMBIEN ES DE COPA, no de parcela. `LENOSO_ESPECIES[...]["mes"]`
     # dice "un olivo en julio esta entre 0.40 y 0.78", y eso es el DOSEL. Un olivar
     # tradicional a 12x12 mide 0.17 de media aunque el arbol este perfecto, porque
@@ -689,7 +714,7 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
                 brota_tarde=brota_tarde, invierno_sin_hoja=invierno_sin_hoja,
                 densidad=dens, tipo=nombre_tipo, factor=factor,
                 marco_calle=marco_calle, marco_pie=marco_pie,
-                fraccion_copa=fc,
+                fraccion_copa=fc, copa_medida=bool(diametro_copa),
                 suelo_ndvi=suelo_ndvi, suelo_msavi=suelo_msavi,
                 suelo_medido=bool(ndvi_medido or msavi_medido),
                 msavi_min_parcela=_umbral_parcela_con_margen(
@@ -704,7 +729,7 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
 # =====================================================================
 def fase_por_especie(grupo, especie, fecha_iso, fecha_siembra=None,
                      marco_calle=None, marco_pie=None, regimen=None,
-                     p10_ndvi=None, p10_msavi=None):
+                     p10_ndvi=None, p10_msavi=None, diametro_copa=None):
     """
     Punto de entrada unico. `grupo` in {EXTENSIVO, LENOSO, BARBECHO}.
     Devuelve un dict homogeneo con al menos: fase, lo, hi, caida.
@@ -720,7 +745,8 @@ def fase_por_especie(grupo, especie, fecha_iso, fecha_siembra=None,
     if grupo == "LENOSO":
         # los percentiles solo se usan aqui: en extensivos no hay calle que medir
         d = fase_lenoso(especie, fecha_iso, marco_calle, marco_pie, regimen,
-                        p10_ndvi=p10_ndvi, p10_msavi=p10_msavi)
+                        p10_ndvi=p10_ndvi, p10_msavi=p10_msavi,
+                        diametro_copa=diametro_copa)
         d["grupo"] = "LENOSO"
         return d
     return {"fase": "desconocido", "lo": 0.30, "hi": 0.80, "caida": False}

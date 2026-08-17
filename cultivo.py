@@ -24,6 +24,10 @@ def spec_de(cultivo: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
             "fecha_siembra": cultivo.get("fecha_siembra"),
             "marco_calle": cultivo.get("marco_calle"),
             "marco_pie": cultivo.get("marco_pie"),
+            # diametro medio de copa (lenosos, metros). Opcional: sin el, la
+            # fraccion de copa se estima del marco. Con el, se sabe. Los registros
+            # antiguos no lo traen y se comportan igual que siempre.
+            "diametro_copa": cultivo.get("diametro_copa"),
             # regimen hidrico (lenosos). Los registros antiguos no lo traen y
             # `regimen_valido` los deja en SECANO, que es el supuesto que NO avisa
             # de falta de agua donde el deficit es normal.

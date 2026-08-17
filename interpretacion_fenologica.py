@@ -285,7 +285,8 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                                         marco_pie=spec.get("marco_pie"),
                                         regimen=spec.get("regimen"),
                                         p10_ndvi=act.get("ndvi_p10"),
-                                        p10_msavi=act.get("msavi_p10"))
+                                        p10_msavi=act.get("msavi_p10"),
+                                        diametro_copa=spec.get("diametro_copa"))
             fase = fase_esp["fase"]
             lo, hi, caida_ok = fase_esp["lo"], fase_esp["hi"], fase_esp["caida"]
         except Exception:

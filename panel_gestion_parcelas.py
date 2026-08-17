@@ -613,6 +613,19 @@ def tooltip_pasada(reg):
     return "\n".join(lineas)
 
 
+def _copa_de(entry):
+    """Diametro de copa tecleado, en metros, o None si esta vacio o no vale.
+
+    Es OPCIONAL a proposito: sin el, la fraccion de copa se estima del marco y todo
+    se comporta como antes de que existiera el campo. Un 0 o un negativo cuentan
+    como "no lo se", no como "copa de cero metros"."""
+    try:
+        v = float((entry.get() or "").strip().replace(",", "."))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return v if v > 0 else None
+
+
 def _colores_estado(clave):
     return {"OK": (TEMA["ok_fg"], TEMA["ok_bg"]),
             "Vigilar": (TEMA["warn_fg"], TEMA["warn_bg"]),
@@ -1176,6 +1189,16 @@ class VentanaAltaParcela(tk.Toplevel):
         tk.Label(self.marco_wrap, text="x pie", bg=TEMA["surface"], fg=TEMA["text_muted"],
                  font=FUENTES["small"]).pack(side="left")
         self.e_pie.pack(side="left", padx=(4, 0))
+        # DIAMETRO DE COPA: opcional, pero es el dato que de verdad fija cuanto
+        # suelo tapa el arbol, y de ahi salen los umbrales en escala de parcela.
+        # Sin el se estima del marco, que no distingue un olivar viejo de uno joven
+        # plantado igual. Vacio = como hasta ahora.
+        tk.Label(self.marco_wrap, text="  copa", bg=TEMA["surface"], fg=TEMA["text_muted"],
+                 font=FUENTES["small"]).pack(side="left")
+        self.e_copa = ttk.Entry(self.marco_wrap, width=5)
+        self.e_copa.pack(side="left", padx=(4, 0))
+        tk.Label(self.marco_wrap, text="m", bg=TEMA["surface"], fg=TEMA["text_muted"],
+                 font=FUENTES["small"]).pack(side="left", padx=(2, 0))
         # etiqueta que muestra el tipo deducido del marco
         # REGIMEN HIDRICO: en lenosos pesa mas que la especie. Un olivar de secano
         # en julio esta en deficit por diseno; el mismo dato en un seto regado
@@ -1189,6 +1212,7 @@ class VentanaAltaParcela(tk.Toplevel):
                                       fg=TEMA["ok_fg"], font=FUENTES["small"])
         self.e_calle.bind("<KeyRelease>", lambda e: self._calc_marco())
         self.e_pie.bind("<KeyRelease>", lambda e: self._calc_marco())
+        self.e_copa.bind("<KeyRelease>", lambda e: self._calc_marco())
 
         box = tarjeta(form)
         box.pack(fill="x", padx=16, pady=12)
@@ -1283,6 +1307,8 @@ class VentanaAltaParcela(tk.Toplevel):
                     self.e_calle.insert(0, str(cult["marco_calle"]))
                 if cult.get("marco_pie") is not None:
                     self.e_pie.insert(0, str(cult["marco_pie"]))
+                if cult.get("diametro_copa"):
+                    self.e_copa.insert(0, str(cult["diametro_copa"]))
                 # regimen guardado; los cultivos anteriores a este campo son SECANO,
                 # que es el supuesto que no avisa donde el deficit es normal
                 self.cb_regimen.set("Regadio" if cult.get("regimen") == "REGADIO" else "Secano")
@@ -1338,13 +1364,16 @@ class VentanaAltaParcela(tk.Toplevel):
             self._calc_marco()
 
     def _calc_marco(self):
+        """Al teclear el marco (o la copa), enseña lo que implica.
+
+        El texto lo redacta `fenologia_especies.texto_marco`, que es donde vive el
+        calculo: densidad, tipo de plantacion y que fraccion de suelo tapa la copa,
+        que es la que traduce los umbrales a escala de parcela."""
         try:
             c = float(self.e_calle.get().replace(",", "."))
             p = float(self.e_pie.get().replace(",", "."))
-            dens = FEN.densidad_arboles(c, p)
-            esp = self.cb_sub.get() or "OLIVO"
-            tipo, _ = FEN.tipo_plantacion(esp, dens)
-            self.lbl_tipo_calc.config(text=f"= {dens} arboles/ha  ->  {tipo}")
+            self.lbl_tipo_calc.config(text=FEN.texto_marco(
+                self.cb_sub.get() or "OLIVO", c, p, _copa_de(self.e_copa)))
         except Exception:
             self.lbl_tipo_calc.config(text="")
 
@@ -1420,6 +1449,8 @@ class VentanaAltaParcela(tk.Toplevel):
                 spec["marco_pie"] = float(self.e_pie.get().replace(",", "."))
             except ValueError:
                 return messagebox.showwarning("Marco", "Indica el marco de plantacion (calle y pie en metros).", parent=self)
+            # opcional: sin diametro de copa se estima del marco, como siempre
+            spec["diametro_copa"] = _copa_de(self.e_copa)
             spec["regimen"] = "REGADIO" if self.cb_regimen.get().startswith("Rega") else "SECANO"
 
         # los codigos SIGPAC tecleados se guardan con la parcela (provincia y
@@ -1536,6 +1567,13 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.e_calle.pack(side="left")
         tk.Label(self.marco_wrap, text="x", bg=TEMA["surface"], fg=TEMA["text_muted"]).pack(side="left", padx=4)
         self.e_pie.pack(side="left")
+        # diametro de copa (opcional): ver el campo equivalente en VentanaAltaParcela
+        tk.Label(self.marco_wrap, text="  copa", bg=TEMA["surface"],
+                 fg=TEMA["text_muted"], font=FUENTES["small"]).pack(side="left")
+        self.e_copa = ttk.Entry(self.marco_wrap, width=5)
+        self.e_copa.pack(side="left", padx=(4, 0))
+        tk.Label(self.marco_wrap, text="m", bg=TEMA["surface"], fg=TEMA["text_muted"],
+                 font=FUENTES["small"]).pack(side="left", padx=(2, 0))
         self.lbl_regimen = tk.Label(self.spec_wrap, text="Regimen hidrico",
                                     bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"])
         self.cb_regimen = ttk.Combobox(self.spec_wrap, state="readonly", width=14,
@@ -1545,6 +1583,7 @@ class DialogoRelevoCampana(tk.Toplevel):
                                       fg=TEMA["ok_fg"], font=FUENTES["small"])
         self.e_calle.bind("<KeyRelease>", lambda e: self._calc_marco())
         self.e_pie.bind("<KeyRelease>", lambda e: self._calc_marco())
+        self.e_copa.bind("<KeyRelease>", lambda e: self._calc_marco())
 
         tk.Label(self.card, text="Si la parcela no se va a sembrar, elige BARBECHO (estado N.A.).",
                  bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(
@@ -1577,12 +1616,16 @@ class DialogoRelevoCampana(tk.Toplevel):
             self._calc_marco()
 
     def _calc_marco(self):
+        """Al teclear el marco (o la copa), enseña lo que implica.
+
+        El texto lo redacta `fenologia_especies.texto_marco`, que es donde vive el
+        calculo: densidad, tipo de plantacion y que fraccion de suelo tapa la copa,
+        que es la que traduce los umbrales a escala de parcela."""
         try:
             c = float(self.e_calle.get().replace(",", "."))
             p = float(self.e_pie.get().replace(",", "."))
-            dens = FEN.densidad_arboles(c, p)
-            tipo, _ = FEN.tipo_plantacion(self.cb_sub.get() or "OLIVO", dens)
-            self.lbl_tipo_calc.config(text=f"= {dens} arboles/ha  ->  {tipo}")
+            self.lbl_tipo_calc.config(text=FEN.texto_marco(
+                self.cb_sub.get() or "OLIVO", c, p, _copa_de(self.e_copa)))
         except Exception:
             self.lbl_tipo_calc.config(text="")
 
@@ -1607,6 +1650,9 @@ class DialogoRelevoCampana(tk.Toplevel):
             if prev.get("marco_calle"):
                 self.e_calle.delete(0, tk.END); self.e_calle.insert(0, str(prev["marco_calle"]))
                 self.e_pie.delete(0, tk.END); self.e_pie.insert(0, str(prev["marco_pie"]))
+                self.e_copa.delete(0, tk.END)
+                if prev.get("diametro_copa"):
+                    self.e_copa.insert(0, str(prev["diametro_copa"]))
                 self._calc_marco()
 
     def _siguiente(self):
@@ -1632,6 +1678,8 @@ class DialogoRelevoCampana(tk.Toplevel):
                 spec["marco_pie"] = float(self.e_pie.get().replace(",", "."))
             except ValueError:
                 return messagebox.showwarning("Marco", "Indica el marco (calle y pie en metros).", parent=self)
+            # opcional: sin diametro de copa se estima del marco, como siempre
+            spec["diametro_copa"] = _copa_de(self.e_copa)
             spec["regimen"] = "REGADIO" if self.cb_regimen.get().startswith("Rega") else "SECANO"
         self.panel.asignar_cultivo(self.pendientes[self.idx], tipo, spec)
         self.idx += 1
