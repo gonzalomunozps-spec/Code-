@@ -86,7 +86,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 503 pruebas sin pantalla ni red. |
+| `pruebas.py` | 527 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -158,6 +158,10 @@ todas las parcelas.
    para separar líneas. `separacion_copa_cubierta` es la **única** fuente del
    veredicto copa/cubierta: antes había dos heurísticas que discrepaban en el
    21 % de los casos, y la cabecera podía contradecir al diagnóstico.
+   Los percentiles se leen con el nombre que usa la base (`ndvi_p90`, `msavi_p90`),
+   **no** con el que usa `estadisticas_pasada` para la tabla (`p90`). Se leían con
+   el segundo y por eso el camino del p90 estuvo muerto: la confianza salía
+   siempre «baja» y la copa se juzgaba con la media, justo lo que se quería evitar.
 10. **El régimen hídrico manda sobre la especie en leñosos.** Un olivar de secano
    en julio está en déficit por diseño. Donde el déficit es normal o buscado
    (secano en verano, viña en envero) el NDMI **no se juzga**: `ndmi_min = None`.
@@ -201,6 +205,30 @@ todas las parcelas.
    lo descargable y lo guardado, y marca cada campaña con lo que se puede hacer
    con ella (`sincronizable`, `tiene_datos`, `solo_archivo`, `parcial`). Es lo
    único que queda de esos años; esconderlas sería perderlas.
+13. **En leñosos, los umbrales de la tabla son de COPA; lo que mide el satélite es
+   la PARCELA. Nunca se comparan sin traducir.** Un olivar tradicional a 12×12
+   mide NDVI 0,17 y MSAVI 0,11 con el árbol perfecto, porque cuatro quintas partes
+   del píxel de 10 m son calle; el rango de `LENOSO_ESPECIES` («un olivo en julio
+   está entre 0,40 y 0,78») y los `msavi_min` de `UMBRALES_LENOSO` describen el
+   **dosel**. Comparándolos a pelo saltaba «Revisar» en tradicional estuviera el
+   árbol como estuviera —y lo que subía ese 0,11 hacia 0,30 no era que el árbol
+   mejorase, era que hubiera hierba en la calle: el umbral medía la cubierta.
+   La traducción es la **mezcla del píxel**, no un porcentaje:
+   `fc · umbral_copa + (1 − fc) · suelo` (`fenologia_especies.umbral_en_escala_parcela`),
+   con `fc` = fracción de suelo que tapa la copa, derivada de la geometría del
+   marco y del diámetro de copa. Antes la densidad entraba como un factor
+   0,82 / 1,0 / 1,12 —un ±15 % sobre una magnitud que cambia por más del doble
+   entre un tradicional y un seto, y de la forma equivocada: lo que cambia con la
+   densidad no es el vigor de la copa, es **cuánto píxel es copa**—. Ese factor
+   sobrevive solo en el `lai_min`.
+   Se descuenta además `margen_mezcla(fc) = (1 − fc) · 0,03`: no saber cómo es el
+   suelo pesa entero en la parte del píxel que no es copa, así que el margen es
+   mayor cuanto menos copa hay.
+   Y **una sola escala en el juicio**: el p90 no se usa como si fuera copa pura,
+   porque a 10 m de píxel ni un marco de 12 m da un píxel limpio de copa (es el
+   «límite honesto» de `contraste_indices`). Sirve para el reparto copa/cubierta y
+   para contarlo. Sin marco no hay traducción posible, y entonces el aviso no pasa
+   de «Vigilar».
 9. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
    superficie cosechada y el origen del dato se anotan a mano en un evento
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
@@ -247,8 +275,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 503, sin `informe_anual` 492,
-sin `herbicida_contexto` 501, sin `calibracion_umbrales` 481 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 527, sin `informe_anual` 516,
+sin `herbicida_contexto` 525, sin `calibracion_umbrales` 505 — los cuatro en verde.
 
 ---
 
@@ -256,7 +284,7 @@ sin `herbicida_contexto` 501, sin `calibracion_umbrales` 481 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 503 pruebas, sin pantalla ni red
+python pruebas.py          # 527 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
