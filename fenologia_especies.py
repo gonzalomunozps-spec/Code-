@@ -21,6 +21,7 @@ Modelo fenologico por ESPECIE, mas fino que el calendario por meses:
 Todas las funciones son puras y no dependen de Tkinter ni de GEE.
 """
 
+import math
 from datetime import datetime
 
 
@@ -426,22 +427,117 @@ def regimen_valido(regimen):
 
 
 def umbrales_lenoso(especie, fase, regimen, factor=1.0):
-    """Umbrales de esa fase y regimen, con la densidad del marco ya aplicada.
+    """Umbrales de esa fase y regimen. Son valores DE COPA, no de parcela.
 
-    El `factor` viene del marco de plantacion (mismo que escala el techo de NDVI):
-    un seto superintensivo cubre mas suelo, asi que su MSAVI de referencia es mas
-    alto que el de un olivar tradicional a 100 arboles/ha."""
+    El `msavi_min` de la tabla es el vigor minimo de la COPA: un dosel de olivo
+    sano da MSAVI ~0.43, y por debajo de 0.30 en cuajado hay algo que mirar. Lo que
+    mide el satelite en un olivar tradicional NO es eso: es la media de un pixel
+    que es copa en un 20 % y suelo en el 80 % restante. Convertir de una escala a
+    la otra es trabajo de `umbral_en_escala_parcela`, con la fraccion de copa.
+
+    El `factor` de densidad ya NO se aplica al msavi_min: era un +-15 % sobre una
+    magnitud que cambia por un factor de 2 o 3 entre un tradicional y un seto, y
+    ademas de la forma equivocada (lo que cambia con la densidad no es el vigor de
+    la copa, es cuanto pixel es copa). Se sigue aplicando al `lai_min`, que es una
+    magnitud de dosel, y al techo de NDVI del mes."""
     base = dict(DEFECTO_UMBRALES)
     tabla = UMBRALES_LENOSO.get(especie, {}).get(fase, {})
     propios = tabla.get(regimen_valido(regimen))
     if propios:
         base.update(propios)
-    if base.get("msavi_min") is not None:
-        base["msavi_min"] = round(base["msavi_min"] * factor, 3)
     if base.get("lai_min") is not None:
         base["lai_min"] = round(base["lai_min"] * factor, 2)
     base["regimen"] = regimen_valido(regimen)
     return base
+
+
+# =====================================================================
+# FRACCION DE COPA: de un umbral de COPA a un umbral de PARCELA
+# =====================================================================
+# Un pixel de Sentinel-2 son 10 m de lado. En un olivar tradicional a 10x10 ese
+# pixel contiene UN arbol y el resto es calle: por mucho que la copa este perfecta,
+# la media de la parcela no puede acercarse al MSAVI de una copa. Con reflectancias
+# de bibliografia (copa NIR .32 / RED .06, suelo seco NIR .28 / RED .24) la media
+# de la parcela sale asi:
+#
+#   tradicional 10x10 (fc 0.20)   MSAVI 0.11        umbral de copa 0.30
+#   intensivo 6x4     (fc 0.30)   MSAVI 0.15
+#   seto 4x1.5        (fc 0.40)   MSAVI 0.18
+#
+# Comparar 0.11 contra 0.30 hace saltar el aviso SIEMPRE en tradicional, este el
+# arbol como este. Y lo que subiria ese 0.11 hacia 0.30 no es que el arbol mejore:
+# es que haya hierba en la calle. Es decir, el umbral estaba midiendo la cubierta.
+#
+# La conversion correcta es de mezcla, no un porcentaje:
+#     umbral_parcela = fc * umbral_copa + (1 - fc) * MSAVI_SUELO
+#
+# FRACCION DE COPA. Si la ficha trae el diametro de copa, se usa. Si no, se estima
+# como una proporcion del marco, distinta por tipo de plantacion. Las proporciones
+# salen de cuadrar los marcos tipicos con las coberturas de suelo publicadas
+# (tradicional 15-25 %, intensivo 25-35 %, superintensivo 35-45 %):
+#     tradicional 10x10 -> copa 5.0 m sobre marco 10 -> 0.50
+#     intensivo   6x4   -> copa 3.0 m sobre marco  4 -> 0.76
+#     seto        4x1.5 -> copa 1.75 m sobre marco 1.5 -> 1.17 (la fila se cierra)
+# Sobre el marco MENOR de los dos, que es el que limita el crecimiento de la copa.
+MSAVI_SUELO = 0.08          # suelo desnudo seco; el rango real es 0.05-0.12
+NDVI_SUELO = 0.10           # el mismo suelo, en NDVI (0.08-0.14 segun humedad)
+FC_MAXIMA = 0.85            # ni el dosel mas cerrado tapa el 100 % del suelo
+PROPORCION_COPA = {"TRADICIONAL": 0.50, "INTENSIVO": 0.76, "SUPERINTENSIVO": 1.17}
+
+
+def fraccion_copa(especie, marco_calle, marco_pie, diametro_copa=None):
+    """Fraccion del suelo que tapa la copa vista desde arriba (0-1), o None.
+
+    None significa "no se sabe el marco": quien llama debe seguir juzgando en
+    escala de copa, sin convertir, que es el comportamiento de siempre."""
+    dens = densidad_arboles(marco_calle, marco_pie)
+    if not dens:
+        return None
+    try:
+        d = float(diametro_copa) if diametro_copa else 0.0
+    except (TypeError, ValueError):
+        d = 0.0
+    if d <= 0:
+        sub = subtipo_canonico(especie, dens) or "TRADICIONAL"
+        d = PROPORCION_COPA.get(sub, 0.50) * min(float(marco_calle), float(marco_pie))
+    area_copa = math.pi * (d / 2.0) ** 2
+    return round(min(FC_MAXIMA, dens * area_copa / 10000.0), 3)
+
+
+def umbral_en_escala_parcela(umbral_copa, fc, suelo=MSAVI_SUELO):
+    """Pasa un umbral de COPA a la escala de la MEDIA de la parcela.
+
+    Es la mezcla de un pixel: una parte de copa y el resto de suelo. Sin `fc` no
+    hay conversion posible y se devuelve el umbral tal cual."""
+    if umbral_copa is None:
+        return None
+    if fc is None:
+        return umbral_copa
+    return round(fc * umbral_copa + (1.0 - fc) * suelo, 3)
+
+
+# El suelo no es una constante: un calizo seco y un suelo humedo o con costra
+# biologica se llevan facilmente 0.03 de indice entre ellos, y eso entra ENTERO en
+# la parte del pixel que no es copa. En un olivar tradicional eso son 4/5 partes
+# del pixel, asi que el margen de error del umbral convertido es mayor cuanto
+# menos copa hay. Se resta ese margen antes de avisar: por debajo del umbral pero
+# dentro de lo que el desconocimiento del suelo explica, no hay nada que decir.
+INCERTIDUMBRE_SUELO = 0.03
+
+
+def margen_mezcla(fc):
+    """Cuanto puede errar el umbral convertido por no saber como es el suelo."""
+    if fc is None:
+        return 0.0
+    return round((1.0 - fc) * INCERTIDUMBRE_SUELO, 3)
+
+
+def _umbral_parcela_con_margen(umbral_copa, fc):
+    """Umbral de parcela ya descontado el margen de la mezcla. Nunca negativo."""
+    u = umbral_en_escala_parcela(umbral_copa, fc)
+    if u is None or fc is None:
+        return u
+    return round(max(0.0, u - margen_mezcla(fc)), 3)
 
 
 def densidad_arboles(marco_calle, marco_pie):
@@ -527,8 +623,16 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
     lo, hi, caida = info["mes"][mes]
     dens = densidad_arboles(marco_calle, marco_pie)
     nombre_tipo, factor = tipo_plantacion(especie, dens)
-    lo2 = round(lo * (0.92 + 0.08 * factor), 2)
-    hi2 = round(min(0.92, hi * factor), 2)
+    fc = fraccion_copa(especie, marco_calle, marco_pie)
+    # EL RANGO DE NDVI TAMBIEN ES DE COPA, no de parcela. `LENOSO_ESPECIES[...]["mes"]`
+    # dice "un olivo en julio esta entre 0.40 y 0.78", y eso es el DOSEL. Un olivar
+    # tradicional a 12x12 mide 0.17 de media aunque el arbol este perfecto, porque
+    # cuatro quintas partes del pixel son calle. Ese era el aviso falso: el rango se
+    # escalaba por el factor de densidad (un +-15 %) cuando la diferencia real entre
+    # un tradicional y un seto es de mas del doble. Se convierte con la misma mezcla
+    # que el MSAVI, y con el mismo criterio: si no hay marco, no se convierte nada.
+    lo2 = round(umbral_en_escala_parcela(lo, fc, NDVI_SUELO), 2)
+    hi2 = round(min(0.92, umbral_en_escala_parcela(hi, fc, NDVI_SUELO)), 2)
     caduco = info["hoja"] == "caducifolio"
     brota_tarde = bool(info.get("brota_tarde"))
     invierno_sin_hoja = caduco and (mes == 12 or mes <= 2 or (brota_tarde and mes == 3))
@@ -542,6 +646,8 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
                 brota_tarde=brota_tarde, invierno_sin_hoja=invierno_sin_hoja,
                 densidad=dens, tipo=nombre_tipo, factor=factor,
                 marco_calle=marco_calle, marco_pie=marco_pie,
+                fraccion_copa=fc,
+                msavi_min_parcela=_umbral_parcela_con_margen(umb.get("msavi_min"), fc),
                 ventana_cubierta=mes in VENTANA_CUBIERTA)
 
 

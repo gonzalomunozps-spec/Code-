@@ -418,17 +418,35 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     # percentiles y lineas resolubles se usa el p90 trasladado, que es copa casi
     # pura. El umbral viene de (especie, fase, regimen) y lleva ya el factor del
     # marco: un seto cubre mas suelo que un olivar a 100 arboles/ha.
+    # UNA SOLA ESCALA. El msavi_min de la tabla es un umbral DE COPA: un dosel de
+    # olivo sano da MSAVI ~0.43. Lo que mide el satelite es otra cosa: la media de
+    # un pixel que en un olivar tradicional es copa en un 20 % y calle en el 80 %
+    # restante, y que sale 0.11 con el arbol perfecto. Comparar lo uno con lo otro
+    # hacia saltar el aviso SIEMPRE en tradicional.
+    #
+    # Se compara siempre en escala de PARCELA: el umbral se traduce con la
+    # fraccion de copa (ver fenologia_especies.umbral_en_escala_parcela). El p90
+    # no se usa como si fuera copa pura, porque no lo es: a 10 m de pixel, ni
+    # siquiera un marco de 12 m da un pixel limpio de copa -lo dice el "limite
+    # honesto" de contraste_indices-. El p90 sigue sirviendo para el reparto
+    # copa/cubierta y para contarlo, que es para lo que vale.
     msavi_min = umbrales.get("msavi_min")
     if (tipo == "LENOSO" and msavi_min is not None and separacion
             and not fase_esp.get("invierno_sin_hoja")):
-        copa_val = (separacion["copa_msavi"] if separacion["confianza"] == "alta"
-                    else act.get("msavi"))
-        if copa_val is not None and copa_val < msavi_min:
-            de_donde = ("p90 de la parcela" if separacion["confianza"] == "alta"
-                        else "media de la parcela")
+        copa_val = act.get("msavi")
+        umbral_val = fase_esp.get("msavi_min_parcela", msavi_min)
+        fc = fase_esp.get("fraccion_copa")
+        de_donde = ("media de la parcela" if fc is None else
+                    f"media de la parcela; umbral de copa {msavi_min:.2f} traido a "
+                    f"una copa que tapa el {fc * 100:.0f} % del suelo")
+        if copa_val is not None and umbral_val is not None and copa_val < umbral_val:
+            msavi_min = umbral_val
+            # Sin marco no hay conversion, asi que se esta comparando una mezcla
+            # contra un umbral de copa: eso NO puede llegar a "Revisar" por si
+            # solo. Con marco si, porque las dos cosas estan en la misma escala.
             if clave == "OK":
                 clave, estado = "Vigilar", "Vigilar"
-            elif clave == "Vigilar":
+            elif clave == "Vigilar" and fc is not None:
                 clave, estado = "Revisar", "Revisar"
             motivo += (f" Vigor de copa por debajo de lo esperado: MSAVI {copa_val:.3f} "
                        f"({de_donde}) frente a {msavi_min:.2f} en {fase} de "

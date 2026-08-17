@@ -774,11 +774,94 @@ def pruebas_lenosos():
           lambda: FEN.fase_lenoso("ALMENDRO", "2026-01-15", 6.0, 5.0, "REGADIO"),
           lambda d: d["msavi_min"] is None and d["ndmi_min"] is None and d["sin_hoja"] is True)
 
-    # --- la densidad del marco escala el umbral de copa
-    check("lenoso: un seto exige mas MSAVI que un olivar tradicional",
-          lambda: (FEN.fase_lenoso("OLIVO", "2026-07-15", 12.0, 12.0, "REGADIO")["msavi_min"],
-                   FEN.fase_lenoso("OLIVO", "2026-07-15", 1.5, 1.2, "REGADIO")["msavi_min"]),
-          lambda r: r[0] < r[1])
+    # --- la densidad entra por la FRACCION DE COPA, no por un factor a ojo
+    # Antes esta prueba fijaba que el marco escalaba `msavi_min` por 0.82/1.12: un
+    # +-15 % sobre una magnitud que cambia por un factor de 2 o 3 entre un
+    # tradicional y un seto, y ademas de la forma equivocada (lo que cambia con la
+    # densidad no es el vigor de la copa, es cuanto pixel ES copa). El umbral de
+    # copa es ahora el mismo para los dos -es el arbol, no la plantacion- y lo que
+    # cambia es su traduccion a la escala de la media de la parcela.
+    _trad = FEN.fase_lenoso("OLIVO", "2026-07-15", 12.0, 12.0, "REGADIO")
+    _seto = FEN.fase_lenoso("OLIVO", "2026-07-15", 1.5, 1.2, "REGADIO")
+    check("lenoso: el umbral DE COPA no depende del marco (es el arbol, no el marco)",
+          lambda: (_trad["msavi_min"], _seto["msavi_min"]),
+          lambda r: r[0] == r[1] == 0.38)
+    check("lenoso: un seto tapa mucho mas suelo que un olivar tradicional",
+          lambda: (_trad["fraccion_copa"], _seto["fraccion_copa"]),
+          lambda r: 0.15 < r[0] < 0.25 and r[1] > 0.7)
+    check("lenoso: y por eso a un seto SI se le exige mas MSAVI de parcela",
+          lambda: (_trad["msavi_min_parcela"], _seto["msavi_min_parcela"]),
+          lambda r: r[0] < r[1] and r[1] > 2 * r[0])
+    check("lenoso: el umbral de parcela de un tradicional queda donde ese olivar mide",
+          lambda: _trad["msavi_min_parcela"],
+          lambda v: 0.10 < v < 0.20)
+    check("lenoso: sin marco no hay conversion posible y se deja el umbral de copa",
+          lambda: FEN.fase_lenoso("OLIVO", "2026-07-15", None, None, "REGADIO"),
+          lambda d: d["fraccion_copa"] is None and d["msavi_min_parcela"] == d["msavi_min"])
+    check("lenoso: la fraccion de copa nunca llega al 100 % del suelo",
+          lambda: FEN.fraccion_copa("OLIVO", 1.0, 1.0), lambda v: v == FEN.FC_MAXIMA)
+    check("lenoso: con diametro de copa medido se usa ese, no la estimacion",
+          lambda: (FEN.fraccion_copa("OLIVO", 10.0, 10.0),
+                   FEN.fraccion_copa("OLIVO", 10.0, 10.0, diametro_copa=7.0)),
+          lambda r: r[1] > r[0])
+    check("lenoso: el umbral de parcela es una mezcla, entre el suelo y la copa",
+          lambda: FEN.umbral_en_escala_parcela(0.38, 0.20),
+          lambda v: v == round(0.20 * 0.38 + 0.80 * FEN.MSAVI_SUELO, 3))
+
+    # --- EL AVISO FALSO DEL TRADICIONAL, de punta a punta ---
+    # Un olivar tradicional a 12x12 mide NDVI 0.17 y MSAVI 0.11 con el arbol
+    # PERFECTO, porque cuatro quintas partes del pixel son calle. Los rangos de
+    # LENOSO_ESPECIES y los msavi_min de UMBRALES_LENOSO son valores de COPA. Antes
+    # se comparaban directamente y saltaba "Revisar" siempre. Estas pruebas fijan
+    # que la sana sale limpia y la floja sigue saltando, en los tres tipos de
+    # plantacion: es lo unico que demuestra que no se ha tapado el aviso entero.
+    def _grove(marco_calle, marco_pie, fc, copa, fondo=(0.28, 0.24)):
+        """Parcela sintetica a partir de FISICA: se mezclan las reflectancias de
+        copa y suelo segun la fraccion de copa, y de ahi salen los indices."""
+        def _msavi(N, R):
+            return round((2 * N + 1 - math.sqrt((2 * N + 1) ** 2 - 8 * (N - R))) / 2, 3)
+        def _ndvi(N, R):
+            return round((N - R) / (N + R), 3)
+        def _mez(f):
+            return (f * copa[0] + (1 - f) * fondo[0], f * copa[1] + (1 - f) * fondo[1])
+        def _pasada(fecha):
+            N, R = _mez(fc)
+            Np, Rp = _mez(min(0.85, fc * 2.1))       # el mejor decil: pixeles con arbol
+            evi = 2.5 * ((N - R) / (N + 6 * R - 7.5 * 0.05 + 1))
+            return {"fecha": fecha, "ndvi": _ndvi(N, R), "msavi": _msavi(N, R),
+                    "ndmi": 0.05, "lai": round(max(0.0, 3.618 * evi - 0.118), 2),
+                    "evi": round(evi, 3), "savi": round(1.5 * (N - R) / (N + R + 0.5), 3),
+                    "gndvi": round(_ndvi(N, R) * 0.9, 3),
+                    "ndvi_p10": _ndvi(*_mez(fc * 0.2)), "ndvi_p50": _ndvi(N, R),
+                    "ndvi_p90": _ndvi(Np, Rp), "msavi_p10": _msavi(*_mez(fc * 0.2)),
+                    "msavi_p50": _msavi(N, R), "msavi_p90": _msavi(Np, Rp),
+                    "n_pixeles": 800, "cobertura_valida": 0.96}
+        serie = [_pasada("2026-07-01"), _pasada("2026-07-15")]
+        d = evaluar_parcela("LENOSO", "", serie,
+                            spec={"especie": "OLIVO", "marco_calle": marco_calle,
+                                  "marco_pie": marco_pie, "regimen": "SECANO"})
+        return d["estado"], serie[-1]
+    COPA_SANA, COPA_FLOJA = (0.32, 0.06), (0.26, 0.13)
+    for etiq, mc, mp, fc in (("tradicional 12x12", 12.0, 12.0, 0.20),
+                             ("tradicional 10x10", 10.0, 10.0, 0.20),
+                             ("intensivo 6x4", 6.0, 4.0, 0.30),
+                             ("seto 4x1.5", 4.0, 1.5, 0.40)):
+        check(f"lenoso {etiq}: con la copa SANA no salta el aviso",
+              lambda a=mc, b=mp, f=fc: _grove(a, b, f, COPA_SANA),
+              lambda r: r[0] == "OK")
+        check(f"lenoso {etiq}: con la copa FLOJA sigue saltando",
+              lambda a=mc, b=mp, f=fc: _grove(a, b, f, COPA_FLOJA),
+              lambda r: r[0] == "Revisar")
+    check("lenoso tradicional: un suelo mas humedo tampoco lo convierte en aviso",
+          lambda: _grove(12.0, 12.0, 0.20, COPA_SANA, fondo=(0.20, 0.15)),
+          lambda r: r[0] == "OK")
+    check("lenoso tradicional: con cubierta verde en la calle tampoco",
+          lambda: _grove(12.0, 12.0, 0.20, COPA_SANA, fondo=(0.35, 0.10)),
+          lambda r: r[0] == "OK")
+    # y que la parcela sintetica es la que se dice: MSAVI de 0.11 con copa perfecta
+    check("lenoso tradicional: un olivar sano mide 0.11 de MSAVI medio, no 0.43",
+          lambda: _grove(12.0, 12.0, 0.20, COPA_SANA)[1],
+          lambda p: 0.10 < p["msavi"] < 0.13 and 0.15 < p["ndvi"] < 0.19)
 
     # --- separacion copa / cubierta
     def _sep(marco, con_percentiles, mes=3):
