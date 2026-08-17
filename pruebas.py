@@ -815,7 +815,7 @@ def pruebas_lenosos():
     # se comparaban directamente y saltaba "Revisar" siempre. Estas pruebas fijan
     # que la sana sale limpia y la floja sigue saltando, en los tres tipos de
     # plantacion: es lo unico que demuestra que no se ha tapado el aviso entero.
-    def _grove(marco_calle, marco_pie, fc, copa, fondo=(0.28, 0.24)):
+    def _grove(marco_calle, marco_pie, fc, copa, fondo=(0.28, 0.24), con_p10=True):
         """Parcela sintetica a partir de FISICA: se mezclan las reflectancias de
         copa y suelo segun la fraccion de copa, y de ahi salen los indices."""
         def _msavi(N, R):
@@ -827,15 +827,18 @@ def pruebas_lenosos():
         def _pasada(fecha):
             N, R = _mez(fc)
             Np, Rp = _mez(min(0.85, fc * 2.1))       # el mejor decil: pixeles con arbol
+            Nc, Rc = _mez(fc * 0.15)                 # el peor decil: la CALLE
             evi = 2.5 * ((N - R) / (N + 6 * R - 7.5 * 0.05 + 1))
-            return {"fecha": fecha, "ndvi": _ndvi(N, R), "msavi": _msavi(N, R),
-                    "ndmi": 0.05, "lai": round(max(0.0, 3.618 * evi - 0.118), 2),
-                    "evi": round(evi, 3), "savi": round(1.5 * (N - R) / (N + R + 0.5), 3),
-                    "gndvi": round(_ndvi(N, R) * 0.9, 3),
-                    "ndvi_p10": _ndvi(*_mez(fc * 0.2)), "ndvi_p50": _ndvi(N, R),
-                    "ndvi_p90": _ndvi(Np, Rp), "msavi_p10": _msavi(*_mez(fc * 0.2)),
-                    "msavi_p50": _msavi(N, R), "msavi_p90": _msavi(Np, Rp),
-                    "n_pixeles": 800, "cobertura_valida": 0.96}
+            p = {"fecha": fecha, "ndvi": _ndvi(N, R), "msavi": _msavi(N, R),
+                 "ndmi": 0.05, "lai": round(max(0.0, 3.618 * evi - 0.118), 2),
+                 "evi": round(evi, 3), "savi": round(1.5 * (N - R) / (N + R + 0.5), 3),
+                 "gndvi": round(_ndvi(N, R) * 0.9, 3),
+                 "n_pixeles": 800, "cobertura_valida": 0.96}
+            if con_p10:
+                p.update({"ndvi_p10": _ndvi(Nc, Rc), "ndvi_p50": _ndvi(N, R),
+                          "ndvi_p90": _ndvi(Np, Rp), "msavi_p10": _msavi(Nc, Rc),
+                          "msavi_p50": _msavi(N, R), "msavi_p90": _msavi(Np, Rp)})
+            return p
         serie = [_pasada("2026-07-01"), _pasada("2026-07-15")]
         d = evaluar_parcela("LENOSO", "", serie,
                             spec={"especie": "OLIVO", "marco_calle": marco_calle,
@@ -862,6 +865,63 @@ def pruebas_lenosos():
     check("lenoso tradicional: un olivar sano mide 0.11 de MSAVI medio, no 0.43",
           lambda: _grove(12.0, 12.0, 0.20, COPA_SANA)[1],
           lambda p: 0.10 < p["msavi"] < 0.13 and 0.15 < p["ndvi"] < 0.19)
+
+    # --- EL CASO DURO: COPA FLOJA DEBAJO DE UNA CUBIERTA VERDE ---
+    # Con hierba entre lineas el MSAVI medio sube por el fondo y una copa floja se
+    # esconde. Se sostiene porque el suelo de la mezcla se MIDE en la propia finca
+    # (el p10 es la calle) en vez de suponerse: al subir el fondo sube el umbral
+    # con el, y lo que acaba comparandose es la copa contra el umbral de copa.
+    HIERBA = (0.35, 0.10)
+    check("lenoso: bajo cubierta verde, una copa SANA no se convierte en aviso",
+          lambda: _grove(12.0, 12.0, 0.20, COPA_SANA, fondo=HIERBA),
+          lambda r: r[0] == "OK")
+    check("lenoso: bajo cubierta verde, una copa FLOJA NO se esconde",
+          lambda: _grove(12.0, 12.0, 0.20, COPA_FLOJA, fondo=HIERBA),
+          lambda r: r[0] == "Revisar")
+    check("lenoso: y lo mismo en seto, donde la cubierta pesa menos",
+          lambda: (_grove(4.0, 1.5, 0.40, COPA_SANA, fondo=HIERBA)[0],
+                   _grove(4.0, 1.5, 0.40, COPA_FLOJA, fondo=HIERBA)[0]),
+          lambda r: r == ("OK", "Revisar"))
+    check("lenoso: con cubierta verde el MSAVI medio de la floja SUPERA al de la "
+          "sana con suelo desnudo (por eso hacia falta medir el fondo)",
+          lambda: (_grove(12.0, 12.0, 0.20, COPA_FLOJA, fondo=HIERBA)[1]["msavi"],
+                   _grove(12.0, 12.0, 0.20, COPA_SANA)[1]["msavi"]),
+          lambda r: r[0] > r[1])
+    check("lenoso: sin percentiles se cae a la constante y sigue sin dar falso aviso",
+          lambda: _grove(12.0, 12.0, 0.20, COPA_SANA, con_p10=False),
+          lambda r: r[0] == "OK")
+
+    # --- el suelo de la mezcla: medido cuando se puede, supuesto cuando no ---
+    check("suelo: sin percentiles se usa la constante y se dice que no es medido",
+          lambda: FEN.suelo_de_la_parcela(None, FEN.MSAVI_SUELO),
+          lambda r: r == (FEN.MSAVI_SUELO, False))
+    check("suelo: con p10 se usa el de la parcela",
+          lambda: FEN.suelo_de_la_parcela(0.062, FEN.MSAVI_SUELO),
+          lambda r: r == (0.062, True))
+    check("suelo: una calle VERDE es fondo valido y sube el umbral por encima del de copa",
+          lambda: (FEN.suelo_de_la_parcela(0.37, FEN.MSAVI_SUELO, 0.30)[0],
+                   FEN.umbral_en_escala_parcela(0.30, 0.20, 0.37)),
+          lambda r: r[0] == 0.37 and r[1] > 0.30)
+    check("suelo: un p10 negativo (agua o sombra) no es suelo y se descarta",
+          lambda: FEN.suelo_de_la_parcela(-0.2, FEN.MSAVI_SUELO),
+          lambda r: r == (FEN.MSAVI_SUELO, False))
+    check("suelo: medirlo reduce el margen de error a la mitad",
+          lambda: (FEN.margen_mezcla(0.2, medido=False), FEN.margen_mezcla(0.2, medido=True)),
+          lambda r: r[0] > r[1] > 0)
+
+    # --- cubierta dominando: el liston tambien cambia de indice ---
+    # Se juzgaba el MSAVI contra el rango de NDVI de la fase. Son magnitudes
+    # distintas: un MSAVI de 0.11 frente a un "0.16-0.23" de NDVI daba "Revisar"
+    # por construccion.
+    def _rango_en_msavi():
+        f = FEN.fase_lenoso("OLIVO", "2026-07-15", 12.0, 12.0, "SECANO",
+                            p10_ndvi=0.45, p10_msavi=0.37)
+        return f["msavi_min_parcela"], f["msavi_max_parcela"], f["lo"]
+    check("cubierta: hay un rango de MSAVI en escala de parcela para poder juzgar",
+          _rango_en_msavi,
+          lambda r: r[0] is not None and r[1] is not None and r[1] > r[0])
+    check("cubierta: y ese rango NO es el de NDVI (son magnitudes distintas)",
+          _rango_en_msavi, lambda r: abs(r[0] - r[2]) > 0.01)
 
     # --- separacion copa / cubierta
     def _sep(marco, con_percentiles, mes=3):

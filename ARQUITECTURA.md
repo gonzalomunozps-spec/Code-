@@ -86,7 +86,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 527 pruebas sin pantalla ni red. |
+| `pruebas.py` | 539 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -221,9 +221,22 @@ todas las parcelas.
    entre un tradicional y un seto, y de la forma equivocada: lo que cambia con la
    densidad no es el vigor de la copa, es **cuánto píxel es copa**—. Ese factor
    sobrevive solo en el `lai_min`.
-   Se descuenta además `margen_mezcla(fc) = (1 − fc) · 0,03`: no saber cómo es el
-   suelo pesa entero en la parte del píxel que no es copa, así que el margen es
-   mayor cuanto menos copa hay.
+   **El suelo se mide, no se supone.** El decil peor de la pasada (`msavi_p10`,
+   `ndvi_p10`) es la calle: es el fondo de esa finca ese día, con su humedad y su
+   cubierta. Entra como término de suelo de la mezcla, y si la calle está verde el
+   umbral sube con ella — que es justo lo que debe pasar: con hierba entre líneas,
+   un mismo MSAVI medio es menos prueba de que la copa esté bien. La cuenta sale
+   sola: media y umbral suben los dos con el fondo, y lo que acaba comparándose es
+   la copa contra el umbral de copa, sea cual sea el fondo. Sin percentiles se cae
+   a las constantes (`MSAVI_SUELO`, `NDVI_SUELO`).
+   Se descuenta además `margen_mezcla(fc) = (1 − fc) · 0,03`, la mitad si el suelo
+   se ha medido: no saber cómo es el suelo pesa entero en la parte del píxel que
+   no es copa, así que el margen es mayor cuanta menos copa hay.
+   **Y si el juicio cambia de índice, cambia el listón.** Cuando la cubierta domina
+   se juzga con MSAVI en vez de NDVI; el rango pasa entonces a ser el de MSAVI en
+   escala de parcela (`msavi_min_parcela` / `msavi_max_parcela`). Antes se comparaba
+   el MSAVI contra el rango de NDVI de la fase: magnitudes distintas, «Revisar» por
+   construcción.
    Y **una sola escala en el juicio**: el p90 no se usa como si fuera copa pura,
    porque a 10 m de píxel ni un marco de 12 m da un píxel limpio de copa (es el
    «límite honesto» de `contraste_indices`). Sirve para el reparto copa/cubierta y
@@ -275,8 +288,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 527, sin `informe_anual` 516,
-sin `herbicida_contexto` 525, sin `calibracion_umbrales` 505 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 539, sin `informe_anual` 528,
+sin `herbicida_contexto` 537, sin `calibracion_umbrales` 517 — los cuatro en verde.
 
 ---
 
@@ -284,7 +297,7 @@ sin `herbicida_contexto` 525, sin `calibracion_umbrales` 505 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 527 pruebas, sin pantalla ni red
+python pruebas.py          # 539 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

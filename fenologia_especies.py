@@ -523,21 +523,56 @@ def umbral_en_escala_parcela(umbral_copa, fc, suelo=MSAVI_SUELO):
 # menos copa hay. Se resta ese margen antes de avisar: por debajo del umbral pero
 # dentro de lo que el desconocimiento del suelo explica, no hay nada que decir.
 INCERTIDUMBRE_SUELO = 0.03
+# ...pero si el suelo se MIDE en vez de suponerlo, ese error se reduce a la mitad:
+# lo que queda es el ruido del propio percentil, no el desconocimiento.
+INCERTIDUMBRE_SUELO_MEDIDO = 0.015
+# MSAVI de un dosel de olivo sano y cerrado. Solo se usa para poder decir el rango
+# ("0.10-0.19") cuando el juicio se hace en MSAVI; ningun estado depende de el.
+MSAVI_COPA_PLENA = 0.45
 
 
-def margen_mezcla(fc):
+def margen_mezcla(fc, medido=False):
     """Cuanto puede errar el umbral convertido por no saber como es el suelo."""
     if fc is None:
         return 0.0
-    return round((1.0 - fc) * INCERTIDUMBRE_SUELO, 3)
+    inc = INCERTIDUMBRE_SUELO_MEDIDO if medido else INCERTIDUMBRE_SUELO
+    return round((1.0 - fc) * inc, 3)
 
 
-def _umbral_parcela_con_margen(umbral_copa, fc):
+def suelo_de_la_parcela(p10, por_defecto, umbral_copa=None):
+    """El termino de suelo de la mezcla, MEDIDO en la propia parcela si se puede.
+
+    En un lenoso el decil peor de la parcela (`p10`) es la calle: es el suelo de
+    ESA finca en ESE dia, con su humedad, su costra y su cubierta, en vez de una
+    constante de bibliografia. Si la calle esta verde, el p10 sube y el umbral de
+    parcela sube con el, que es justo lo que debe pasar: con hierba entre lineas,
+    un mismo MSAVI medio es menos prueba de que la copa este bien.
+
+    Que el p10 salga MAS ALTO que el umbral de copa no es un error: es una calle
+    con hierba alta, y entonces el umbral de parcela debe subir por encima del de
+    copa. Es lo que hace que la cuenta salga bien sola: la media de la parcela y el
+    umbral suben los dos con el fondo, y lo que queda comparandose es la copa
+    contra el umbral de copa, sea cual sea el fondo. Solo se descarta un p10 que no
+    puede ser un fondo (negativo: agua o sombra) o que no es un numero.
+
+    Devuelve (valor, medido)."""
+    if p10 is None:
+        return por_defecto, False
+    try:
+        v = float(p10)
+    except (TypeError, ValueError):
+        return por_defecto, False
+    if v < 0.0:
+        return por_defecto, False
+    return round(v, 3), True
+
+
+def _umbral_parcela_con_margen(umbral_copa, fc, suelo=MSAVI_SUELO, medido=False):
     """Umbral de parcela ya descontado el margen de la mezcla. Nunca negativo."""
-    u = umbral_en_escala_parcela(umbral_copa, fc)
+    u = umbral_en_escala_parcela(umbral_copa, fc, suelo)
     if u is None or fc is None:
         return u
-    return round(max(0.0, u - margen_mezcla(fc)), 3)
+    return round(max(0.0, u - margen_mezcla(fc, medido)), 3)
 
 
 def densidad_arboles(marco_calle, marco_pie):
@@ -606,9 +641,14 @@ def _nombre_fase_lenoso(esp, mes):
     return "caida de hoja"
 
 
-def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=None):
+def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=None,
+                p10_ndvi=None, p10_msavi=None):
     """Devuelve dict con fase, rango de NDVI, densidad, tipo de plantacion y los
-    umbrales de MSAVI/NDMI/LAI de esa fase y regimen hidrico."""
+    umbrales de MSAVI/NDMI/LAI de esa fase y regimen hidrico.
+
+    `p10_ndvi` y `p10_msavi` son el decil peor de la pasada, o sea la CALLE. Si se
+    pasan, el termino de suelo de la conversion a escala de parcela se mide en la
+    propia finca en vez de suponerse (ver `suelo_de_la_parcela`)."""
     info = LENOSO_ESPECIES.get(especie)
     if not info:
         return dict(umbrales_de_fase(), fase="sin especie", lo=0.30, hi=0.80,
@@ -631,8 +671,9 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
     # escalaba por el factor de densidad (un +-15 %) cuando la diferencia real entre
     # un tradicional y un seto es de mas del doble. Se convierte con la misma mezcla
     # que el MSAVI, y con el mismo criterio: si no hay marco, no se convierte nada.
-    lo2 = round(umbral_en_escala_parcela(lo, fc, NDVI_SUELO), 2)
-    hi2 = round(min(0.92, umbral_en_escala_parcela(hi, fc, NDVI_SUELO)), 2)
+    suelo_ndvi, ndvi_medido = suelo_de_la_parcela(p10_ndvi, NDVI_SUELO, lo)
+    lo2 = round(umbral_en_escala_parcela(lo, fc, suelo_ndvi), 2)
+    hi2 = round(min(0.92, umbral_en_escala_parcela(hi, fc, suelo_ndvi)), 2)
     caduco = info["hoja"] == "caducifolio"
     brota_tarde = bool(info.get("brota_tarde"))
     invierno_sin_hoja = caduco and (mes == 12 or mes <= 2 or (brota_tarde and mes == 3))
@@ -642,12 +683,19 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
     if invierno_sin_hoja:
         # sin hoja no hay dosel que medir: ningun indice habla del arbol
         umb.update({"ndmi_min": None, "msavi_min": None, "lai_min": None, "sin_hoja": True})
+    suelo_msavi, msavi_medido = suelo_de_la_parcela(p10_msavi, MSAVI_SUELO,
+                                                    umb.get("msavi_min"))
     return dict(umb, fase=fase, lo=lo2, hi=hi2, caida=bool(caida), caduco=caduco,
                 brota_tarde=brota_tarde, invierno_sin_hoja=invierno_sin_hoja,
                 densidad=dens, tipo=nombre_tipo, factor=factor,
                 marco_calle=marco_calle, marco_pie=marco_pie,
                 fraccion_copa=fc,
-                msavi_min_parcela=_umbral_parcela_con_margen(umb.get("msavi_min"), fc),
+                suelo_ndvi=suelo_ndvi, suelo_msavi=suelo_msavi,
+                suelo_medido=bool(ndvi_medido or msavi_medido),
+                msavi_min_parcela=_umbral_parcela_con_margen(
+                    umb.get("msavi_min"), fc, suelo_msavi, msavi_medido),
+                msavi_max_parcela=umbral_en_escala_parcela(
+                    MSAVI_COPA_PLENA, fc, suelo_msavi),
                 ventana_cubierta=mes in VENTANA_CUBIERTA)
 
 
@@ -655,7 +703,8 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
 # ENTRADA UNIFICADA
 # =====================================================================
 def fase_por_especie(grupo, especie, fecha_iso, fecha_siembra=None,
-                     marco_calle=None, marco_pie=None, regimen=None):
+                     marco_calle=None, marco_pie=None, regimen=None,
+                     p10_ndvi=None, p10_msavi=None):
     """
     Punto de entrada unico. `grupo` in {EXTENSIVO, LENOSO, BARBECHO}.
     Devuelve un dict homogeneo con al menos: fase, lo, hi, caida.
@@ -669,7 +718,9 @@ def fase_por_especie(grupo, especie, fecha_iso, fecha_siembra=None,
         d["grupo"] = "EXTENSIVO"
         return d
     if grupo == "LENOSO":
-        d = fase_lenoso(especie, fecha_iso, marco_calle, marco_pie, regimen)
+        # los percentiles solo se usan aqui: en extensivos no hay calle que medir
+        d = fase_lenoso(especie, fecha_iso, marco_calle, marco_pie, regimen,
+                        p10_ndvi=p10_ndvi, p10_msavi=p10_msavi)
         d["grupo"] = "LENOSO"
         return d
     return {"fase": "desconocido", "lo": 0.30, "hi": 0.80, "caida": False}

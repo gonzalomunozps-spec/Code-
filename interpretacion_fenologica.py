@@ -276,11 +276,16 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     if spec and spec.get("especie") and not siega_verde:
         try:
             from fenologia_especies import fase_por_especie
+            # El decil peor de la pasada es la CALLE: en lenosos sirve para medir
+            # el suelo de esta finca en vez de suponerlo al convertir los umbrales
+            # de copa a escala de parcela. En extensivos se ignora.
             fase_esp = fase_por_especie(tipo, spec.get("especie"), fecha,
                                         fecha_siembra=spec.get("fecha_siembra"),
                                         marco_calle=spec.get("marco_calle"),
                                         marco_pie=spec.get("marco_pie"),
-                                        regimen=spec.get("regimen"))
+                                        regimen=spec.get("regimen"),
+                                        p10_ndvi=act.get("ndvi_p10"),
+                                        p10_msavi=act.get("msavi_p10"))
             fase = fase_esp["fase"]
             lo, hi, caida_ok = fase_esp["lo"], fase_esp["hi"], fase_esp["caida"]
         except Exception:
@@ -332,11 +337,21 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
             hay_cubierta = separacion["cubierta_domina"]
             # el vigor de copa se juzga con MSAVI, y con el p90 trasladado a MSAVI
             # si la parcela da para separar lineas
-            candidato = (separacion["copa_msavi"] if separacion["confianza"] == "alta"
-                         else act.get("msavi"))
-            if hay_cubierta and candidato is not None:
+            # Si la cubierta domina, el NDVI esta inflado por la hierba y deja de
+            # servir: se juzga con el MSAVI. Pero entonces HAY QUE CAMBIAR TAMBIEN
+            # EL LISTON. Se comparaba el MSAVI contra el rango de NDVI de la fase,
+            # que es otra magnitud: un MSAVI de 0.11 frente a un "0.16-0.23" de
+            # NDVI da "Revisar" por construccion. El rango pasa a ser el del MSAVI
+            # en la misma escala de parcela (ver fenologia_especies).
+            candidato = act.get("msavi")
+            # sin ficha de especie no hay conversion de escala posible, y sin ella
+            # no se puede juzgar en MSAVI: se sigue con el NDVI, como siempre
+            lo_msavi = (fase_esp or {}).get("msavi_min_parcela")
+            if hay_cubierta and candidato is not None and lo_msavi is not None:
                 ndvi_juicio = candidato
-                indice_juicio = "MSAVI de copa" if separacion["confianza"] == "alta" else "MSAVI"
+                indice_juicio = "MSAVI"
+                lo = lo_msavi
+                hi = (fase_esp or {}).get("msavi_max_parcela") or max(lo_msavi, candidato)
                 if prev and prev.get("msavi") is not None and act.get("msavi") is not None:
                     d_ndvi = act["msavi"] - prev["msavi"]
 
