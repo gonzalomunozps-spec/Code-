@@ -53,8 +53,6 @@ Son la base testeable. Ninguno importa a otro.
 | `geo.py` | Superficie de la parcela (fórmula del polígono). |
 | `rejilla.py` | Rejilla de NDVI píxel a píxel: formato compacto (1 byte/píxel + 1 bit de máscara), encaje en la retícula nativa de Sentinel-2 y reglas de comparabilidad entre fechas. |
 | `campanas.py` | Campaña agrícola (sep–ago): actual, rango, listado y qué campañas ofrecer por parcela. |
-| `vista_parcelas.py` | Qué sale en la **lista de parcelas** (filtrar, diagnosticar, ordenar) y las reglas de **guardado** de una parcela. Lo usan las dos interfaces. |
-| `vista_ficha.py` | Qué dice la **ficha** de una parcela: diagnóstico de la pasada elegida, encabezado, validación y tablas. Lo usan las dos interfaces. |
 | `cultivo.py` | Modelo de cultivo: `spec_de`, `clave_cultivo`. |
 | `sigpac.py` | Consulta de recintos SIGPAC y parseo GeoJSON. La petición HTTP se **inyecta**, por eso se prueba sin red. |
 | `herbicida_contexto.py` | Interpretación del herbicida con LAI constante. **Opcional.** |
@@ -85,16 +83,10 @@ Son la base testeable. Ninguno importa a otro.
 ### Capa 3 — Entrega
 | Módulo | Responsabilidad |
 |---|---|
-| `panel_gestion_parcelas.py` | Interfaz **Tkinter**, completa. Ver §5. |
-| `panel_qt.py` | Interfaz **Qt (PySide6)**, en curso: ventana, cabecera, barra y lista de parcelas. |
-| `panel_qt_ficha.py` | Ficha de parcela en Qt: histórico, interpretación, gráficas, estadística, mapa y cuaderno. |
-| `panel_qt_dialogos.py` | Qt: corregir un diagnóstico, validar índice a índice y cuaderno de campo. |
-| `panel_qt_mapa.py` | Qt: visor del mapa de índices y de radar (zoom y desplazamiento). |
-| `panel_qt_alta.py` | Qt: alta y edición de parcela (geometría por SIGPAC). |
-| `ui_tema.py` | Sistema de diseño de la interfaz Qt: paleta, tipografía, espaciado y hoja de estilo. |
+| `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 570 pruebas sin pantalla ni red. |
+| `pruebas.py` | 552 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -310,8 +302,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 570, sin `informe_anual` 559,
-sin `herbicida_contexto` 568, sin `calibracion_umbrales` 544 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 552, sin `informe_anual` 541,
+sin `herbicida_contexto` 550, sin `calibracion_umbrales` 526 — los cuatro en verde.
 
 ---
 
@@ -319,9 +311,8 @@ sin `herbicida_contexto` 568, sin `calibracion_umbrales` 544 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 570 pruebas, sin pantalla ni red
-python pruebas_interfaz.py # la interfaz Tk de verdad (xvfb-run -a ... si no hay pantalla)
-python pruebas_interfaz_qt.py  # la interfaz Qt (trae su propio modo sin pantalla)
+python pruebas.py          # 552 pruebas, sin pantalla ni red
+python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
 ```

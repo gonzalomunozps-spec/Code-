@@ -2756,116 +2756,13 @@ def _sin_escalar(refl, idx):
 
 
 # =====================================================================
-# 26. LA LISTA DE PARCELAS (pura, compartida por las dos interfaces)
-# =====================================================================
-# Esto vivia dentro del `_refrescar` de Tkinter. Al portar la interfaz a Qt habria
-# que haberlo copiado, y dos copias de la misma decision acaban divergiendo. Vive
-# en `vista_parcelas` y se prueba sin pantalla, que es lo que permite cambiar de
-# interfaz sin cambiar lo que la lista dice.
-def pruebas_vista_parcelas():
-    import vista_parcelas as VP
-    from interpretacion_fenologica import evaluar_parcela
-
-    fichas = {
-        "La_Vega": {"propietario": "Ana", "superficie_ha": 12.4,
-                    "cultivos_por_campana": {"2025-2026": {"tipo": "EXTENSIVO",
-                                                           "subtipo": "COSECHA_GRANO",
-                                                           "especie": "TRIGO",
-                                                           "fecha_siembra": "2025-11-01"}}},
-        "El_Olivar": {"propietario": "Luis", "superficie_ha": 5.0,
-                      "cultivos_por_campana": {"2025-2026": {"tipo": "LENOSO",
-                                                             "subtipo": "INTENSIVO",
-                                                             "especie": "OLIVO",
-                                                             "marco_calle": 6.0,
-                                                             "marco_pie": 4.0}}},
-        "Barbecho_Sur": {"propietario": "Ana", "superficie_ha": 30.0,
-                         "cultivos_por_campana": {"2025-2026": {"tipo": "BARBECHO"}}},
-        "Sin_Cultivo": {"propietario": "Marta", "superficie_ha": 1.0},
-    }
-    hist = {"La_Vega": [{"fecha": "2026-04-05", "ndvi": 0.72, "ndmi": 0.20, "lai": 3.3}],
-            "El_Olivar": [{"fecha": "2026-04-05", "ndvi": 0.30, "msavi": 0.12, "lai": 0.9}]}
-
-    def _filas(**kw):
-        return VP.filas(fichas, hist, "2025-2026", evaluar_parcela, **kw)
-
-    check("lista: hay una fila por parcela",
-          lambda: len(_filas()), lambda r: r == 4)
-    check("lista: el barbecho no recibe juicio de vigor",
-          lambda: [f for f in _filas() if f["id"] == "Barbecho_Sur"][0],
-          lambda f: f["estado"] == "N.A." and f["cultivo"] == "Barbecho" and not f["semaforo"])
-    check("lista: una parcela sin cultivo en esa campana lo dice, no falla",
-          lambda: [f for f in _filas() if f["id"] == "Sin_Cultivo"][0],
-          lambda f: f["estado"] == "Sin asignar" and not f["semaforo"])
-    check("lista: el cultivo se ensena con su nombre legible",
-          lambda: [f["cultivo"] for f in _filas(orden="nombre")],
-          lambda r: "Olivar intensivo" in r and "Extensivo (grano)" in r)
-    check("lista: la superficie va formateada y con su valor para ordenar",
-          lambda: [f for f in _filas() if f["id"] == "La_Vega"][0],
-          lambda f: f["superficie"] == "12.40 ha" and f["_sup"] == 12.4)
-    check("lista: el guion bajo del nombre no se ensena",
-          lambda: [f["nombre"] for f in _filas()],
-          lambda r: all("_" not in n for n in r))
-
-    # --- filtro ---
-    check("lista: la busqueda mira nombre Y propietario",
-          lambda: (len(_filas(texto="olivar")), len(_filas(texto="ana")),
-                   len(_filas(texto="zzz"))),
-          lambda r: r == (1, 2, 0))
-    check("lista: la busqueda no distingue mayusculas",
-          lambda: len(_filas(texto="LA_VEGA")), lambda r: r == 1)
-
-    # --- orden ---
-    check("lista: por nombre, alfabetico",
-          lambda: [f["nombre"] for f in _filas(orden="nombre")],
-          lambda r: r == sorted(r, key=str.lower))
-    check("lista: por superficie, de mayor a menor",
-          lambda: [f["_sup"] for f in _filas(orden="superficie")],
-          lambda r: r == sorted(r, reverse=True))
-    check("lista: por estado, lo urgente primero",
-          lambda: [VP.SEVERIDAD.get(f["estado"], 9) for f in _filas(orden="estado")],
-          lambda r: r == sorted(r))
-    check("lista: un criterio de orden desconocido no revienta, ordena por nombre",
-          lambda: [f["nombre"] for f in _filas(orden="loquesea")],
-          lambda r: r == [f["nombre"] for f in _filas(orden="nombre")])
-    check("lista: los criterios anunciados son los que de verdad ordenan",
-          lambda: [o for o in VP.ORDENES
-                   if [f["id"] for f in _filas(orden=o)] == [f["id"] for f in _filas(orden="__no__")]
-                   and o != "nombre"],
-          lambda r: r == [])
-
-    # --- resumen y bordes ---
-    check("lista: el resumen cuenta por estado",
-          lambda: VP.resumen(_filas()),
-          lambda r: sum(r.values()) == 4 and r.get("N.A.") == 1 and r.get("Sin asignar") == 1)
-    check("lista: sin parcelas no hay filas ni resumen, y no falla",
-          lambda: (VP.filas({}, {}, "2025-2026", evaluar_parcela), VP.resumen([])),
-          lambda r: r == ([], {}))
-    check("lista: una parcela sin historico se juzga igual (sin dato, no excepcion)",
-          lambda: [f for f in VP.filas({"Nueva": {"propietario": "x", "superficie_ha": 2,
-                                                  "cultivos_por_campana": {
-                                                      "2025-2026": {"tipo": "EXTENSIVO",
-                                                                    "subtipo": "COSECHA_GRANO",
-                                                                    "especie": "TRIGO"}}}},
-                                       {}, "2025-2026", evaluar_parcela)][0],
-          lambda f: f["estado"] and f["id"] == "Nueva")
-    check("lista: solo llevan punto de color los estados que son un juicio",
-          lambda: {f["estado"]: f["semaforo"] for f in _filas()},
-          lambda r: all(v is (k in VP.CON_SEMAFORO) for k, v in r.items()))
-    # la lista de Tk y la de Qt piden EXACTAMENTE lo mismo a este modulo
-    check("lista: el panel de Tk usa este modulo y no una copia propia",
-          lambda: open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    "panel_gestion_parcelas.py"), encoding="utf-8").read(),
-          lambda src: "VP.filas(" in src and "sev = {" not in src)
-
-
-# =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_rejilla, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
-              pruebas_escala_indices, pruebas_vista_parcelas):
+              pruebas_escala_indices):
         try:
             f()
         except Exception as e:

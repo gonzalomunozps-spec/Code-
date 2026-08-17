@@ -4,9 +4,6 @@
 # NOTA: tkinter NO se instala con pip (viene con Python en Windows/macOS; en
 # Linux es el paquete del sistema 'python3-tk'). Ver INSTALL / README.
 
-PySide6              # interfaz Qt (panel_qt.py). LGPL, a diferencia de PyQt, que es
-                     # GPL o comercial. En Linux necesita ademas las librerias del
-                     # sistema libegl1, libgl1 y libxkbcommon-x11-0.
 earthengine-api      # Google Earth Engine: descarga de imagenes Sentinel-2
 tkintermapview       # mapa interactivo para dibujar/buscar parcelas
 pillow               # imagenes (mapa de indices)
