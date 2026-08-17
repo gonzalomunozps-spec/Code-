@@ -83,7 +83,8 @@ from geo import superficie_ha    # area de la parcela (shoelace), logica compart
 from campanas import (campana_actual, campanas_de_parcela, PRIMERA_CAMPANA_S2,
                       PRIMERA_CAMPANA_S2_GLOBAL)      # logica de campana
 from sigpac import sigpac_consultar, _sigpac_get, SigpacError         # consulta de recintos SIGPAC
-from cultivo import spec_de, clave_cultivo                            # modelo de cultivo (puro)
+from cultivo import spec_de                                          # modelo de cultivo (puro)
+import vista_parcelas as VP   # que sale en la lista de parcelas (puro, compartido con Qt)
 
 # Modulo OPCIONAL y desacoplado: informe anual en PDF. Si se borra el fichero
 # informe_anual.py, esto queda en None y el boton no aparece (ver su cabecera).
@@ -669,12 +670,9 @@ RESOLUCIONES = [
 # de NDVI segun especie, fecha y marco). Aqui solo quedan los nombres visibles.
 SUBTIPOS = {"EXTENSIVO": ["SIEGA_VERDE", "COSECHA_GRANO"],
             "LENOSO": ["TRADICIONAL", "INTENSIVO", "SUPERINTENSIVO"], "BARBECHO": []}
-NOMBRE_CULTIVO = {
-    "LENOSO_TRADICIONAL": "Olivar tradicional", "LENOSO_INTENSIVO": "Olivar intensivo",
-    "LENOSO_SUPERINTENSIVO": "Olivar superintensivo",
-    "EXTENSIVO_SIEGA_VERDE": "Extensivo (siega verde)",
-    "EXTENSIVO_COSECHA_GRANO": "Extensivo (grano)", "BARBECHO": "Barbecho",
-}
+# Los nombres legibles de cultivo viven en `vista_parcelas` (puro): los necesita
+# tambien la lista de Qt. Se reexporta el nombre para quien ya lo importaba de aqui.
+NOMBRE_CULTIVO = VP.NOMBRE_CULTIVO
 
 
 # =====================================================================
@@ -958,43 +956,14 @@ class PanelGestionParcelas(ttk.Frame):
         self.tree.delete(*self.tree.get_children())   # vaciado en UNA llamada a Tk
         texto = self.entry_buscar.get().lower() if hasattr(self, "entry_buscar") else ""
         orden = self.cb_orden.get() if hasattr(self, "cb_orden") else "nombre"
-        parcelas = DB.parcelas_dict()
-        historico = DB.pasadas_de_campana(self.campana)   # {nombre: [pasadas]} en una consulta
-
-        filas = []
-        for nombre, ficha in parcelas.items():
-            if texto and texto not in nombre.lower() and texto not in ficha.get("propietario", "").lower():
-                continue
-            cult = ficha.get("cultivos_por_campana", {}).get(self.campana)
-            if cult is None:                              # sin cultivo asignado en esta campana
-                cc, clave, txt = "SIN_ASIGNAR", "SinAsig", "Sin asignar"
-            elif cult.get("tipo") == "BARBECHO":          # barbecho -> no aplica vigor
-                cc, clave, txt = "BARBECHO", "NA", "N.A."
-            else:
-                cc = clave_cultivo(cult.get("tipo"), cult.get("subtipo", ""))
-                serie = sorted(historico.get(nombre, []),
-                               key=lambda r: r.get("fecha", ""))
-                diag = evaluar_parcela(cult.get("tipo"), cult.get("subtipo", ""), serie,
-                                       spec=spec_de(cult))
-                clave, txt = diag["clave"], diag["estado"]
-            filas.append({"nombre": nombre.replace("_", " "),
-                          "cultivo": NOMBRE_CULTIVO.get(cc, "Sin asignar" if cc == "SIN_ASIGNAR"
-                                                        else cc.replace("_", " ").title()),
-                          "superficie": f"{ficha.get('superficie_ha', 0.0):.2f} ha",
-                          "_sup": ficha.get("superficie_ha", 0.0),
-                          "propietario": ficha.get("propietario", ""),
-                          "estado": txt, "_clave": clave})
-
-        sev = {"Revisar": 0, "Vigilar": 1, "OK": 2, "Segado": 2, "Sin dato": 3, "N.A.": 4, "Sin asignar": 5}
-        keys = {"superficie": lambda r: -r["_sup"],
-                "propietario": lambda r: r["propietario"].lower(),
-                "estado": lambda r: sev.get(r["estado"], 9),
-                "nombre": lambda r: r["nombre"].lower()}
-        filas.sort(key=keys.get(orden, keys["nombre"]))
-
+        # QUE sale en la lista lo decide `vista_parcelas`, que es puro y no sabe de
+        # ventanas. Aqui solo se pinta. Asi la lista de Tk y la de Qt no pueden
+        # acabar diciendo cosas distintas de la misma parcela.
+        filas = VP.filas(DB.parcelas_dict(), DB.pasadas_de_campana(self.campana),
+                         self.campana, evaluar_parcela, texto=texto, orden=orden)
         for k, r in enumerate(filas):
             tags = ("par" if k % 2 == 0 else "impar", f"est_{r['_clave']}")
-            dot = "\u25CF " if r["_clave"] in ("OK", "Vigilar", "Revisar") else ""
+            dot = "\u25CF " if r["semaforo"] else ""
             self.tree.insert("", tk.END, tags=tags,
                              values=(r["nombre"], r["cultivo"], r["superficie"],
                                      r["propietario"], dot + r["estado"]))
