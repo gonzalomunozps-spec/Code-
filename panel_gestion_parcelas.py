@@ -1852,7 +1852,10 @@ class DialogoValidacionIndices(tk.Toplevel):
         messagebox.showinfo("Validacion",
                             f"Anotados {n} indice(s) para «{dict(self.ambitos)[ambito]}».\n\n"
                             f"Hacen falta {_CALIB.MIN_OBSERVACIONES} validaciones coherentes "
-                            f"de la misma especie y fase para que un umbral se mueva.",
+                            f"de la misma especie y fase, y de al menos "
+                            f"{_CALIB.MIN_FECHAS} pasadas de dias distintos, para que un "
+                            f"umbral se mueva. Varias validaciones del mismo dia cuentan "
+                            f"como una sola observacion.",
                             parent=self.ficha.master)
 
 

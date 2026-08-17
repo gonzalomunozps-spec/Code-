@@ -86,7 +86,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 548 pruebas sin pantalla ni red. |
+| `pruebas.py` | 552 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -171,6 +171,14 @@ todas las parcelas.
    como una capa encima (`calibracion_umbrales`), acotada y reversible. Donde la
    tabla dice `ndmi_min: None` («aquí este índice no significa nada») no se
    inventa un umbral por muchas validaciones que haya.
+   Y para que un umbral se mueva hacen falta **dos condiciones independientes**:
+   `MIN_OBSERVACIONES` validaciones coherentes (cantidad) **y** de `MIN_FECHAS`
+   pasadas de días distintos (independencia). Varias validaciones del mismo día no
+   son varias observaciones: son la misma escena, la misma corrección atmosférica y
+   la misma visita, así que su sesgo entra entero. El riesgo real está en los
+   ámbitos amplios, donde el mínimo se junta en una tarde validando varias parcelas
+   del mismo municipio. `DESVIACION_MAX` es un freno distinto y sigue igual: limita
+   **cuánto** se mueve, no **cuándo**.
 12. **Las bandas se escalan a reflectancia antes de entrar en cualquier fórmula.**
    `COPERNICUS/S2_SR_HARMONIZED` entrega las bandas espectrales como enteros
    UINT16 con la reflectancia multiplicada por 10.000: un 0,28 llega como 2800.
@@ -294,8 +302,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 548, sin `informe_anual` 537,
-sin `herbicida_contexto` 546, sin `calibracion_umbrales` 526 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 552, sin `informe_anual` 541,
+sin `herbicida_contexto` 550, sin `calibracion_umbrales` 526 — los cuatro en verde.
 
 ---
 
@@ -303,7 +311,7 @@ sin `herbicida_contexto` 546, sin `calibracion_umbrales` 526 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 548 pruebas, sin pantalla ni red
+python pruebas.py          # 552 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

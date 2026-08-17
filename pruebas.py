@@ -659,18 +659,63 @@ def pruebas_umbrales():
                           {"NDMI": {"valor": 0.09 + k * 0.005, "sistema": "bajo"}},
                           {"NDMI": dijo}, ambito)
 
+    def _ndmi(parcela="Vega"):
+        return evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec,
+                               parcela=parcela)["umbrales"]["ndmi_min"]
+
+    # CUANTAS hacen falta. El minimo estaba en 2, y con 2 se podia mover el umbral
+    # de una PROVINCIA entera. Ahora son MIN_OBSERVACIONES.
+    check("calibracion: los dos frenos son numeros distintos y explicitos",
+          lambda: (CAL.MIN_OBSERVACIONES, CAL.MIN_FECHAS, CAL.DESVIACION_MAX),
+          lambda r: r == (5, 2, 0.10))
     _valida(1)
     check("calibracion: UNA sola validacion no mueve el umbral",
-          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec,
-                                  parcela="Vega")["umbrales"]["ndmi_min"],
-          lambda r: r == 0.12)
-    _valida(2)
+          lambda: _ndmi(), lambda r: r == 0.12)
+    # numeros LITERALES a proposito: si alguien baja la constante, esta prueba
+    # tiene que caerse por el comportamiento, no solo por el valor de la constante
+    _valida(4)
+    check("calibracion: cuatro validaciones de cuatro pasadas todavia no lo mueven",
+          lambda: (len(DB.validaciones_indice(indice="NDMI",
+                                              ambitos=[("municipio", "47/186")])), _ndmi()),
+          lambda r: r == (4, 0.12))
+    _valida(5)
     d1 = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec, parcela="Vega")
-    check("calibracion: con 2 coherentes el umbral baja y el estado cambia",
+    check("calibracion: con el minimo de coherentes el umbral baja y el estado cambia",
           lambda: (d1["estado"], d1["umbrales"]["ndmi_min"] < 0.12), lambda r: r == ("OK", True))
-    check("calibracion: se explica de donde sale el umbral",
+    check("calibracion: se explica de donde sale el umbral, y de cuantas pasadas",
           lambda: CAL.texto_calibracion(d1["umbrales"]),
-          lambda t: "municipio" in t and "validaciones" in t)
+          lambda t: "municipio" in t and "validaciones" in t and "pasadas" in t)
+
+    # DE CUANTAS PASADAS. Un ambito amplio puede juntar el minimo en UN SOLO DIA:
+    # basta con validar varias parcelas del mismo municipio esa tarde. Eso no son
+    # N observaciones, es una: misma escena, misma correccion, misma visita.
+    def _mismo_dia(n, fecha="2026-05-11"):
+        """n parcelas del MISMO municipio validadas EL MISMO dia."""
+        for k in range(n):
+            p = f"Quincena_{k}"
+            DB.guardar_ficha(p, {"propietario": "x", "coordenadas": [[0, 0]],
+                                 "superficie_ha": 5, "provincia": "09",
+                                 "municipio": "09/500"})
+            CAL.registrar(p, "2025-2026", fecha, "TRIGO", FASE,
+                          {"NDMI": {"valor": 0.09 + k * 0.005, "sistema": "bajo"}},
+                          {"NDMI": "normal"}, "municipio")
+        return p
+    _mismo_dia(CAL.MIN_OBSERVACIONES + 2)
+    check("calibracion: de sobra en numero pero TODAS del mismo dia -> no mueve nada",
+          lambda: (len(DB.validaciones_indice(indice="NDMI",
+                                              ambitos=[("municipio", "09/500")])),
+                   CAL.umbral_calibrado("NDMI", "ndmi_min", 0.12, "TRIGO", FASE,
+                                        [("municipio", "09/500")])),
+          lambda r: r[0] == CAL.MIN_OBSERVACIONES + 2 and r[1] is None)
+    CAL._invalidar()
+    # una sola validacion mas, en OTRO dia, es lo que convierte esas lecturas en
+    # observaciones repartidas en el tiempo
+    _mismo_dia(1, fecha="2026-06-02")
+    CAL._invalidar()
+    check("calibracion: en cuanto hay una pasada de otro dia, ya se puede mover",
+          lambda: CAL.umbral_calibrado("NDMI", "ndmi_min", 0.12, "TRIGO", FASE,
+                                       [("municipio", "09/500")]),
+          lambda r: r is not None and r["fechas"] == 2 and r["valor"] < 0.12)
     check("calibracion: la BIBLIOGRAFIA no se ha tocado",
           lambda: dict(FEN.EXTENSIVO_ESPECIES["TRIGO"]["fases"][3][6]),
           lambda r: r["ndmi_min"] == 0.12)
@@ -1085,7 +1130,13 @@ def pruebas_lenosos():
                         parcela="Reg")
     check("lenoso: la clave de calibracion separa regimen y densidad",
           lambda: CAL.sistema_de(d["umbrales"]), lambda r: r == ("REGADIO", "intensivo"))
-    for f, v in (("2026-07-10", 0.33), ("2026-06-20", 0.34)):
+    # MIN_OBSERVACIONES validaciones, cada una de una PASADA distinta: antes
+    # bastaban dos, y con dos se movia el umbral de un municipio entero
+    for k, (f, v) in enumerate((("2026-07-10", 0.33), ("2026-06-20", 0.34),
+                                ("2026-06-30", 0.33), ("2026-07-20", 0.34),
+                                ("2026-07-30", 0.33), ("2026-08-05", 0.34))):
+        if k >= CAL.MIN_OBSERVACIONES:
+            break
         CAL.registrar("Reg", "2025-2026", f, "OLIVO", d["fase"],
                       {"MSAVI": {"valor": v, "sistema": "bajo"}}, {"MSAVI": "normal"},
                       "municipio", umbrales=d["umbrales"])

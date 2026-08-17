@@ -26,10 +26,31 @@ COMO FUNCIONA
    segun los umbrales de la fase.
 2. El usuario confirma o corrige, indice a indice, y elige a que ALCANCE aplica:
    solo esta parcela, todo el municipio, toda la provincia o siempre.
-3. Con >= MIN_OBSERVACIONES coherentes, el umbral se mueve hasta separar lo que
-   el usuario llama "bajo" de lo que llama "normal".
+3. Con >= MIN_OBSERVACIONES coherentes Y de >= MIN_FECHAS pasadas distintas, el
+   umbral se mueve hasta separar lo que el usuario llama "bajo" de lo que llama
+   "normal".
 4. El desplazamiento esta ACOTADO (DESVIACION_MAX). Una racha de errores no
    puede llevarse el umbral a cualquier sitio.
+
+POR QUE HACEN FALTA LAS DOS CONDICIONES, Y NO SOLO UN NUMERO
+------------------------------------------------------------
+Con el minimo en 2 bastaba con validar dos indices de UNA MISMA PASADA para mover
+un umbral, y ese umbral podia aplicarse a una PROVINCIA entera. Dos indices del
+mismo dia no son dos observaciones independientes: son la misma escena, la misma
+correccion atmosferica, el mismo estado de humedad del suelo y la misma opinion
+del agricultor formada en una sola visita. Si ese dia habia bruma, o el riego se
+habia dado la vispera, el sesgo entra entero y se queda.
+
+Por eso ahora se exigen dos cosas distintas:
+  - CANTIDAD (MIN_OBSERVACIONES): un numero de validaciones que no se alcanza sin
+    querer, para que una racha corta no mueva nada.
+  - INDEPENDENCIA (MIN_FECHAS): que vengan de pasadas de DIAS DISTINTOS. Es lo que
+    distingue "esto pasa en mi parcela" de "esto paso aquel dia". Diez
+    validaciones de una sola fecha siguen sin mover el umbral, y es correcto:
+    diez lecturas del mismo momento no dicen mas que una.
+
+El tope DESVIACION_MAX no cambia. Es otra cosa: limita CUANTO se mueve, no CUANDO
+se mueve. Los dos frenos son independientes y se quedan los dos.
 
 REGLAS QUE NO SE SALTAN
 -----------------------
@@ -71,7 +92,8 @@ ETIQUETA_AMBITO = {"parcela": "Solo esta parcela",
 CALIBRABLES = {"NDVI": ("lo", "hi"), "NDMI": ("ndmi_min", None), "LAI": ("lai_min", None),
                "MSAVI": ("msavi_min", None)}
 
-MIN_OBSERVACIONES = 2       # igual que el aprendizaje del diagnostico
+MIN_OBSERVACIONES = 5       # cuantas validaciones coherentes hacen falta
+MIN_FECHAS = 2              # ...y de cuantas pasadas DISTINTAS deben venir
 DESVIACION_MAX = 0.10       # cuanto puede alejarse de la bibliografia, como mucho
 MARGEN = 0.01               # holgura al colocar el umbral entre bajo y normal
 LIMITES = {"NDVI": (0.0, 1.0), "NDMI": (-0.5, 0.6), "LAI": (0.0, 8.0),
@@ -233,9 +255,13 @@ def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos,
                      regimen="", densidad=""):
     """Umbral ajustado para (indice, especie, fase), o None si no hay evidencia.
 
-    Gana el ambito MAS CONCRETO que llegue a MIN_OBSERVACIONES. Si tu parcela
-    tiene 2 validaciones y el municipio 40, mandan las 2 de tu parcela: es tu
-    tierra."""
+    Gana el ambito MAS CONCRETO que reuna evidencia suficiente: MIN_OBSERVACIONES
+    validaciones Y de MIN_FECHAS pasadas distintas. Si tu parcela llega al minimo
+    y el municipio tiene 40, mandan las de tu parcela: es tu tierra.
+
+    Un ambito que no reune las dos condiciones no bloquea a los de mas arriba: se
+    salta y se prueba el siguiente. Asi, mientras tu parcela junta observaciones,
+    lo que ya sepa el municipio sigue valiendo."""
     if biblio is None:
         return None                     # la bibliografia dice que aqui no se juzga
     llave = (indice, clave_umbral, especie, fase, tuple(ambitos), regimen, densidad)
@@ -249,6 +275,12 @@ def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos,
                                        regimen=regimen, densidad=densidad)
         if len(filas) < MIN_OBSERVACIONES:
             continue
+        # ...y que NO sean todas del mismo dia. Diez validaciones de una sola
+        # pasada son diez lecturas de la misma escena, la misma correccion
+        # atmosferica y la misma visita: no son diez observaciones, son una.
+        fechas = {f["fecha"] for f in filas if f.get("fecha")}
+        if len(fechas) < MIN_FECHAS:
+            continue
         bajos = [f["valor"] for f in filas if f["dijo_usuario"] == "bajo"
                  and f["valor"] is not None]
         normales = [f["valor"] for f in filas if f["dijo_usuario"] in ("normal", "alto")
@@ -257,7 +289,7 @@ def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos,
         if cand is None:
             continue
         resultado = {"valor": _acotar(indice, cand, biblio), "ambito": ambito,
-                     "n": len(filas), "biblio": biblio}
+                     "n": len(filas), "fechas": len(fechas), "biblio": biblio}
         break
     with _LOCK:
         _CACHE[llave] = resultado
@@ -298,8 +330,11 @@ def texto_calibracion(umbrales):
     trozos = []
     for k, aj in sorted(det.items()):
         indice = k.split(".")[0]
+        # se dice tambien de cuantas pasadas vienen: dos numeros distintos, y el
+        # de fechas es el que dice si la evidencia esta repartida en el tiempo
         trozos.append(f"{indice} {aj['biblio']:.2f}->{aj['valor']:.2f} "
-                      f"({ETIQUETA_AMBITO[aj['ambito']].lower()}, {aj['n']} validaciones)")
+                      f"({ETIQUETA_AMBITO[aj['ambito']].lower()}, {aj['n']} validaciones "
+                      f"en {aj.get('fechas', 1)} pasadas)")
     return "Umbrales ajustados con tus validaciones: " + "; ".join(trozos) + "."
 
 
