@@ -1449,6 +1449,13 @@ class VentanaAltaParcela(tk.Toplevel):
                 spec["marco_pie"] = float(self.e_pie.get().replace(",", "."))
             except ValueError:
                 return messagebox.showwarning("Marco", "Indica el marco de plantacion (calle y pie en metros).", parent=self)
+            # Un marco no positivo no es un marco. Se avisa aqui en vez de dejarlo
+            # pasar: aguas abajo daba una fraccion de copa negativa y un umbral de
+            # casi cero, o sea una parcela que dejaba de avisar sin decir nada.
+            if spec["marco_calle"] <= 0 or spec["marco_pie"] <= 0:
+                return messagebox.showwarning(
+                    "Marco", "El marco de plantacion son metros: tienen que ser "
+                             "numeros mayores que cero.", parent=self)
             # opcional: sin diametro de copa se estima del marco, como siempre
             spec["diametro_copa"] = _copa_de(self.e_copa)
             spec["regimen"] = "REGADIO" if self.cb_regimen.get().startswith("Rega") else "SECANO"
@@ -1678,6 +1685,10 @@ class DialogoRelevoCampana(tk.Toplevel):
                 spec["marco_pie"] = float(self.e_pie.get().replace(",", "."))
             except ValueError:
                 return messagebox.showwarning("Marco", "Indica el marco (calle y pie en metros).", parent=self)
+            if spec["marco_calle"] <= 0 or spec["marco_pie"] <= 0:
+                return messagebox.showwarning(
+                    "Marco", "El marco de plantacion son metros: tienen que ser "
+                             "numeros mayores que cero.", parent=self)
             # opcional: sin diametro de copa se estima del marco, como siempre
             spec["diametro_copa"] = _copa_de(self.e_copa)
             spec["regimen"] = "REGADIO" if self.cb_regimen.get().startswith("Rega") else "SECANO"

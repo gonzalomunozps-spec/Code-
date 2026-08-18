@@ -627,6 +627,8 @@ def escenario_dialogos(P, DB):
                     pass
         root.update()
 
+    abiertas = []
+
     def abrir(nombre, fabrica, luego=None):
         def _ir():
             v = fabrica()
@@ -634,6 +636,9 @@ def escenario_dialogos(P, DB):
             if luego:
                 luego(v)
                 root.update()
+        # se cuenta lo que de verdad se ha abierto: el numero iba escrito a mano y
+        # se quedo desfasado al anadir ventanas nuevas
+        abiertas.append(nombre)
         _paso(nombre, _ir)
         cerrar()
 
@@ -691,6 +696,35 @@ def escenario_dialogos(P, DB):
     abrir("alta de parcela con diametro de copa", _alta_con_copa,
           lambda v: v._guardar())
 
+    def _alta_marco_negativo():
+        """Un guion de mas al teclear el marco NO puede colarse.
+
+        Aguas abajo daba una fraccion de copa negativa y un umbral de casi cero:
+        la parcela dejaba de avisar sin decir nada. El formulario tiene que
+        rechazarlo, como ya rechaza un rendimiento negativo en la cosecha."""
+        import almacen as _DB
+        v = P.VentanaAltaParcela(panel)
+        root.update()
+        v.cb_tipo.set("LENOSO")
+        v._sub()
+        v.cb_sub.set("OLIVO")
+        root.update()
+        v.e_nombre.delete(0, "end"); v.e_nombre.insert(0, "Marco Malo")
+        v.e_prop.delete(0, "end"); v.e_prop.insert(0, "x")
+        v.coords = [[-4.10, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.10, 41.66]]
+        _teclear(v.e_calle, "-12", root)
+        _teclear(v.e_pie, "12", root)
+        v._guardar()
+        _check("Marco_Malo" not in _DB.nombres(),
+               "se guardo una parcela con el marco negativo")
+        # y con el marco corregido si entra
+        _teclear(v.e_calle, "12", root)
+        v._guardar()
+        _check("Marco_Malo" in _DB.nombres(), "no se guardo con el marco corregido")
+        _DB.eliminar_parcela("Marco_Malo")
+        return v
+    abrir("alta con marco negativo", _alta_marco_negativo)
+
     abrir("alta de parcela", lambda: P.VentanaAltaParcela(panel),
           lambda v: [b.invoke() for t, b in _botones(v) if "guardar" not in t.lower()]
           + [v._guardar()])
@@ -721,7 +755,7 @@ def escenario_dialogos(P, DB):
     abrir("ventana de radar",
           lambda: P.VentanaRadar(root, NOM, CAMP, [], {"texto": "sin datos"}, 0, "sin datos"))
     _derribar(root)
-    return "10 ventanas secundarias"
+    return f"{len(abiertas)} ventanas secundarias"
 
 
 def escenario_cierre(P, DB):

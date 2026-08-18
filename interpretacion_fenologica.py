@@ -336,8 +336,6 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         if separacion:
             copa = dict(contraste or {}, **{"separacion": separacion})
             hay_cubierta = separacion["cubierta_domina"]
-            # el vigor de copa se juzga con MSAVI, y con el p90 trasladado a MSAVI
-            # si la parcela da para separar lineas
             # Si la cubierta domina, el NDVI esta inflado por la hierba y deja de
             # servir: se juzga con el MSAVI. Pero entonces HAY QUE CAMBIAR TAMBIEN
             # EL LISTON. Se comparaba el MSAVI contra el rango de NDVI de la fase,

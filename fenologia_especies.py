@@ -481,6 +481,10 @@ def umbrales_lenoso(especie, fase, regimen, factor=1.0):
 # Sobre el marco MENOR de los dos, que es el que limita el crecimiento de la copa.
 MSAVI_SUELO = 0.08          # suelo desnudo seco; el rango real es 0.05-0.12
 NDVI_SUELO = 0.10           # el mismo suelo, en NDVI (0.08-0.14 segun humedad)
+# Tope de lo que puede ser un FONDO medido. NDVI y MSAVI no pasan de 1 en ninguna
+# escena real, ni sobre la hierba mas cerrada; un p10 por encima de esto no es una
+# calle verde, es un dato corrupto, y se descarta en vez de creerselo.
+SUELO_MAX = 1.0
 FC_MAXIMA = 0.85            # ni el dosel mas cerrado tapa el 100 % del suelo
 PROPORCION_COPA = {"TRADICIONAL": 0.50, "INTENSIVO": 0.76, "SUPERINTENSIVO": 1.17}
 
@@ -499,6 +503,7 @@ def fraccion_copa(especie, marco_calle, marco_pie, diametro_copa=None):
         d = 0.0
     if d <= 0:
         sub = subtipo_canonico(especie, dens) or "TRADICIONAL"
+        # `densidad_arboles` ya ha garantizado que los dos marcos son positivos
         d = PROPORCION_COPA.get(sub, 0.50) * min(float(marco_calle), float(marco_pie))
     area_copa = math.pi * (d / 2.0) ** 2
     return round(min(FC_MAXIMA, dens * area_copa / 10000.0), 3)
@@ -572,8 +577,13 @@ def suelo_de_la_parcela(p10, por_defecto, umbral_copa=None):
     con hierba alta, y entonces el umbral de parcela debe subir por encima del de
     copa. Es lo que hace que la cuenta salga bien sola: la media de la parcela y el
     umbral suben los dos con el fondo, y lo que queda comparandose es la copa
-    contra el umbral de copa, sea cual sea el fondo. Solo se descarta un p10 que no
-    puede ser un fondo (negativo: agua o sombra) o que no es un numero.
+    contra el umbral de copa, sea cual sea el fondo.
+
+    Lo que SI se descarta es un p10 que no puede ser un fondo: uno negativo (agua o
+    sombra), uno fuera del rango fisico del indice, o algo que no es un numero. Un
+    valor imposible -un 5.0 en una base con un registro corrupto- subiria el umbral
+    por las nubes y la parcela avisaria siempre, que es tan inutil como no avisar
+    nunca.
 
     Devuelve (valor, medido)."""
     if p10 is None:
@@ -582,7 +592,7 @@ def suelo_de_la_parcela(p10, por_defecto, umbral_copa=None):
         v = float(p10)
     except (TypeError, ValueError):
         return por_defecto, False
-    if v < 0.0:
+    if not (0.0 <= v <= SUELO_MAX):
         return por_defecto, False
     return round(v, 3), True
 
@@ -596,10 +606,21 @@ def _umbral_parcela_con_margen(umbral_copa, fc, suelo=MSAVI_SUELO, medido=False)
 
 
 def densidad_arboles(marco_calle, marco_pie):
-    """arboles/ha a partir del marco (distancia entre calles x distancia entre pies)."""
-    if not marco_calle or not marco_pie:
+    """arboles/ha a partir del marco (distancia entre calles x distancia entre pies).
+
+    Un marco que no sea un numero POSITIVO devuelve None, es decir "no se sabe el
+    marco", y todo lo que dependa de el se comporta como en una parcela sin marco
+    declarado. No es una comprobacion de adorno: un marco negativo -un guion de mas
+    al teclear- daba una fraccion de copa NEGATIVA, y con ella un umbral de
+    practicamente cero. La parcela dejaba de avisar sin decir nada, que es la peor
+    forma de fallar que tiene este programa."""
+    try:
+        calle, pie = float(marco_calle), float(marco_pie)
+    except (TypeError, ValueError):
         return None
-    return round(10000.0 / (marco_calle * marco_pie))
+    if calle <= 0 or pie <= 0:
+        return None
+    return round(10000.0 / (calle * pie))
 
 
 def tipo_plantacion(especie, densidad):

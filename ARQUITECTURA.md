@@ -86,7 +86,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 552 pruebas sin pantalla ni red. |
+| `pruebas.py` | 564 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -128,7 +128,21 @@ todas las parcelas.
 
 1. **Las pasadas no se pisan.** La sincronización es incremental (`INSERT OR IGNORE`):
    conserva la interpretación ya cacheada de cada fecha.
-2. **Todo acceso a SQLite va por `almacen.py`** y bajo su lock.
+2. **Todo acceso a SQLite va por `almacen.py`** y bajo su lock. Quien guarde algo
+   DERIVADO de una parcela (una caché, un índice en memoria) se apunta a
+   `almacen.al_eliminar_parcela` en vez de esperar que quien borra se acuerde de
+   avisarle: el borrado se llama desde el panel, desde la demo y desde las
+   pruebas, y basta con que uno se olvide para que el dato derivado sobreviva a
+   los datos que lo justificaban.
+3. **Un número que teclea el usuario se valida en su rango, no solo en su tipo.**
+   Que `float("-12")` no falle no significa que −12 sea un marco. Un marco no
+   positivo daba una fracción de copa **negativa** y con ella un umbral de casi
+   cero: la parcela dejaba de avisar **sin decir nada**, que es la peor forma de
+   fallar que tiene este programa. Igual por el otro lado: un percentil imposible
+   como fondo subía el umbral por las nubes y la parcela avisaba siempre. El
+   criterio bueno ya estaba en `registro_parcela.datos_cosecha`, que rechaza un
+   rendimiento negativo o una humedad del 200 %; ahora se aplica también al marco
+   (`densidad_arboles`) y al fondo medido (`suelo_de_la_parcela`).
 3. **La interfaz solo se toca desde el hilo principal.** El trabajo lento va en
    hilos y vuelve con `widget.after(...)`. Verificado: no hay ni un acceso directo
    a widgets desde un hilo.
@@ -302,8 +316,8 @@ resto sigue igual**; no hay interruptor que tocar.
   en la base (`validaciones_indice`), por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 552, sin `informe_anual` 541,
-sin `herbicida_contexto` 550, sin `calibracion_umbrales` 526 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 564, sin `informe_anual` 553,
+sin `herbicida_contexto` 562, sin `calibracion_umbrales` 535 — los cuatro en verde.
 
 ---
 
@@ -311,7 +325,7 @@ sin `herbicida_contexto` 550, sin `calibracion_umbrales` 526 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 552 pruebas, sin pantalla ni red
+python pruebas.py          # 564 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

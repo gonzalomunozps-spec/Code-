@@ -754,6 +754,40 @@ def pruebas_umbrales():
     check("calibracion: donde la tabla no define umbral, no se inventa uno",
           lambda: CAL.umbral_calibrado("NDMI", "ndmi_min", None, "TRIGO", "rastrojo / cosecha",
                                        CAL.ambitos_de("Vega")), lambda r: r is None)
+    # --- LA CACHE NO PUEDE SOBREVIVIR A LOS DATOS QUE LA JUSTIFICABAN ---
+    # Al borrar una parcela se van sus validaciones, pero `umbral_calibrado` cachea
+    # por (indice, especie, fase, ambitos...) y seguia sirviendo el ajuste viejo
+    # hasta cerrar el programa: un umbral movido por datos que ya no existen.
+    def _cache_tras_borrar():
+        DB.guardar_ficha("Efimera_Cal", {"propietario": "x", "coordenadas": [[0, 0]],
+                                         "superficie_ha": 5, "provincia": "31",
+                                         "municipio": "31/900"})
+        amb = CAL.ambitos_de("Efimera_Cal")
+        for k in range(CAL.MIN_OBSERVACIONES):
+            CAL.registrar("Efimera_Cal", "2025-2026", f"2026-05-0{k + 1}", "TRIGO", FASE,
+                          {"NDMI": {"valor": 0.09 + k * 0.005, "sistema": "bajo"}},
+                          {"NDMI": "normal"}, "parcela")
+        antes = CAL.umbral_calibrado("NDMI", "ndmi_min", 0.12, "TRIGO", FASE, amb)
+        DB.eliminar_parcela("Efimera_Cal")
+        despues = CAL.umbral_calibrado("NDMI", "ndmi_min", 0.12, "TRIGO", FASE, amb)
+        return (antes or {}).get("valor"), despues
+    check("calibracion: al borrar la parcela, su ajuste deja de aplicarse EN EL ACTO",
+          _cache_tras_borrar,
+          lambda r: r[0] is not None and r[0] < 0.12 and r[1] is None)
+    check("almacen: avisa a quien tenga algo derivado cuando se borra una parcela",
+          lambda: (lambda visto: (DB.al_eliminar_parcela(visto.append),
+                                  DB.guardar_ficha("Avisame", {"propietario": "x",
+                                                               "coordenadas": [[0, 0]]}),
+                                  DB.eliminar_parcela("Avisame"), visto)[3])([]),
+          lambda r: r == ["Avisame"])
+    check("almacen: un oyente que falla no impide avisar a los demas",
+          lambda: (lambda visto: (
+              DB.al_eliminar_parcela(lambda _n: (_ for _ in ()).throw(RuntimeError("boom"))),
+              DB.al_eliminar_parcela(visto.append),
+              DB.guardar_ficha("Avisame2", {"propietario": "x", "coordenadas": [[0, 0]]}),
+              DB.eliminar_parcela("Avisame2"), visto)[4])([]),
+          lambda r: r == ["Avisame2"])
+
     check("almacen: las validaciones por indice se borran con la parcela",
           lambda: (DB.eliminar_parcela("Vega"),
                    DB.validaciones_indice(ambitos=[("parcela", "Vega")]))[1], lambda r: r == [])
@@ -840,6 +874,39 @@ def pruebas_lenosos():
     check("lenoso: el umbral de parcela de un tradicional queda donde ese olivar mide",
           lambda: _trad["msavi_min_parcela"],
           lambda v: 0.10 < v < 0.20)
+    # --- UN MARCO QUE NO ES UN MARCO NO PUEDE APAGAR LOS AVISOS ---
+    # Un guion de mas al teclear daba una fraccion de copa NEGATIVA, y con ella un
+    # umbral de practicamente cero: la parcela dejaba de avisar sin decir nada.
+    check("marco: un marco negativo no es un marco (densidad None)",
+          lambda: (FEN.densidad_arboles(-12, 12), FEN.densidad_arboles(12, -12),
+                   FEN.densidad_arboles(-12, -12)),
+          lambda r: r == (None, None, None))
+    check("marco: y por tanto no hay fraccion de copa, ni negativa ni inventada",
+          lambda: FEN.fraccion_copa("OLIVO", -12, 12), lambda r: r is None)
+    check("marco: la fraccion de copa NUNCA sale negativa, se pruebe como se pruebe",
+          lambda: [(c, p) for c in (-12, -1, 0, 1, 12) for p in (-12, -1, 0, 1, 12)
+                   if (FEN.fraccion_copa("OLIVO", c, p) or 0) < 0],
+          lambda r: r == [])
+    check("marco: con marco invalido se juzga como sin marco (umbral de copa intacto)",
+          lambda: FEN.fase_lenoso("OLIVO", "2026-07-15", -12.0, 12.0, "SECANO"),
+          lambda d: d["fraccion_copa"] is None and d["msavi_min_parcela"] == d["msavi_min"])
+    check("marco: un marco de texto no revienta, se toma como no declarado",
+          lambda: (FEN.densidad_arboles("10", "10"), FEN.densidad_arboles("ancho", "10")),
+          lambda r: r == (100, None))
+    check("marco: y el resumen del formulario tampoco revienta con un marco invalido",
+          lambda: FEN.texto_marco("OLIVO", -10, 10), lambda t: t == "")
+
+    # --- UN FONDO IMPOSIBLE NO PUEDE CONVERTIR LA PARCELA EN ALARMA PERMANENTE ---
+    check("suelo: un p10 fuera del rango fisico del indice se descarta",
+          lambda: (FEN.suelo_de_la_parcela(5.0, FEN.MSAVI_SUELO),
+                   FEN.suelo_de_la_parcela(1.4, FEN.MSAVI_SUELO)),
+          lambda r: r == ((FEN.MSAVI_SUELO, False), (FEN.MSAVI_SUELO, False)))
+    check("suelo: el limite es 1.0, y justo por debajo si vale",
+          lambda: (FEN.SUELO_MAX, FEN.suelo_de_la_parcela(0.99, FEN.MSAVI_SUELO)),
+          lambda r: r == (1.0, (0.99, True)))
+    check("suelo: una calle verde de verdad sigue contando (0.37)",
+          lambda: FEN.suelo_de_la_parcela(0.37, FEN.MSAVI_SUELO), lambda r: r == (0.37, True))
+
     check("lenoso: sin marco no hay conversion posible y se deja el umbral de copa",
           lambda: FEN.fase_lenoso("OLIVO", "2026-07-15", None, None, "REGADIO"),
           lambda d: d["fraccion_copa"] is None and d["msavi_min_parcela"] == d["msavi_min"])

@@ -107,9 +107,16 @@ _CACHE = {}
 _LOCK = threading.RLock()
 
 
-def _invalidar():
+def _invalidar(_nombre=None):
     with _LOCK:
         _CACHE.clear()
+
+
+# Si se BORRA una parcela, sus validaciones se van con ella y cualquier umbral que
+# saliera de ellas deja de estar justificado. La cache no se entera sola: sin esto
+# el ajuste seguia aplicandose con datos que ya no existen hasta cerrar el
+# programa. Se pide el aviso a `almacen`, que es quien sabe cuando pasa.
+DB.al_eliminar_parcela(_invalidar)
 
 
 # ---------------------------------------------------------------------------

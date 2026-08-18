@@ -495,6 +495,22 @@ def set_cultivo(nombre, campana, cultivo):
         c.commit()
 
 
+# Avisos de "se ha borrado una parcela". Quien tenga algo DERIVADO de sus datos
+# -una cache, un indice en memoria- se apunta aqui y se entera, sin que `almacen`
+# tenga que conocerlo. Hace falta al reves: `calibracion_umbrales` ya importa
+# `almacen`, asi que si `almacen` lo importara habria un ciclo. Y no vale con
+# avisar desde quien borra: el borrado se llama desde el panel, desde la demo y
+# desde las pruebas, y basta con que uno se olvide.
+_AL_BORRAR = []
+
+
+def al_eliminar_parcela(fn):
+    """Registra un aviso para cuando se borre una parcela. `fn(nombre)`."""
+    if fn not in _AL_BORRAR:
+        _AL_BORRAR.append(fn)
+    return fn
+
+
 def eliminar_parcela(nombre):
     c = _c()
     with _LOCK:
@@ -505,6 +521,14 @@ def eliminar_parcela(nombre):
                   "validaciones", "validaciones_indice", "parcelas"):
             c.execute(f"DELETE FROM {t} WHERE nombre=?", (nombre,))
         c.commit()
+    # ...y fuera del lock, porque quien escuche no tiene por que ser rapido y no
+    # debe poder bloquear la base. Un oyente que falle no impide avisar al resto:
+    # la parcela YA esta borrada, y tragarse el aviso dejaria a los demas rancios.
+    for fn in list(_AL_BORRAR):
+        try:
+            fn(nombre)
+        except Exception:
+            log.warning("aviso de borrado fallido en %r", fn, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
