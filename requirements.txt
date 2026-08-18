@@ -4,7 +4,7 @@
 # NOTA: tkinter NO se instala con pip (viene con Python en Windows/macOS; en
 # Linux es el paquete del sistema 'python3-tk'). Ver INSTALL / README.
 
-earthengine-api      # Google Earth Engine: descarga de imagenes Sentinel-2
+earthengine-api      # Google Earth Engine: imagenes Sentinel-2/1 y clima ERA5-Land
 tkintermapview       # mapa interactivo para dibujar/buscar parcelas
 pillow               # imagenes (mapa de indices)
 matplotlib           # graficas de evolucion y leyendas de color

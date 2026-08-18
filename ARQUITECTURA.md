@@ -55,6 +55,7 @@ Son la base testeable. Ninguno importa a otro.
 | `campanas.py` | Campaña agrícola (sep–ago): actual, rango, listado y qué campañas ofrecer por parcela. |
 | `cultivo.py` | Modelo de cultivo: `spec_de`, `clave_cultivo`. |
 | `sigpac.py` | Consulta de recintos SIGPAC y parseo GeoJSON. La petición HTTP se **inyecta**, por eso se prueba sin red. |
+| `clima_era5.py` | Contexto climático de ERA5-Land: conversión de unidades, punto de rejilla, resumen y descarga. **Opcional.** |
 | `herbicida_contexto.py` | Interpretación del herbicida con LAI constante. **Opcional.** |
 | `calibracion_umbrales.py` | Ajusta los umbrales de los índices con las validaciones del usuario, por ámbito (parcela / municipio / provincia / global). No toca la bibliografía. **Opcional.** |
 
@@ -86,7 +87,7 @@ Son la base testeable. Ninguno importa a otro.
 | `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 564 pruebas sin pantalla ni red. |
+| `pruebas.py` | 595 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -214,7 +215,14 @@ todas las parcelas.
    el NDVI de la rejilla (normalizado). El radar tampoco: Sentinel-1 llega en dB.
 8. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
    cambiarlo hay que subir `ESQUEMA_VERSION` y añadir su migración a
-   `_MIGRACIONES` (receta completa en el docstring de `almacen.py`).
+   `_MIGRACIONES` (receta completa en el docstring de `almacen.py`). Va por la
+   **7**: la tabla `clima`.
+   Esa tabla es la **única excepción** al borrado en cascada de `eliminar_parcela`,
+   y es deliberado: se indexa por **punto de rejilla de ERA5** (11 km de lado), no
+   por parcela, porque todas las fincas de una comarca comparten el mismo dato y
+   guardarlo por parcela serían veinte copias de una sola medida. A cambio, al
+   borrar una parcela se retiran los puntos que ya no usa ninguna
+   (`purgar_clima`), para no dejar huérfanos.
 12. **Hasta dónde llega el histórico lo decide el satélite, no el programa.**
    Sentinel-2 L2A empieza en la campaña **2017-2018**, y el catálogo de Earth
    Engine avisa de que su cobertura no es global hasta **2018-2019**; ambas cosas
@@ -314,10 +322,14 @@ resto sigue igual**; no hay interruptor que tocar.
 - `calibracion_umbrales.py` → desaparecen el selector de pasada y la validación por
   índice; el diagnóstico vuelve a los umbrales de la tabla. Lo ya anotado se queda
   en la base (`validaciones_indice`), por si se repone.
+- `clima_era5.py` → desaparece la tarjeta de clima de la ficha. Lo descargado se
+  queda en la tabla `clima`. **Hoy solo enseña datos**: no mueve ningún
+  diagnóstico, ni un umbral, ni una fase.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 564, sin `informe_anual` 553,
-sin `herbicida_contexto` 562, sin `calibracion_umbrales` 535 — los cuatro en verde.
+Comprobado borrando cada fichero: completo 595, sin `informe_anual` 584,
+sin `herbicida_contexto` 593, sin `calibracion_umbrales` 566, sin `clima_era5` 564
+— los cinco en verde (y la interfaz también, sin `clima_era5`).
 
 ---
 
@@ -325,7 +337,7 @@ sin `herbicida_contexto` 562, sin `calibracion_umbrales` 535 — los cuatro en v
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 564 pruebas, sin pantalla ni red
+python pruebas.py          # 595 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

@@ -2823,13 +2823,149 @@ def _sin_escalar(refl, idx):
 
 
 # =====================================================================
+# 26. CLIMA DE ERA5-LAND (modulo OPCIONAL: si se borra, esto se omite)
+# =====================================================================
+# Las unidades de ERA5-Land NO son las de campo: Kelvin, metros de lluvia y J/m².
+# Es exactamente la misma clase de trampa que las bandas de Sentinel-2 escaladas
+# por 10000, asi que se fija con valores de oro igual que aquellas.
+def pruebas_clima():
+    try:
+        import clima_era5 as CL
+    except Exception:
+        return
+    import almacen as DB
+
+    # --- CONVERSION DE UNIDADES: los valores de oro ---
+    # Un dia de mayo con 12 mm de lluvia y 5 mm de ET0, tal como lo entrega ERA5.
+    CRUDO = {"temperature_2m": 291.15,          # 18.0 °C
+             "temperature_2m_min": 282.65,      #  9.5 °C
+             "temperature_2m_max": 299.75,      # 26.6 °C
+             "total_precipitation_sum": 0.012,  # 12 mm
+             "potential_evaporation_sum": -0.005,   # 5 mm (ECMWF lo da negativo)
+             "surface_solar_radiation_downwards_sum": 24500000.0,   # 24.5 MJ/m2
+             "volumetric_soil_water_layer_1": 0.235,     # 23.5 %
+             "dewpoint_temperature_2m": 283.15,          # 10.0 °C
+             "u_component_of_wind_10m": 3.0,
+             "v_component_of_wind_10m": 4.0}             # modulo 5.0 m/s
+    d = CL.convertir(CRUDO)
+    check("clima: la temperatura pasa de Kelvin a grados",
+          lambda: (d["t_media"], d["t_min"], d["t_max"]),
+          lambda r: r == (18.0, 9.5, 26.6))
+    check("clima: 0.012 m de lluvia son DOCE milimetros, no doce milesimas",
+          lambda: d["lluvia"], lambda v: v == 12.0)
+    check("clima: la ET0 de ECMWF viene negativa y se ensena en mm positivos",
+          lambda: d["et0"], lambda v: v == 5.0)
+    check("clima: la radiacion pasa de J/m2 a MJ/m2",
+          lambda: d["rad"], lambda v: v == 24.5)
+    check("clima: la humedad del suelo se ensena en porcentaje",
+          lambda: d["hum_suelo"], lambda v: v == 23.5)
+    check("clima: el viento es el MODULO de las dos componentes, no su suma",
+          lambda: d["viento"], lambda v: v == 5.0)
+    check("clima: una banda que no llega queda a None, no a cero",
+          lambda: CL.convertir({"temperature_2m": 291.15}),
+          lambda r: r["lluvia"] is None and r["viento"] is None and r["t_media"] == 18.0)
+    check("clima: sin nada que convertir no revienta",
+          lambda: CL.convertir({}), lambda r: all(v is None for v in r.values()))
+    # el catalogo avisa: los acumulados traen a veces negativos sin sentido fisico
+    check("clima: una lluvia negativa (ruido del modelo) se acota a cero",
+          lambda: CL.convertir(dict(CRUDO, total_precipitation_sum=-0.0003))["lluvia"],
+          lambda v: v == 0.0)
+    check("clima: una temperatura bajo cero SI se conserva (no todo se acota)",
+          lambda: CL.convertir(dict(CRUDO, temperature_2m_min=270.15))["t_min"],
+          lambda v: v == -3.0)
+
+    # --- PUNTO DE REJILLA: dos parcelas vecinas comparten serie ---
+    check("clima: el punto se redondea al paso real de la rejilla (0.1 grados)",
+          lambda: CL.punto_de([[-4.123, 41.657], [-4.119, 41.661]]),
+          lambda p: p == "41.7,-4.1")
+    check("clima: dos parcelas del mismo pixel comparten punto (es UNA medida)",
+          lambda: (CL.punto_de([[-4.12, 41.66]]), CL.punto_de([[-4.14, 41.68]])),
+          lambda r: r[0] == r[1] == "41.7,-4.1")
+    # justo en el borde entre celdas manda la coma flotante. No es un fallo -es una
+    # clave, y para una misma coordenada siempre da lo mismo- pero se deja fijado
+    # para que nadie lo "arregle" pensando que esta mal.
+    check("clima: en el borde exacto entre dos celdas la asignacion es estable",
+          lambda: (CL.punto_de([[-4.1, 41.65]]), CL.punto_de([[-4.1, 41.65]])),
+          lambda r: r[0] == r[1])
+    check("clima: dos parcelas lejanas NO lo comparten",
+          lambda: (CL.punto_de([[-4.12, 41.65]]), CL.punto_de([[-3.10, 40.20]])),
+          lambda r: r[0] != r[1])
+    check("clima: sin geometria no hay punto (y no se inventa uno)",
+          lambda: (CL.punto_de([]), CL.punto_de(None)), lambda r: r == (None, None))
+
+    # --- RESUMEN: lluvia y ET0 se SUMAN, las extremas no se promedian ---
+    serie = [{"fecha": "2026-05-01", "lluvia": 10.0, "et0": 4.0, "t_media": 15.0,
+              "t_min": -1.0, "t_max": 22.0},
+             {"fecha": "2026-05-02", "lluvia": 2.0, "et0": 6.0, "t_media": 17.0,
+              "t_min": 3.0, "t_max": 28.0}]
+    r = CL.resumen(serie)
+    check("clima resumen: la lluvia y la ET0 se acumulan",
+          lambda: (r["lluvia"], r["et0"]), lambda x: x == (12.0, 10.0))
+    check("clima resumen: el balance es lluvia menos ET0, con su signo",
+          lambda: r["balance"], lambda v: v == 2.0)
+    check("clima resumen: de las extremas interesa la mas extrema, no su media",
+          lambda: (r["t_min"], r["t_max"]), lambda x: x == (-1.0, 28.0))
+    check("clima resumen: se cuentan los dias de helada",
+          lambda: r["dias_helada"], lambda v: v == 1)
+    check("clima resumen: sin dias no hay resumen",
+          lambda: CL.resumen([]), lambda v: v is None)
+    check("clima resumen: el texto dice lo esencial y no revienta vacio",
+          lambda: (CL.texto_resumen(r), CL.texto_resumen(None)),
+          lambda x: "lluvia 12 mm" in x[0] and "helada" in x[0] and x[1] == "")
+
+    # --- LA TABLA QUE SE PINTA ---
+    check("clima tabla: una fila por dia y una columna por variable",
+          lambda: CL.filas_tabla(serie),
+          lambda f: len(f) == 2 and all(len(x) == len(CL.COLUMNAS) for x in f))
+    check("clima tabla: lo que falta sale como guion, no como cero",
+          lambda: CL.filas_tabla([{"fecha": "2026-05-01"}])[0],
+          lambda f: f[0] == "2026-05-01" and set(f[1:]) == {"-"})
+
+    # --- ALMACEN: por punto, no por parcela ---
+    d_tmp = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d_tmp, "clima.db"))
+    DB.anadir_clima("41.7,-4.1", serie)
+    check("clima almacen: se guarda y se relee en orden",
+          lambda: [x["fecha"] for x in DB.clima("41.7,-4.1")],
+          lambda r: r == ["2026-05-01", "2026-05-02"])
+    check("clima almacen: se puede pedir un tramo",
+          lambda: len(DB.clima("41.7,-4.1", desde="2026-05-02")), lambda n: n == 1)
+    check("clima almacen: repetir no duplica (la clave es punto+fecha)",
+          lambda: (DB.anadir_clima("41.7,-4.1", serie), len(DB.clima("41.7,-4.1")))[1],
+          lambda n: n == 2)
+    check("clima almacen: la ultima fecha sirve para pedir solo lo que falta",
+          lambda: DB.ultima_fecha_clima("41.7,-4.1"), lambda f: f == "2026-05-02")
+    check("clima almacen: un punto que no existe no da error, da vacio",
+          lambda: (DB.clima("0.0,0.0"), DB.ultima_fecha_clima("0.0,0.0")),
+          lambda r: r == ([], None))
+    # dos parcelas del mismo punto leen la MISMA serie, no dos copias
+    for n, coords in (("Vecina_A", [[-4.12, 41.66]]), ("Vecina_B", [[-4.14, 41.68]])):
+        DB.guardar_ficha(n, {"propietario": "x", "coordenadas": coords, "superficie_ha": 5})
+    check("clima: dos parcelas vecinas leen la misma serie (una medida, no dos)",
+          lambda: (CL.clima_de_parcela("Vecina_A", "2025-2026"),
+                   CL.clima_de_parcela("Vecina_B", "2025-2026")),
+          lambda r: r[0] == r[1] and len(r[0]) == 2)
+    # y al quedarse sin parcelas, el punto se retira
+    check("clima: al borrar la ultima parcela de la comarca, su serie no se queda huerfana",
+          lambda: (DB.eliminar_parcela("Vecina_A"),
+                   len(DB.clima("41.7,-4.1")),          # sigue: la vecina B la usa
+                   DB.eliminar_parcela("Vecina_B"),
+                   len(DB.clima("41.7,-4.1")))[1::2],
+          lambda r: r == (2, 0))
+    check("clima: sin earthengine-api lo dice y no revienta",
+          lambda: (setattr(CL, "ee", None), CL.sincronizar_clima("X", "2025-2026"),
+                   )[1],
+          lambda r: r[0] == 0 and "earthengine" in r[1])
+
+
+# =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_rejilla, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
-              pruebas_escala_indices):
+              pruebas_escala_indices, pruebas_clima):
         try:
             f()
         except Exception as e:

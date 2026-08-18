@@ -55,7 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 6
+ESQUEMA_VERSION = 7
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -195,6 +195,12 @@ def _crear_tablas():
             regimen TEXT,              -- REGADIO | SECANO (lenosos); vacio = comodin
             densidad TEXT,             -- tradicional | intensivo | seto; vacio = comodin
             ts TEXT);
+        CREATE TABLE IF NOT EXISTS clima(
+            punto TEXT,                -- punto de la rejilla de ERA5: "lat,lon" a 0.1 grados
+            fecha TEXT,
+            datos TEXT,                -- JSON del dia ya en unidades de campo (°C, mm, MJ/m2)
+            PRIMARY KEY(punto, fecha));
+        CREATE INDEX IF NOT EXISTS ix_clima_punto ON clima(punto, fecha);
         CREATE INDEX IF NOT EXISTS ix_vidx_busca
             ON validaciones_indice(indice, especie, fase, ambito, clave_ambito);
         CREATE INDEX IF NOT EXISTS ix_vidx_parcela ON validaciones_indice(nombre);
@@ -306,10 +312,29 @@ def _migracion_6(c):
             c.execute(f"ALTER TABLE parcelas ADD COLUMN {col} {tipo}")
 
 
+def _migracion_7(c):
+    """Tabla `clima`: el contexto climatico de ERA5-Land.
+
+    NO va indexada por parcela, y es deliberado: el pixel de ERA5-Land son 11 km
+    de lado (12.392 ha), asi que todas las parcelas de una comarca comparten el
+    MISMO dato. Guardarlo por parcela seria escribir veinte copias de una sola
+    medida, con veinte oportunidades de que dejaran de cuadrar entre si. Se guarda
+    por PUNTO DE REJILLA y las parcelas lo consultan.
+
+    Por eso tampoco entra en el borrado en cascada de `eliminar_parcela` como las
+    demas tablas: un punto de rejilla no es de nadie. Lo que si se hace al borrar
+    es tirar los puntos que ya no usa ninguna parcela (ver `purgar_clima`), para
+    no dejar huerfanos."""
+    c.execute("""CREATE TABLE IF NOT EXISTS clima(
+                     punto TEXT, fecha TEXT, datos TEXT,
+                     PRIMARY KEY(punto, fecha))""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_clima_punto ON clima(punto, fecha)")
+
+
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
 _MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4,
-                5: _migracion_5, 6: _migracion_6}
+                5: _migracion_5, 6: _migracion_6, 7: _migracion_7}
 
 
 def _migrar_esquema():
@@ -591,6 +616,83 @@ def set_interpretacion(nombre, campana, fecha, texto):
         c.execute("UPDATE pasadas SET interpretacion=? WHERE nombre=? AND campana=? AND fecha=?",
                   (texto, nombre, campana, fecha))
         c.commit()
+
+
+# ---------------------------------------------------------------------------
+# CLIMA (ERA5-Land): por PUNTO DE REJILLA, no por parcela
+# ---------------------------------------------------------------------------
+# El pixel de ERA5-Land son 11 km de lado, asi que todas las parcelas de una
+# comarca comparten el MISMO dato. Se guarda una vez y lo consultan todas: no son
+# veinte medidas, es una. Aqui solo se guarda y se lee; que significan esos
+# numeros vive en `clima_era5.py`, que es opcional y extraible.
+def anadir_clima(punto, dias):
+    """Guarda los dias que falten de ese punto. No pisa lo que ya hubiera."""
+    c = _c()
+    with _LOCK:
+        for d in dias or []:
+            fecha = d.get("fecha")
+            if not punto or not fecha:
+                continue
+            datos = {k: v for k, v in d.items() if k != "fecha"}
+            c.execute("INSERT OR IGNORE INTO clima(punto,fecha,datos) VALUES(?,?,?)",
+                      (punto, fecha, json.dumps(datos, ensure_ascii=False)))
+        c.commit()
+
+
+def clima(punto, desde=None, hasta=None):
+    """Los dias de ese punto, en orden. Con `desde`/`hasta`, solo ese tramo."""
+    if not punto:
+        return []
+    sql = "SELECT fecha,datos FROM clima WHERE punto=?"
+    args = [punto]
+    if desde:
+        sql += " AND fecha>=?"
+        args.append(desde)
+    if hasta:
+        sql += " AND fecha<=?"
+        args.append(hasta)
+    c = _c()
+    with _LOCK:
+        out = []
+        for r in c.execute(sql + " ORDER BY fecha", args):
+            d = json.loads(r["datos"]) if r["datos"] else {}
+            d["fecha"] = r["fecha"]
+            out.append(d)
+        return out
+
+
+def ultima_fecha_clima(punto):
+    """MAX(fecha) de ese punto, para pedir solo lo que falte."""
+    if not punto:
+        return None
+    c = _c()
+    with _LOCK:
+        r = c.execute("SELECT MAX(fecha) AS f FROM clima WHERE punto=? AND fecha<>''",
+                      (punto,)).fetchone()
+        return r["f"] if r else None
+
+
+def puntos_clima():
+    """Los puntos de rejilla que hay guardados."""
+    c = _c()
+    with _LOCK:
+        return {r["punto"] for r in c.execute("SELECT DISTINCT punto FROM clima")}
+
+
+def purgar_clima(en_uso):
+    """Borra los puntos de rejilla que ya no usa ninguna parcela.
+
+    El clima no es de nadie, asi que no entra en el borrado en cascada de una
+    parcela como las demas tablas; pero si se borra la ultima parcela de una
+    comarca, su serie se queda ahi para siempre. `en_uso` es el conjunto de puntos
+    que siguen haciendo falta. Devuelve cuantos puntos se han tirado."""
+    c = _c()
+    with _LOCK:
+        sobran = puntos_clima() - set(en_uso or ())
+        for p in sobran:
+            c.execute("DELETE FROM clima WHERE punto=?", (p,))
+        c.commit()
+        return len(sobran)
 
 
 # ---------------------------------------------------------------------------

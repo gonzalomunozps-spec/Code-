@@ -100,6 +100,14 @@ try:
 except Exception:
     _CALIB = None
 
+# Modulo OPCIONAL y extraible: contexto climatico de ERA5-Land. Si se borra
+# clima_era5.py, desaparece la tarjeta de clima de la ficha y no hay nada mas que
+# tocar. Lo ya descargado se queda en la tabla `clima`, por si se repone.
+try:
+    import clima_era5 as _CLIMA
+except Exception:
+    _CLIMA = None
+
 # Margen interior por defecto de la rejilla de pixeles. Mismo valor que
 # gee_cliente.BUFFER_INTERIOR_M; se repite aqui para no importar ese modulo (que
 # arrastra `ee`) solo por un numero que hay que ensenar en un formulario.
@@ -2422,6 +2430,13 @@ class FichaParcela:
         inf2.pack_propagate(False)
         self._build_cuaderno(inf2)
 
+        # CLIMA (ERA5-Land), antes de la estadistica. Solo con el modulo opcional.
+        if _CLIMA is not None:
+            inf_cl = tk.Frame(cuerpo, bg=TEMA["page"], height=240)
+            inf_cl.pack(fill="x", pady=(14, 0))
+            inf_cl.pack_propagate(False)
+            self._build_clima(inf_cl)
+
         # estadistica espacial por pasada, bajo el cuaderno de campo
         inf3 = tk.Frame(cuerpo, bg=TEMA["page"], height=240)
         inf3.pack(fill="x", pady=(14, 0))
@@ -2573,6 +2588,68 @@ class FichaParcela:
                   ("p75", "P75", 56, 2), ("p90", "P90", 56, 2),
                   ("amplitud", "P90-P10", 66, 2), ("n_pixeles", "PIXELES", 62, 0),
                   ("cobertura_valida", "COB.%", 56, "pct")]
+
+    def _build_clima(self, parent):
+        """Tabla de clima diario de ERA5-Land. SOLO ENSENA DATOS: de momento no
+        mueve ningun diagnostico, ni un umbral, ni una fase."""
+        card = tarjeta(parent)
+        card.pack(fill="both", expand=True)
+        self._titulo(card, "Clima de la comarca (ERA5-Land)")
+        self.lbl_clima = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                  font=FUENTES["small"], justify="left", anchor="w",
+                                  wraplength=1180)
+        self.lbl_clima.pack(fill="x", padx=12, pady=(0, 4))
+        cols = [c[0] for c in _CLIMA.COLUMNAS]
+        self.tv_clima = ttk.Treeview(card, columns=cols, show="headings", height=6)
+        for clave, titulo, ancho, _dec in _CLIMA.COLUMNAS:
+            self.tv_clima.heading(clave, text=titulo)
+            self.tv_clima.column(clave, width=ancho,
+                                 anchor="w" if clave == "fecha" else "center")
+        sb = ttk.Scrollbar(card, orient="vertical", command=self.tv_clima.yview)
+        self.tv_clima.configure(yscrollcommand=sb.set)
+        self.tv_clima.pack(side="left", fill="both", expand=True, padx=(12, 0), pady=(0, 12))
+        sb.pack(side="right", fill="y", padx=(0, 12), pady=(0, 12))
+        ttk.Button(card, text="  Descargar clima  ",
+                   command=self._sincronizar_clima).pack(side="bottom", anchor="w",
+                                                         padx=12, pady=(0, 8))
+
+    def _pintar_clima(self):
+        """Vuelca los dias de clima del punto de rejilla de esta parcela."""
+        if _CLIMA is None or not hasattr(self, "tv_clima") or not self.tv_clima.winfo_exists():
+            return
+        dias = _CLIMA.clima_de_parcela(self.nombre, self.campana)
+        self.tv_clima.delete(*self.tv_clima.get_children())
+        for fila in _CLIMA.filas_tabla(dias):
+            self.tv_clima.insert("", tk.END, values=fila)
+        if dias:
+            self.lbl_clima.config(
+                text=_CLIMA.texto_resumen(_CLIMA.resumen(dias)) +
+                "\n⚠ El pixel de ERA5-Land son 11 km de lado (12.392 ha): TODAS tus "
+                "parcelas de la comarca reciben el mismo dato. Sirve de contexto, no "
+                "para comparar una finca con su vecina. Va con unos 8 dias de retraso.")
+        else:
+            self.lbl_clima.config(
+                text="Sin datos de clima para esta campana. Pulsa «Descargar clima» "
+                     "(hace falta Earth Engine). El dato es de comarca, no de parcela: "
+                     "el pixel de ERA5-Land son 11 km de lado.")
+
+    def _sincronizar_clima(self):
+        if _CLIMA is None:
+            return
+        if not _EE:
+            return messagebox.showwarning("Clima", "earthengine-api no disponible.")
+        ficha = self.panel.vista_ficha
+
+        def worker():
+            n, msg = _CLIMA.sincronizar_clima(self.nombre, self.campana, silencioso=True)
+
+            def fin():
+                if not ficha.winfo_exists():
+                    return
+                self._pintar_clima()
+                messagebox.showinfo("Clima", f"{msg}.")
+            ficha.after(0, fin)
+        threading.Thread(target=worker, daemon=True).start()
 
     def _build_estadisticas(self, parent):
         card = tarjeta(parent)
@@ -2824,6 +2901,7 @@ class FichaParcela:
         self._pintar_leyenda()
         self._pintar_graficas(regs)
         self._pintar_interp(regs)
+        self._pintar_clima()
         self._pintar_estadisticas(regs)
         self._pintar_mapa()
 
