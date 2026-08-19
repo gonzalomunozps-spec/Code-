@@ -43,13 +43,12 @@ try:
 except Exception:
     _MAPVIEW = False
 
-import matplotlib
-matplotlib.use("TkAgg")
-import matplotlib as mpl
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.colors as mcolors
-import matplotlib.dates as mdates
+# matplotlib se carga TARDE, la primera vez que hace falta una grafica.
+# Importarla cuesta ~1,6 s y era, con diferencia, lo que mas retrasaba la
+# aparicion de la ventana -para algo que no se usa hasta abrir una ficha, y que
+# no se usa NUNCA si solo se consulta la lista-. Aqui solo quedan reservados los
+# nombres; los rellena `_matplotlib()`, que llama todo metodo que dibuja.
+matplotlib = Figure = FigureCanvasTkAgg = mcolors = mdates = mpl = None
 
 # La interpretacion (y la llamada opcional a ChatGPT) viven en
 # interpretacion_fenologica; el panel no habla con OpenAI directamente.
@@ -131,6 +130,100 @@ def _abrir_archivo(ruta):
 
 
 # =====================================================================
+# ALTA RESOLUCION (DPI) Y ESCALA DE LA INTERFAZ
+# =====================================================================
+# Windows entrega a los programas que NO se declaran «conscientes del DPI» una
+# ventana de 96 ppp y luego la AMPLIA como si fuera un mapa de bits: en un monitor
+# 4K al 150 % la aplicacion entera sale borrosa, el texto el primero. Declararlo
+# hay que hacerlo ANTES de crear la ventana -despues Windows ya ha decidido-, y
+# por eso esto no vive dentro de `aplicar_tema`. En Linux y macOS el sistema de
+# ventanas ya entrega pixeles reales: la funcion no hace nada y no estorba.
+def activar_dpi():
+    """Declara el proceso consciente del DPI. Llamar ANTES de crear `tk.Tk()`."""
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)     # 2 = por monitor
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()          # anterior a Windows 8.1
+        return True
+    except Exception:
+        return False       # no es Windows: aqui no hay nada que declarar
+
+
+# Cuanto hay que ampliar lo que esta medido en pixeles. Lo rellena `aplicar_tema`
+# leyendo el DPI real de la pantalla.
+#
+# OJO, no es cosmetico: al declarar el DPI las FUENTES pasan a medir sus puntos de
+# verdad y crecen, pero una caja de 380 px sigue midiendo 380 px. Si no crecen las
+# dos a la vez el contenido deja de caber, y `pack` -dentro del marco con scroll
+# de la ficha- no avisa: sencillamente no dibuja lo ultimo que hay dentro (esta
+# contado en `FichaParcela`). Por eso TODA medida en pixeles pensada para un
+# monitor de 96 ppp pasa por `esc()`.
+_ESCALA = {"f": 1.0}
+
+
+def esc(px):
+    """Una medida pensada a 96 ppp, en pixeles de esta pantalla."""
+    return int(round(px * _ESCALA["f"]))
+
+
+def geom(ancho, alto):
+    """La cadena de `geometry()` para un tamano pensado a 96 ppp."""
+    return f"{esc(ancho)}x{esc(alto)}"
+
+
+def _factor_escala(root):
+    """El factor de ampliacion de esta pantalla. 1.0 en un monitor de 96 ppp."""
+    try:
+        ppp = float(root.winfo_fpixels("1i"))
+    except Exception:
+        return 1.0
+    if ppp <= 0:
+        return 1.0
+    # Se redondea a cuartos porque es lo que ofrecen los sistemas de verdad
+    # (100 %, 125 %, 150 %...) y porque el DPI que informa la pantalla trae ruido:
+    # a 96 ppp salia 1,0007 y una ventana de 1440 px acababa midiendo 1441.
+    # Acotado ademas: por debajo de 1 encogeria una interfaz ya ajustada, y por
+    # encima de 3 no hay pantalla que lo pida -seria un DPI mal informado-.
+    return min(max(round(ppp / 96.0 * 4) / 4, 1.0), 3.0)
+
+
+# =====================================================================
+# ICONO DE LA APLICACION
+# =====================================================================
+# Sin esto, la ventana y la barra de tareas ensenan la pluma de Tk, que es lo
+# primero que delata a un programa a medio terminar. Los ficheros viven junto al
+# fuente (el proyecto es plano) y son OPCIONALES: si faltan, no pasa nada.
+DIR_APP = os.path.dirname(os.path.abspath(__file__))
+ICONO_PNG = os.path.join(DIR_APP, "icono.png")
+ICONO_ICO = os.path.join(DIR_APP, "icono.ico")
+
+_ICONOS = []          # hay que guardar la referencia: Tk no se queda con la imagen
+
+
+def poner_icono(root):
+    """Pone el icono en la ventana y en la barra de tareas. Silencioso si falta."""
+    puesto = False
+    # En Windows el icono de la BARRA DE TAREAS sale del .ico, no del PNG.
+    if os.path.exists(ICONO_ICO):
+        try:
+            root.iconbitmap(default=ICONO_ICO)
+            puesto = True
+        except Exception:
+            pass       # fuera de Windows, `iconbitmap` con .ico no siempre existe
+    if os.path.exists(ICONO_PNG):
+        try:
+            img = tk.PhotoImage(file=ICONO_PNG, master=root)
+            _ICONOS.append(img)                # si se recolecta, el icono se va
+            root.iconphoto(True, img)          # True = tambien las ventanas hijas
+            puesto = True
+        except Exception:
+            log.warning("no se pudo poner el icono de la aplicacion", exc_info=True)
+    return puesto
+
+
+# =====================================================================
 # TEMA / SISTEMA DE DISENO
 # =====================================================================
 TEMA = {
@@ -163,8 +256,26 @@ def _familia_disponible(root, candidatas):
     return "TkDefaultFont"
 
 
-def aplicar_tema(root):
-    """Configura ttk.Style, fuentes y matplotlib. Llamar una vez tras crear la ventana."""
+def aplicar_tema(root, escala=None):
+    """Configura ttk.Style y fuentes. Llamar una vez tras crear la ventana.
+
+    `escala` fija a mano el factor de ampliacion en vez de deducirlo de la
+    pantalla. Existe para las PRUEBAS: si el factor sale del DPI del monitor, la
+    misma suite da resultados distintos en cada maquina. Con `escala=1.0` se
+    comprueba siempre la misma interfaz, se ejecute donde se ejecute.
+
+    matplotlib ya no se toca aqui: su tema se aplica solo, al cargarla la primera
+    grafica (ver `_matplotlib`)."""
+    _ESCALA["f"] = float(escala) if escala else _factor_escala(root)
+    try:
+        # `tk scaling` son pixeles por punto tipografico. Con el DPI real, una
+        # fuente de 10 puntos mide diez puntos DE VERDAD en cualquier pantalla, en
+        # vez de diez puntos «de 96 ppp» que luego el sistema estira. Los 96/72
+        # son los pixeles por punto de un monitor de referencia.
+        root.tk.call("tk", "scaling", _ESCALA["f"] * 96.0 / 72.0 if escala
+                     else root.winfo_fpixels("1i") / 72.0)
+    except Exception:
+        pass       # silencio deliberado: sin escalado se ve pequena, no rota
     fam = _familia_disponible(root, ["Segoe UI", "Helvetica Neue", "Inter",
                                      "Roboto", "DejaVu Sans", "Arial"])
     FUENTES["fam"] = fam
@@ -207,7 +318,7 @@ def aplicar_tema(root):
                fieldbackground=[("readonly", TEMA["surface"])])
 
     st.configure("Treeview", background=TEMA["surface"], fieldbackground=TEMA["surface"],
-                 foreground=TEMA["text"], rowheight=30, borderwidth=0, font=FUENTES["body"])
+                 foreground=TEMA["text"], rowheight=esc(30), borderwidth=0, font=FUENTES["body"])
     st.configure("Treeview.Heading", background=TEMA["surface_alt"],
                  foreground=TEMA["text_muted"], relief="flat", padding=(10, 8),
                  font=tkfont.Font(family=fam, size=10, weight="bold"))
@@ -224,6 +335,11 @@ def aplicar_tema(root):
     st.configure("Vertical.TScrollbar", background=TEMA["border"], troughcolor=TEMA["page"],
                  bordercolor=TEMA["page"], arrowcolor=TEMA["text_muted"])
 
+    return st
+
+
+def _tema_matplotlib():
+    """El tema de las graficas. Lo llama `_matplotlib()` nada mas cargarla."""
     mpl.rcParams.update({
         "font.size": 9,
         "figure.facecolor": TEMA["surface"], "axes.facecolor": TEMA["surface"],
@@ -235,7 +351,29 @@ def aplicar_tema(root):
         "xtick.color": TEMA["text_muted"], "ytick.color": TEMA["text_muted"],
         "legend.frameon": False,
     })
-    return st
+
+
+def _matplotlib():
+    """Carga matplotlib y le aplica el tema. A partir de la segunda vez no cuesta.
+
+    La llama al empezar todo metodo que dibuja. Importarla al abrir el programa
+    costaba ~1,6 s de ventana en blanco por algo que puede no usarse nunca."""
+    global matplotlib, Figure, FigureCanvasTkAgg, mcolors, mdates, mpl
+    if Figure is not None:
+        return
+    import matplotlib                  # el nombre a secas: lo usan las barras de color
+    matplotlib.use("TkAgg")
+    # `matplotlib.colorbar` NO viene por el hecho de importar el paquete. Antes
+    # llegaba de rebote, porque algun otro import lo arrastraba; se pide aparte
+    # para no depender de esa casualidad.
+    import matplotlib.colorbar         # noqa: F401  (se usa como matplotlib.colorbar)
+    from matplotlib.figure import Figure as _Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as _Lienzo
+    import matplotlib.colors as _mcolors
+    import matplotlib.dates as _mdates
+    mpl, Figure, FigureCanvasTkAgg = matplotlib, _Figure, _Lienzo
+    mcolors, mdates = _mcolors, _mdates
+    _tema_matplotlib()
 
 
 def tarjeta(parent, **kw):
@@ -940,7 +1078,7 @@ class PanelGestionParcelas(ttk.Frame):
         self.tree = ttk.Treeview(wrap, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=titulos[c])
-            self.tree.column(c, width=anchos[c], anchor="e" if c == "superficie" else "w")
+            self.tree.column(c, width=esc(anchos[c]), anchor="e" if c == "superficie" else "w")
         sb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
@@ -1102,7 +1240,7 @@ class VentanaAltaParcela(tk.Toplevel):
         self.editar = editar                       # nombre de la parcela a editar (o None = alta)
         self.campana_edit = campana or panel.campana
         self.title("Editar parcela" if editar else "Nueva parcela")
-        self.geometry("1000x600")
+        self.geometry(geom(1000, 600))
         self.configure(bg=TEMA["page"])
         self.coords = []
         self.poligono = None
@@ -1523,7 +1661,7 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.pendientes = list(pendientes)
         self.idx = 0
         self.title("Nueva campana - Asignacion de cultivos")
-        self.geometry("440x300")
+        self.geometry(geom(440, 300))
         self.configure(bg=TEMA["page"])
         self.transient(panel.winfo_toplevel())   # siempre por encima de la principal
         self.grab_set()          # modal
@@ -2027,6 +2165,7 @@ class PanelMapaComparado:
                                  self.lbl_info.config(text=t))
         self.lienzo.pack(side="left", fill="both", expand=True)
         self.canvas = self.lienzo.canvas          # alias para mensajes de estado
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self.fig_ley = Figure(figsize=(0.9, 3.0), dpi=90)
         self.cv_ley = FigureCanvasTkAgg(self.fig_ley, master=cont)
         self.cv_ley.get_tk_widget().pack(side="right", fill="y")
@@ -2065,6 +2204,7 @@ class PanelMapaComparado:
                                                                    TEMA["danger_fg"]))
 
     def _leyenda(self):
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self.fig_ley.clear()
         idx = self.cb_idx.get()
         ax = self.fig_ley.add_axes([0.1, 0.05, 0.32, 0.9])
@@ -2083,7 +2223,7 @@ class VentanaComparaMapas(tk.Toplevel):
     def __init__(self, master, nombre, campana, fechas_map, idx_ini, res_ini):
         super().__init__(master)
         self.title(f"Comparar mapas · {nombre.replace('_', ' ')} · {campana}")
-        self.geometry("1150x620")
+        self.geometry(geom(1150, 620))
         self.configure(bg=TEMA["page"])
         self.transient(master.winfo_toplevel())
         self.lift()
@@ -2223,7 +2363,7 @@ class VentanaRadar(tk.Toplevel):
         self.radar = radar or []
         self.coords = (DB.ficha(nombre) or {}).get("coordenadas") or []
         self.title(f"Sentinel-1 (radar) · {nombre.replace('_', ' ')} · {campana}")
-        self.geometry("1160x650")
+        self.geometry(geom(1160, 650))
         self.configure(bg=TEMA["page"])
         self.transient(master.winfo_toplevel())
         self.lift()
@@ -2246,6 +2386,7 @@ class VentanaRadar(tk.Toplevel):
         izq.pack(side="left", fill="both", expand=True, padx=(0, 6))
         tk.Label(izq, text="Evolucion de los parametros de radar", bg=TEMA["surface"],
                  fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=12, pady=(10, 4))
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self.fig = Figure(figsize=(6, 2.7), dpi=90)
         self.cv = FigureCanvasTkAgg(self.fig, master=izq)
         self.cv.get_tk_widget().pack(fill="x", padx=12, pady=(0, 6))
@@ -2290,6 +2431,7 @@ class VentanaRadar(tk.Toplevel):
         self.lienzo = LienzoMapa(cont, on_info=lambda t: self.lbl_info.winfo_exists() and
                                  self.lbl_info.config(text=t))
         self.lienzo.pack(side="left", fill="both", expand=True)
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self.fig_ley = Figure(figsize=(0.95, 3.0), dpi=90)
         self.cv_ley = FigureCanvasTkAgg(self.fig_ley, master=cont)
         self.cv_ley.get_tk_widget().pack(side="right", fill="y")
@@ -2333,6 +2475,7 @@ class VentanaRadar(tk.Toplevel):
         self.cv.draw()
 
     def _leyenda_radar(self, param):
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self.fig_ley.clear()
         vis = RADAR_VIS.get(param, RADAR_VIS["RVI"])
         ax = self.fig_ley.add_axes([0.1, 0.05, 0.32, 0.9])
@@ -2409,13 +2552,13 @@ class FichaParcela:
         # Alturas fijas por fila: dentro de un marco con scroll el contenido debe
         # tener una altura REAL (si se deja expand=True, el mapa y la grafica se
         # estiran hasta la ventana y no queda nada que desplazar -> no se ve abajo).
-        sup = tk.Frame(cuerpo, bg=TEMA["page"], height=380)
+        sup = tk.Frame(cuerpo, bg=TEMA["page"], height=esc(380))
         sup.pack(fill="x")
         sup.pack_propagate(False)
         self._build_tabla(sup)
         self._build_mapa(sup)
 
-        inf = tk.Frame(cuerpo, bg=TEMA["page"], height=320)
+        inf = tk.Frame(cuerpo, bg=TEMA["page"], height=esc(320))
         inf.pack(fill="x", pady=(14, 0))
         inf.pack_propagate(False)
         self._build_graficas(inf)
@@ -2425,20 +2568,20 @@ class FichaParcela:
         # proposito, como el resto de filas: dentro del marco con scroll el contenido
         # necesita altura real. Si se le queda corto, pack deja sin dibujar lo ultimo
         # que hay dentro -que es la lista de rendimientos-, sin avisar de nada.
-        inf2 = tk.Frame(cuerpo, bg=TEMA["page"], height=410)
+        inf2 = tk.Frame(cuerpo, bg=TEMA["page"], height=esc(410))
         inf2.pack(fill="x", pady=(14, 0))
         inf2.pack_propagate(False)
         self._build_cuaderno(inf2)
 
         # CLIMA (ERA5-Land), antes de la estadistica. Solo con el modulo opcional.
         if _CLIMA is not None:
-            inf_cl = tk.Frame(cuerpo, bg=TEMA["page"], height=240)
+            inf_cl = tk.Frame(cuerpo, bg=TEMA["page"], height=esc(240))
             inf_cl.pack(fill="x", pady=(14, 0))
             inf_cl.pack_propagate(False)
             self._build_clima(inf_cl)
 
         # estadistica espacial por pasada, bajo el cuaderno de campo
-        inf3 = tk.Frame(cuerpo, bg=TEMA["page"], height=240)
+        inf3 = tk.Frame(cuerpo, bg=TEMA["page"], height=esc(240))
         inf3.pack(fill="x", pady=(14, 0))
         inf3.pack_propagate(False)
         self._build_estadisticas(inf3)
@@ -2576,7 +2719,7 @@ class FichaParcela:
         self.tv = ttk.Treeview(card, columns=cols, show="headings", height=10)
         for c in cols:
             self.tv.heading(c, text=c.upper())
-            self.tv.column(c, width=88 if c == "fecha" else 56,
+            self.tv.column(c, width=esc(88) if c == "fecha" else esc(56),
                            anchor="w" if c == "fecha" else "center")
         self.tv.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.tv.tag_configure("ult", background="#fffaf0")
@@ -2603,7 +2746,7 @@ class FichaParcela:
         self.tv_clima = ttk.Treeview(card, columns=cols, show="headings", height=6)
         for clave, titulo, ancho, _dec in _CLIMA.COLUMNAS:
             self.tv_clima.heading(clave, text=titulo)
-            self.tv_clima.column(clave, width=ancho,
+            self.tv_clima.column(clave, width=esc(ancho),
                                  anchor="w" if clave == "fecha" else "center")
         sb = ttk.Scrollbar(card, orient="vertical", command=self.tv_clima.yview)
         self.tv_clima.configure(yscrollcommand=sb.set)
@@ -2662,7 +2805,7 @@ class FichaParcela:
         self.tv_est = ttk.Treeview(card, columns=cols, show="headings", height=7)
         for clave, titulo, ancho, _dec in self.COLS_ESTAD:
             self.tv_est.heading(clave, text=titulo)
-            self.tv_est.column(clave, width=ancho,
+            self.tv_est.column(clave, width=esc(ancho),
                                anchor="w" if clave == "fecha" else "center")
         self.tv_est.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.tv_est.tag_configure("ult", background="#fffaf0")
@@ -2744,6 +2887,7 @@ class FichaParcela:
                                  self.lbl_res.config(text=t))
         self.lienzo.pack(side="left", fill="both", expand=True)
         self.canvas_mapa = self.lienzo.canvas   # alias para mensajes de estado
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self.fig_ley = Figure(figsize=(1.0, 3.2), dpi=90)
         self.cv_ley = FigureCanvasTkAgg(self.fig_ley, master=cont)
         self.cv_ley.get_tk_widget().pack(side="right", fill="y")
@@ -2776,6 +2920,7 @@ class FichaParcela:
         self.idx_vars["RVI"] = tk.BooleanVar(value=True)
         ttk.Checkbutton(ctrl, text="RVI·S1", variable=self.idx_vars["RVI"],
                         command=self._replot).pack(side="left", padx=(6, 1))
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self.fig = Figure(figsize=(6, 2.7), dpi=90)
         self.cv = FigureCanvasTkAgg(self.fig, master=card)
         self.cv.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -2911,6 +3056,7 @@ class FichaParcela:
         return f"{_FMT_DIAS[d.weekday()]}, {d.day} {_FMT_MESES[d.month-1]} {d.year}"
 
     def _pintar_graficas(self, regs):
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self._regs_actual = regs         # para volver a pintar al cambiar de indices
         self.fig.clear()
         ax = self.fig.add_subplot(111)
@@ -3019,6 +3165,7 @@ class FichaParcela:
         self.cv.draw_idle()
 
     def _pintar_leyenda(self):
+        _matplotlib()      # se carga aqui, no al abrir el programa
         self.fig_ley.clear()
         idx = self.cb_idx.get()
         ax = self.fig_ley.add_axes([0.1, 0.05, 0.32, 0.9])
@@ -3300,7 +3447,7 @@ class FichaParcela:
         self.tv_ev = ttk.Treeview(card, columns=cols, show="headings", height=5)
         for c, w in [("fecha", 90), ("tipo", 90), ("detalle", 300), ("efecto", 260)]:
             self.tv_ev.heading(c, text=c.capitalize())
-            self.tv_ev.column(c, width=w, anchor="w")
+            self.tv_ev.column(c, width=esc(w), anchor="w")
         self.tv_ev.pack(fill="both", expand=True, padx=12, pady=(0, 6))
         self.tv_ev.bind("<Double-1>", lambda e: self._ver_efecto_evento())
         self.tv_ev.bind("<Button-3>", self._menu_evento)
@@ -3839,21 +3986,43 @@ class PanelCredenciales(ttk.Frame):
 # DEMO
 # =====================================================================
 if __name__ == "__main__":
+    # ANTES de tk.Tk(): una vez creada la ventana, Windows ya ha decidido como la
+    # escala y declararse consciente del DPI no sirve de nada.
+    activar_dpi()
+
     DB.conectar()                    # abre SQLite y migra los JSON antiguos si existen
     _cfg = CRED.cargar()
     CRED.aplicar_entorno(_cfg)
-    if _EE:
-        _est, _msg = CRED.probar_gee(_cfg.get("gee_project"), _cfg.get("gee_key_file"),
-                                     _cfg.get("gee_service_account"))
-        if _est != "ok":
-            print(f"Aviso GEE: {_msg}")
+
     root = tk.Tk()
+    root.withdraw()                  # se monta a escondidas y se ensena ya hecha
     root.title("Gestion de Parcelas - Copernicus")
-    root.geometry("1440x900")
     aplicar_tema(root)
+    poner_icono(root)
+    root.geometry(geom(1440, 900))
+    # Por debajo de esto las filas de la ficha -que tienen altura fija- dejan de
+    # caber, y `pack` recorta sin avisar. Mejor que el gestor de ventanas lo impida.
+    root.minsize(esc(1024), esc(640))
+
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = PanelGestionParcelas(nb)
     nb.add(panel, text="  Gestion de Parcelas  ")
     nb.add(PanelCredenciales(nb, al_cambiar=panel._refrescar), text="  Credenciales  ")
+
+    root.deiconify()                 # de golpe, sin verla construirse por partes
+
+    # La comprobacion de Earth Engine es una llamada de RED, y estaba ANTES de la
+    # ventana: la pantalla se quedaba vacia todo lo que tardase el servidor -y sin
+    # salida a internet, hasta que venciera el plazo-. Ahora va detras y en
+    # segundo plano; solo sirve para avisar por consola. El panel de Credenciales
+    # la repite por su cuenta y ensena el resultado en su insignia.
+    if _EE:
+        def _aviso_gee():
+            _est, _msg = CRED.probar_gee(_cfg.get("gee_project"), _cfg.get("gee_key_file"),
+                                         _cfg.get("gee_service_account"))
+            if _est != "ok":
+                print(f"Aviso GEE: {_msg}")
+        threading.Thread(target=_aviso_gee, daemon=True).start()
+
     root.mainloop()

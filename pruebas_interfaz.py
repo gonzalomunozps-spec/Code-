@@ -203,7 +203,7 @@ def escenario_arranque(P, DB):
     """La ventana principal, tal cual la monta __main__."""
     from tkinter import ttk
     root = _raiz()
-    _paso("tema", lambda: P.aplicar_tema(root))
+    _paso("tema", lambda: P.aplicar_tema(root, escala=1.0))
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = P.PanelGestionParcelas(nb)
@@ -222,7 +222,7 @@ def escenario_lista(P, DB):
     """Busqueda, orden, cambio de campana, menu contextual y botones."""
     from tkinter import ttk
     root = _raiz()
-    P.aplicar_tema(root)
+    P.aplicar_tema(root, escala=1.0)
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = P.PanelGestionParcelas(nb)
@@ -281,7 +281,7 @@ def escenario_fichas(P, DB):
     import tkinter as tk
     from tkinter import ttk
     root = _raiz()
-    P.aplicar_tema(root)
+    P.aplicar_tema(root, escala=1.0)
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = P.PanelGestionParcelas(nb)
@@ -347,7 +347,7 @@ def escenario_cuaderno(P, DB):
     import tkinter as tk
     from tkinter import ttk
     root = _raiz()
-    P.aplicar_tema(root)
+    P.aplicar_tema(root, escala=1.0)
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = P.PanelGestionParcelas(nb)
@@ -428,7 +428,7 @@ def escenario_validacion_indices(P, DB):
     from tkinter import ttk
     CAL = P._CALIB
     root = _raiz()
-    P.aplicar_tema(root)
+    P.aplicar_tema(root, escala=1.0)
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = P.PanelGestionParcelas(nb)
@@ -542,7 +542,7 @@ def escenario_campanas(P, DB):
     from tkinter import ttk
     from campanas import campana_actual, PRIMERA_CAMPANA_S2
     root = _raiz()
-    P.aplicar_tema(root)
+    P.aplicar_tema(root, escala=1.0)
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = P.PanelGestionParcelas(nb)
@@ -608,7 +608,7 @@ def escenario_dialogos(P, DB):
     import tkinter as tk
     from tkinter import ttk
     root = _raiz()
-    P.aplicar_tema(root)
+    P.aplicar_tema(root, escala=1.0)
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = P.PanelGestionParcelas(nb)
@@ -776,7 +776,7 @@ def escenario_cierre(P, DB):
     threading.excepthook = lambda a: fallos_hilo.append(f"{a.exc_type.__name__}: {a.exc_value}")
 
     root = _raiz()
-    P.aplicar_tema(root)
+    P.aplicar_tema(root, escala=1.0)
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
     panel = P.PanelGestionParcelas(nb)
@@ -820,11 +820,105 @@ def escenario_cierre(P, DB):
     return f"{len(hechas)} escenas de cierre"
 
 
+# Si matplotlib estaba cargada ya al importar el panel, la carga perezosa se ha
+# roto: se anota en el momento del import (ver `main`) porque despues es tarde.
+_MPL_AL_IMPORTAR = []
+
+
+def escenario_presentacion(P, DB):
+    """Escalado por DPI, icono y carga perezosa de matplotlib.
+
+    Lo que se vigila aqui no es que «se vea bonito» -eso no lo comprueba ninguna
+    prueba- sino tres cosas que, al fallar, fallan CALLANDO: que en un monitor
+    normal no se mueva ni un pixel, que las cajas medidas en pixeles crezcan al
+    menos tanto como las fuentes (si no, `pack` recorta sin avisar), y que
+    matplotlib siga sin cargarse hasta que haga falta una grafica."""
+    from tkinter import ttk
+    hechos = []
+
+    # --- 1. matplotlib NO puede estar cargada solo por importar el modulo ---
+    _paso("al importar el panel, matplotlib sigue sin cargarse",
+          lambda: (_ for _ in ()).throw(AssertionError("matplotlib cargada de mas"))
+          if not all(_MPL_AL_IMPORTAR) else None)
+
+    root = _raiz()
+    P.aplicar_tema(root, escala=1.0)
+
+    # --- 2. el factor de escala es sensato y cuantizado ---
+    f = P._ESCALA["f"]
+    _paso("el factor de escala esta acotado y va en cuartos",
+          lambda: (_ for _ in ()).throw(AssertionError(f"factor raro: {f}"))
+          if not (1.0 <= f <= 3.0 and abs(f * 4 - round(f * 4)) < 1e-9) else None)
+    hechos.append(f"factor {f}")
+
+    # --- 3. `esc` y `geom` son coherentes con ese factor ---
+    _paso("esc() y geom() aplican el factor vigente",
+          lambda: (_ for _ in ()).throw(AssertionError("esc/geom no cuadran"))
+          if (P.esc(100) != int(round(100 * f))
+              or P.geom(800, 600) != f"{P.esc(800)}x{P.esc(600)}") else None)
+
+    # --- 4. las cajas crecen AL MENOS tanto que el texto ---
+    # Es la condicion que evita el fallo silencioso: si la fuente creciera mas que
+    # su caja, el contenido dejaria de caber y `pack` no dibujaria lo ultimo.
+    alto_linea = P.FUENTES["body"].metrics("linespace")
+    _paso("una caja escalada crece al menos como la fuente",
+          lambda: (_ for _ in ()).throw(AssertionError(
+              f"caja {P.esc(380)} vs texto {alto_linea}"))
+          if P.esc(380) / 380.0 < alto_linea / 17.0 - 0.01 else None)
+
+    # --- 5. el icono se pone (o se salta sin romper si no esta el fichero) ---
+    _paso("poner_icono no revienta", lambda: P.poner_icono(root))
+    hechos.append("icono " + ("puesto" if P.poner_icono(root) else "ausente"))
+
+    # --- 4bis. LA MISMA interfaz a 150 %, en una raiz aparte ---
+    # Sin esto, el camino escalado no lo prueba nadie: la suite fija escala 1.0
+    # para ser reproducible, y entonces `esc()` seria siempre la identidad.
+    alta = _raiz()
+    P.aplicar_tema(alta, escala=1.5)
+    grande = alta.tk.call("tk", "scaling")
+    _paso("a 150 % las medidas y el texto crecen a la vez",
+          lambda: (_ for _ in ()).throw(AssertionError(
+              f"esc(380)={P.esc(380)} texto={P.FUENTES['body'].metrics('linespace')} "
+              f"scaling={grande}"))
+          if not (P.esc(380) == 570 and P.geom(1000, 600) == "1500x900"
+                  and float(grande) > 1.9) else None)
+    nb2 = ttk.Notebook(alta)
+    nb2.pack(fill="both", expand=True)
+    panel2 = P.PanelGestionParcelas(nb2)
+    nb2.add(panel2, text="x")
+    alta.update()
+    _paso("y la ficha entera se monta a esa escala", lambda: (
+        panel2.mostrar_ficha(sorted(DB.nombres())[0]), alta.update()))
+    _derribar(alta)
+    P.aplicar_tema(root, escala=1.0)      # se deja como estaba para el resto
+    hechos.append("150 % comprobado")
+
+    # --- 6. abrir una ficha SI carga matplotlib, y con el tema aplicado ---
+    nb = ttk.Notebook(root)
+    nb.pack(fill="both", expand=True)
+    panel = P.PanelGestionParcelas(nb)
+    nb.add(panel, text="x")
+    root.update()
+    panel.mostrar_ficha(sorted(DB.nombres())[0])
+    root.update()
+    _paso("abrir una ficha carga matplotlib",
+          lambda: (_ for _ in ()).throw(AssertionError("matplotlib sin cargar"))
+          if P.Figure is None else None)
+    _paso("y le aplica el tema de las graficas",
+          lambda: (_ for _ in ()).throw(AssertionError("rcParams sin tema"))
+          if P.mpl.rcParams["axes.facecolor"] != P.TEMA["surface"] else None)
+
+    _derribar(root)
+    return ", ".join(hechos)
+
+
+# ---------------------------------------------------------------------------
 ESCENARIOS = [("arranque", escenario_arranque), ("lista de parcelas", escenario_lista),
               ("fichas de parcela", escenario_fichas), ("cuaderno y cosecha", escenario_cuaderno),
               ("validacion por indice", escenario_validacion_indices),
               ("campanas de la ficha", escenario_campanas),
-              ("dialogos", escenario_dialogos), ("cierre a media sincronizacion", escenario_cierre)]
+              ("dialogos", escenario_dialogos), ("presentacion (DPI, icono, arranque)", escenario_presentacion),
+              ("cierre a media sincronizacion", escenario_cierre)]
 
 
 def main():
@@ -847,6 +941,9 @@ def main():
     _callar_ruido_de_cierre()
     DB = _sembrar()
     import panel_gestion_parcelas as P
+    # Se anota AQUI, recien importado: para cuando corre el escenario de
+    # presentacion ya se han abierto fichas y matplotlib esta cargada con razon.
+    _MPL_AL_IMPORTAR.append(P.Figure is None)
 
     print("=" * 74)
     print(" PRUEBAS DE INTERFAZ  ·  se monta la aplicacion real y se toca todo")

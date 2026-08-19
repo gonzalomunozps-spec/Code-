@@ -283,6 +283,28 @@ todas las parcelas.
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
    humedad comercial y no predice con ellos. Es el único dato objetivo del
    sistema: viene de la báscula, no de una imagen.
+14. **Toda medida en píxeles pasa por `esc()`.** La aplicación se declara
+   consciente del DPI (`activar_dpi()`, y hay que llamarlo **antes** de crear
+   `tk.Tk()`: después Windows ya ha decidido cómo escalarla). A partir de ahí las
+   **fuentes** miden sus puntos de verdad y crecen en un monitor al 150 %, pero
+   una caja escrita como `height=380` seguiría midiendo 380 píxeles físicos. Si
+   no crecen las dos a la vez el contenido deja de caber, y dentro del marco con
+   scroll de la ficha `pack` **no avisa**: sencillamente no dibuja lo último
+   (mismo fallo silencioso que ya está contado en `FichaParcela`). Por eso las
+   alturas de fila, los anchos de columna, el `rowheight` de las tablas y los
+   tamaños de ventana (`geom()`) van todos multiplicados por el factor.
+   El factor se deduce del DPI real y se **redondea a cuartos**, que es lo que
+   ofrecen los sistemas (100 %, 125 %, 150 %…): el DPI informado trae ruido y a
+   96 ppp salía 1,0007, con lo que una ventana de 1440 acababa midiendo 1441.
+   Está acotado a `[1, 3]`. **A 96 ppp el factor es exactamente 1 y no se mueve
+   ni un píxel** respecto de la versión anterior; hay una comparación de capturas
+   que lo fija.
+   `aplicar_tema(root, escala=...)` permite imponerlo a mano. Existe para las
+   pruebas: si el factor saliera del monitor, `pruebas_interfaz.py` daría un
+   resultado distinto en cada máquina. El arnés lo fija en 1.0, y el escenario de
+   presentación monta aparte una raíz al 150 % para que el camino escalado no se
+   quede sin probar.
+
 10. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
    registros antiguos sin campos nuevos. Convertirlas a `dataclass` cambiaría el
    formato de datos.
@@ -303,6 +325,13 @@ todas las parcelas.
 | `DialogoCorreccion` | Corrección del diagnóstico y **ámbito** (parcela o cultivo). |
 | `CampoFecha` / `PopupCalendario` | Entrada de fecha con máscara y calendario. |
 | `PanelCredenciales` | Earth Engine y clave de OpenAI. |
+
+Fuera de las clases, en la cabecera del módulo, está la **capa de presentación**:
+`activar_dpi()` / `esc()` / `geom()` (escala, ver §4.14), `poner_icono()` y el
+cargador perezoso `_matplotlib()`. El icono son dos ficheros junto al fuente,
+`icono.png` (ventana, y barra de tareas en Linux/macOS) e `icono.ico` (barra de
+tareas de Windows, que no usa el PNG); **son opcionales**: si faltan, la ventana
+sale con el icono por defecto de Tk y no pasa nada más.
 
 > **Cuidado:** `FichaParcela`, `LienzoMapa` y `PanelMapaComparado` **no son
 > widgets**: son clases normales que pintan sobre un `master`. Pasarles `self`
@@ -377,5 +406,10 @@ python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py 
 1. **El panel sigue siendo un monolito** de ~3.400 líneas. Partirlo (ficha, radar,
    diálogos, tema) es viable, pero conviene hacerlo con la aplicación abierta para
    verificar cada paso.
-3. **Arranque**: `matplotlib` cuesta ~1,6 s al importar. Diferirlo no ayuda porque
-   `aplicar_tema()` lo necesita igualmente al arrancar.
+2. **Arranque**: resuelto. `matplotlib` ya no se importa al arrancar, sino la
+   primera vez que se dibuja una gráfica (`_matplotlib()`). Lo que lo impedía era
+   que `aplicar_tema()` tocaba sus `rcParams`; ese trozo se separó en
+   `_tema_matplotlib()`, que llama el propio cargador. Importar el panel bajó de
+   ~0,51 s a ~0,15 s medidos, y quien solo consulta la lista no la carga nunca.
+   Queda una vía si hiciera falta más: `tkintermapview` y `PIL` siguen siendo
+   importaciones de arranque.
