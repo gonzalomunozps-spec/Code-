@@ -15,7 +15,6 @@ Sale con codigo 0 si todo pasa, 1 si algo falla (util para CI).
 """
 
 import os
-import re
 import sys
 import json
 import math
@@ -1716,15 +1715,12 @@ def pruebas_radar():
 # 9. TOOLTIP DE LA GRAFICA (valores del dia + fiabilidad) - helper del panel
 # =====================================================================
 def pruebas_panel_helpers():
-    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel_gestion_parcelas.py")
-    src = open(ruta, encoding="utf-8").read()
-    m = re.search(r"\ndef tooltip_pasada\(.*?\n(?=\ndef _colores_estado)", src, re.S)
-    if not m:
-        _FALLA.append(("panel", "no se localiza tooltip_pasada en el panel"))
-        return
-    ns = {"INDICES_ORDEN": ["NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"]}
-    exec(m.group(0), ns)
-    tip = ns["tooltip_pasada"]
+    # Antes esta funcion se sacaba del fuente del panel con una expresion regular
+    # y se ejecutaba con `exec`. Al partir el monolito el anclaje dejo de existir y
+    # la prueba fallo -que es justo lo que ARQUITECTURA avisaba que pasaria-. Ahora
+    # se IMPORTA, que era la recomendacion: `ui_ficha` no necesita pantalla para
+    # esto, y si la funcion se mueve otra vez, el import lo dice al momento.
+    from ui_ficha import tooltip_pasada as tip
     reg = {"fecha": "2026-05-05", "ndvi": 0.812, "ndmi": 0.21, "cobertura_valida": 0.97}
     check("tooltip: incluye fecha, NDVI y fiabilidad alta",
           lambda: tip(reg),
@@ -1742,9 +1738,16 @@ def pruebas_panel_helpers():
     #   AttributeError: 'FichaParcela' object has no attribute 'tk'
     # y, como ocurre dentro de un callback de Tk, no se ve: el menu contextual del
     # cuaderno simplemente no abria, y era la unica forma de borrar un evento.
-    # Se comprueba sobre el fuente porque la suite corre sin pantalla.
+    # Se comprueba sobre el fuente porque la suite corre sin pantalla, y sobre
+    # TODOS los modulos de interfaz: al partir el monolito esas clases quedaron
+    # repartidas, y mirar solo el panel habria dejado de ver a FichaParcela.
     import ast as _ast
-    arbol = _ast.parse(src)
+    import glob as _glob
+    _carpeta = os.path.dirname(os.path.abspath(__file__))
+    _fuentes = sorted(_glob.glob(os.path.join(_carpeta, "ui_*.py"))
+                      + [os.path.join(_carpeta, "panel_gestion_parcelas.py")])
+    arboles = [(os.path.basename(f), _ast.parse(open(f, encoding="utf-8").read()))
+               for f in _fuentes]
     _WIDGET = ("tk.Frame", "tk.Toplevel", "ttk.Frame", "tk.Canvas", "tk.Tk")
 
     def _es_widget(cls):
@@ -1756,17 +1759,18 @@ def pruebas_panel_helpers():
 
     def _self_como_padre():
         malos = []
-        for cls in [n for n in arbol.body if isinstance(n, _ast.ClassDef)]:
-            if _es_widget(cls):
-                continue                      # es un widget: `self` como padre es valido
-            for n in _ast.walk(cls):
-                if (isinstance(n, _ast.Call) and isinstance(n.func, _ast.Attribute)
-                        and getattr(n.func.value, "id", "") in ("tk", "ttk")
-                        and n.args and isinstance(n.args[0], _ast.Name)
-                        and n.args[0].id == "self"):
-                    malos.append(f"{cls.name}:{n.lineno} {n.func.attr}")
+        for fichero, arbol in arboles:
+            for cls in [n for n in arbol.body if isinstance(n, _ast.ClassDef)]:
+                if _es_widget(cls):
+                    continue                  # es un widget: `self` como padre es valido
+                for n in _ast.walk(cls):
+                    if (isinstance(n, _ast.Call) and isinstance(n.func, _ast.Attribute)
+                            and getattr(n.func.value, "id", "") in ("tk", "ttk")
+                            and n.args and isinstance(n.args[0], _ast.Name)
+                            and n.args[0].id == "self"):
+                        malos.append(f"{fichero}:{cls.name}:{n.lineno} {n.func.attr}")
         return malos
-    check("panel: ninguna clase que NO es widget se pasa a si misma como padre",
+    check("interfaz: ninguna clase que NO es widget se pasa a si misma como padre",
           _self_como_padre, lambda r: r == [])
 
     # Suplentes UTF-16 sueltos. Escribir un emoji como dos escapes ("\\uD83D\\uDCE1")

@@ -24,12 +24,13 @@ siempre sus datos, se arranque desde donde se arranque.
 
 ---
 
-## 2. Mapa de módulos (19 ficheros. ~9.200 líneas)
+## 2. Mapa de módulos (32 ficheros. ~16.500 líneas)
 
 El grafo de dependencias **no tiene ciclos**. Las capas van de abajo arriba:
 
 ```
 CAPA 3  ENTREGA        panel_gestion_parcelas.py   informe_anual.py*
+           │             (ensamblador; la interfaz va en ui_*.py — ver §5)
            │                     │                        │
 CAPA 2b SATELITE       gee_cliente.py  ──►  mapas_cache.py   sincronizacion.py
            │            (unico que PIDE datos a Earth Engine; `ee` inyectable)
@@ -84,7 +85,13 @@ Son la base testeable. Ninguno importa a otro.
 ### Capa 3 — Entrega
 | Módulo | Responsabilidad |
 |---|---|
-| `panel_gestion_parcelas.py` | Solo la interfaz (~3.160 líneas). Ver §5. |
+| `panel_gestion_parcelas.py` | Ventana principal, lista de parcelas y arranque. Ensambla los `ui_*`. Ver §5. |
+| `ui_tema.py` | Colores, fuentes, escala por DPI, icono, carga perezosa de matplotlib y ayudantes de maquetación. **No importa nada del programa.** |
+| `ui_widgets.py` | `LienzoMapa`, `CampoFecha`, `PopupCalendario`: los widgets que usa más de una pantalla. |
+| `ui_dialogos.py` | Los modales que abre la ficha (corrección, validación por índice, sincronizar campañas, efecto del producto). |
+| `ui_ficha.py` | `FichaParcela`, `VentanaRadar` y la comparación de mapas. |
+| `ui_alta.py` | Alta/edición de parcela (SIGPAC y dibujo a mano) y relevo de campaña. |
+| `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
 | `pruebas.py` | 595 pruebas sin pantalla ni red. |
@@ -427,7 +434,41 @@ todas las parcelas.
 
 ## 5. La interfaz: dónde está cada cosa
 
-`panel_gestion_parcelas.py` es un monolito. Piezas principales:
+Era un monolito de **4.313 líneas** —la deuda técnica número uno— y está partido en
+siete módulos con un grafo **sin ciclos**:
+
+```
+panel_gestion_parcelas  ->  ui_ficha, ui_alta, ui_credenciales, ui_widgets,
+                            ui_dialogos, ui_tema
+ui_ficha                ->  ui_dialogos, ui_widgets, ui_tema
+ui_alta                 ->  ui_widgets, ui_tema
+ui_dialogos             ->  ui_tema
+ui_credenciales         ->  ui_tema
+ui_widgets              ->  ui_tema
+ui_tema                 ->  (nada del programa)
+```
+
+El único ciclo que había —los diálogos necesitaban `FichaParcela`— se rompió
+sacando de la ficha las dos cosas que le pedían y no eran suyas:
+`ESTADOS_VALIDABLES` pasó a `interpretacion_fenologica` (donde se producen los
+estados) y `etiqueta_campana` a `campanas` (junto a las banderas que describe).
+Los diálogos reciben la ficha como **argumento**; no la importan.
+
+`panel_gestion_parcelas` sigue siendo la **puerta de entrada** (`from
+panel_gestion_parcelas import PanelGestionParcelas, aplicar_tema`) y reexporta las
+piezas: quien monte la aplicación no tiene por qué saber en qué módulo cayó cada
+clase. Su `__all__` lo declara.
+
+> **Cuidado con matplotlib entre módulos.** `ui_tema` reserva los nombres
+> (`Figure`, `mcolors`…) y los **rellena** al cargar la librería. Desde otro módulo
+> hay que pedirlos como atributo —`ui_tema.Figure(...)`—: un `from ui_tema import
+> Figure` copia el `None` de antes de cargarla y se queda así para siempre. El
+> panel lo resuelve con un `__getattr__` de módulo (PEP 562).
+
+La partición **no movió un solo píxel**: se comparó captura a captura, en la misma
+máquina, antes y después.
+
+Piezas principales:
 
 | Clase | Qué es |
 |---|---|
@@ -517,9 +558,22 @@ python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py 
 
 ## 8. Deuda técnica pendiente (por orden de valor)
 
-1. **El panel sigue siendo un monolito** de ~3.900 líneas. Partirlo (ficha, radar,
-   diálogos, tema) es viable, pero conviene hacerlo con la aplicación abierta para
-   verificar cada paso.
+1. **Auditoría agronómica pendiente.** Todo lo revisado hasta ahora es *código*:
+   ni un umbral, ni una fase, ni una fórmula cambiaron. Queda por revisar la
+   agronomía **en sí** —si los umbrales de `fenologia_especies` cuadran con la
+   bibliografía, si los pesos del reparto copa/cubierta de `contraste_indices` son
+   los adecuados, si las ventanas de fase encajan sin solaparse—. Saldrían
+   **propuestas**, no cambios aplicados: mover un `msavi_min` desplaza el
+   diagnóstico de todas las parcelas de esa especie, incluidas las ya validadas. Y
+   se puede contrastar contra bibliografía y contra la coherencia interna, pero
+   **no contra campo**: eso lo dicen las validaciones del agricultor.
+
+2. **La gráfica de radar tiene doble eje Y** (VV/VH/CR en dB contra RVI
+   adimensional). Dos escalas en una gráfica invitan a comparar lo que no es
+   comparable; lo correcto serían dos paneles apilados. Es una decisión sobre cómo
+   se presenta un dato agronómico, así que no se tocó.
+
+3. **`descargar_mapa_*` sigue sin cobertura** de pruebas (necesita credenciales).
 2. **Arranque**: resuelto. `matplotlib` ya no se importa al arrancar, sino la
    primera vez que se dibuja una gráfica (`_matplotlib()`). Lo que lo impedía era
    que `aplicar_tema()` tocaba sus `rcParams`; ese trozo se separó en

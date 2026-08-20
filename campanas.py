@@ -106,3 +106,22 @@ def campanas_de_parcela(con_datos: Any = (), fecha: Optional[datetime] = None,
                        "actual": camp == actual,
                        "solo_archivo": tiene and not puede})
     return salida
+
+
+def etiqueta_campana(c, n_pasadas=None):
+    """Una linea que dice de un vistazo que se puede hacer con esa campana.
+
+    Vive aqui, junto a `campanas_de_parcela`, que es quien decide `actual`,
+    `solo_archivo`, `tiene_datos` y `parcial`: la frase que los describe y las
+    banderas que describe se cambian a la vez o dejan de cuadrar. Estaba dentro de
+    la ficha, y por eso los dialogos tenian que importar la ficha entera solo para
+    formatear un texto."""
+    marca = c["campana"]
+    if c["actual"]:
+        marca += "  ·  en curso"
+    if c["solo_archivo"]:
+        return marca + "  ·  solo archivo"
+    if c["tiene_datos"]:
+        return marca + (f"  ✓ {n_pasadas} pasadas" if n_pasadas else "  ✓ con datos")
+    return marca + ("  ·  sin descargar (parcial)" if c["parcial"]
+                    else "  ·  sin descargar")

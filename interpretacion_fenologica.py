@@ -233,6 +233,13 @@ def detectar_cubierta(tipo, subtipo, serie, fecha_iso):
 # =====================================================================
 # 4. EVALUACION UNIFICADA (semaforo y frase salen del MISMO juicio)
 # =====================================================================
+# Los estados que el usuario puede elegir al corregir un diagnostico. Viven junto
+# al motor que los produce: si aqui se anade un estado nuevo, el desplegable de la
+# correccion tiene que ofrecerlo, y al reves. Estaban dentro de `FichaParcela`, y
+# por eso el dialogo de correccion importaba la ficha entera para leer una lista.
+ESTADOS_VALIDABLES = ["OK", "Vigilar", "Revisar", "Segado", "N.A."]
+
+
 def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
                     parcela=None, heterogeneidad_activa=True):
     """
