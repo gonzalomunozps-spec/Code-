@@ -18,6 +18,7 @@ Persistencia en JSON (misma carpeta que el resto de datos).
 """
 
 import math
+import re
 from datetime import datetime
 
 import almacen as DB     # el almacen (SQLite) guarda ahora los eventos
@@ -120,6 +121,13 @@ def linea_rendimiento(r):
     return "  ·  ".join(p for p in partes if p)
 
 
+# Un punto seguido de EXACTAMENTE tres cifras, una sola vez: '3.500'. En
+# castellano son miles -asi lo escribe `_num_es`- y en notacion inglesa es un
+# decimal. Con dos grupos o mas ('1.234.567') ya no hay duda: son miles.
+_SOLO_MILES = re.compile(r"^[+-]?\d{1,3}(?:\.\d{3}){2,}$")
+_AMBIGUO = re.compile(r"^[+-]?\d{1,3}\.\d{3}$")
+
+
 def numero_opcional(texto):
     """Texto -> numero, aceptando la coma decimal ('4,5' y '4.5' valen igual).
 
@@ -129,10 +137,24 @@ def numero_opcional(texto):
     'nan' e 'inf' tambien se rechazan aunque float() los acepte: 'nan' burla la
     comprobacion del signo (nan < 0 es False) y los dos acabarian escritos en la
     base como NaN / Infinity, que NO son JSON valido y atragantan a cualquier
-    lector que no sea Python."""
-    t = (texto or "").strip().replace(",", ".")
+    lector que no sea Python.
+
+    Y '3.500' se RECHAZA en vez de adivinar. Es el formato que imprime `_num_es`
+    en la linea de cosecha, asi que el usuario lo tiene delante para copiarlo; leido
+    como decimal da 3,5, o sea el rendimiento dividido por mil, y los kg/ha son el
+    unico dato del programa que no se puede recalcular -sale de la bascula-. Entre
+    adivinar y preguntar, se pregunta: lo dice y pide la coma."""
+    t = (texto or "").strip()
     if not t:
         return None
+    if "," in t:
+        t = t.replace(".", "").replace(",", ".")      # coma decimal: los puntos son miles
+    elif _SOLO_MILES.match(t):
+        t = t.replace(".", "")                        # dos grupos o mas: no hay duda
+    elif _AMBIGUO.match(t):
+        raise ValueError(
+            f"'{t}' es ambiguo: un punto con tres cifras detras puede ser miles "
+            f"(3500) o decimales (3,5). Escribelo sin punto o con coma decimal.")
     v = float(t)                      # ValueError si no es un numero
     if not math.isfinite(v):
         raise ValueError("no es un numero valido")
@@ -226,7 +248,13 @@ def explicacion_por_eventos(eventos_cerca, dN):
             nombre = "siega/corte" if tipo == "SIEGA" else "cosecha"
             return (True, f"Caida del NDVI coherente con la {nombre} registrada en el cuaderno "
                           f"el {e.get('fecha')} (hace {d} dias): evento previsto, no anomalia.")
-        if tipo == "PRODUCTO" and "herbicida" in (e.get("objetivo", "")) and dN is not None and dN < -0.05:
+        # `or ""` y `.lower()`: con objetivo=None esto reventaba con TypeError, y
+        # `interpretacion_fenologica` se traga esa excepcion -asi que una siega o una
+        # cosecha REGISTRADA dejaba de explicar la caida del NDVI y saltaba como
+        # falsa alarma-. Y sin `.lower()`, un «Herbicida» con mayuscula no contaba.
+        # `efecto_producto` ya lo hacia bien; aqui no.
+        if (tipo == "PRODUCTO" and "herbicida" in (e.get("objetivo") or "").lower()
+                and dN is not None and dN < -0.05):
             return (True, f"Descenso del verdor coherente con el herbicida aplicado el "
                           f"{e.get('fecha')} (hace {d} dias) sobre malas hierbas.")
     return (False, None)
@@ -250,6 +278,10 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
     f_ap = evento.get("fecha")
     if not f_ap or not serie:
         return None
+    try:
+        datetime.strptime(f_ap, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return None      # sin fecha de aplicacion legible no hay «antes» ni «despues»
     serie = sorted(serie, key=lambda r: r.get("fecha", ""))
 
     # baseline: ultima pasada en o antes de la aplicacion (y la anterior, para la tendencia)
@@ -276,7 +308,10 @@ def efecto_producto(serie, evento, ventana_dias=30, fecha_objetivo=None):
     if resp is None:
         # automatico: primera pasada al menos `ventana_dias/2` despues, la mas cercana a la ventana
         for r in posteriores:
-            d = _dias(f_ap, r["fecha"])
+            try:
+                d = _dias(f_ap, r["fecha"])
+            except (TypeError, ValueError):
+                continue      # una pasada con fecha ilegible no invalida las demas
             if d >= max(7, ventana_dias // 2):
                 resp = r
                 if d >= ventana_dias:

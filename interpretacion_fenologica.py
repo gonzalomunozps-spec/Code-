@@ -156,6 +156,11 @@ def delta(idx, actual, previo):
 # =====================================================================
 # 3. DETECCION DE CUBIERTA VEGETAL EN LENOSOS (indicadores cuantitativos)
 # =====================================================================
+# Cuantas senales mira `detectar_cubierta`. Es el denominador que sale en el
+# texto: hay que cambiarlo a la vez que las senales, y por eso viven juntas.
+TOTAL_SENALES_CUBIERTA = 4
+
+
 def detectar_cubierta(tipo, subtipo, serie, fecha_iso):
     """
     En lenosos, separa la senal de la CUBIERTA/SUELO de la de la COPA.
@@ -201,15 +206,13 @@ def detectar_cubierta(tipo, subtipo, serie, fecha_iso):
     ventana_cubierta = mes in (12, 1, 2, 3, 4, 5)
 
     # hipotesis preliminar por reglas (la IA la interpreta y matiza)
-    señales = 0
-    if brecha is not None and brecha > 0.12:
-        señales += 1
-    if desacople is not None:
-        señales += 1
-    if ventana_cubierta:
-        señales += 1
-    if ndmi is not None and ndmi > 0.15 and (lai or 0) < 2.0:
-        señales += 1     # humedad alta sin dosel denso -> verde a ras de suelo
+    marcas = (brecha is not None and brecha > 0.12,
+              desacople is not None,
+              ventana_cubierta,
+              # humedad alta sin dosel denso -> verde a ras de suelo
+              ndmi is not None and ndmi > 0.15 and (lai or 0) < 2.0)
+    assert len(marcas) == TOTAL_SENALES_CUBIERTA
+    señales = sum(1 for m in marcas if m)
 
     hipotesis = ("cubierta vegetal probable" if señales >= 3 else
                  "posible cubierta vegetal" if señales == 2 else
@@ -366,8 +369,13 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         except (TypeError, ValueError):
             mes_act = None
         prev_ndvi = prev.get("ndvi") if prev else None
+        # `prev_ndvi > 0`, no un test de verdad: con 0.0 (falsy) la regla de la
+        # proporcion se saltaba entera, y con un NDVI previo NEGATIVO -agua, sombra-
+        # se invertia: el 60 % de -0,10 es -0,06, asi que RECUPERARSE hasta -0,07
+        # contaba como «caida drastica».
         caida_drastica = ((d_ndvi is not None and d_ndvi < -0.15) or
-                          (prev_ndvi and ndvi < 0.60 * prev_ndvi))
+                          (prev_ndvi is not None and prev_ndvi > 0
+                           and ndvi < 0.60 * prev_ndvi))
         if mes_act in (4, 5) and caida_drastica:
             segado = True
 
@@ -529,7 +537,11 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     # probable" mientras el juicio iba por la copa (pasaba en el 21 % de los casos).
     if separacion and cubierta:
         cubierta["hipotesis_preliminar"] = separacion["veredicto"]
-        cubierta["señales"] = len(separacion["evidencias_cubierta"])
+        # OJO: `detectar_cubierta` cuenta sobre 4 y `separacion_copa_cubierta`
+        # acumula hasta siete evidencias. Machacar la primera con la segunda hacia
+        # que el texto dijera «5/4 senales» y que el liston de `>= 2` se aplicara a
+        # una escala distinta de aquella para la que se ajusto. Se guardan aparte.
+        cubierta["evidencias"] = len(separacion["evidencias_cubierta"])
         cubierta["confianza"] = separacion["confianza"]
         cubierta["copa_msavi"] = separacion["copa_msavi"]
     hetero = heterogeneidad(serie)
@@ -745,12 +757,23 @@ def observaciones_del_agricultor(cultivo, fase, validaciones, limite=3, parcela=
 
 
 def texto_interpretacion(tipo, subtipo, serie, fecha_iso=None, modelo="gpt-4o-mini",
-                         eventos_cerca=None, spec=None, aprendizaje=None):
+                         eventos_cerca=None, spec=None, aprendizaje=None,
+                         parcela=None, heterogeneidad_activa=True):
     """Genera el texto. Usa ChatGPT si hay OPENAI_API_KEY; si no, respaldo por reglas.
 
     `aprendizaje`: validaciones pasadas del agricultor (almacen.validaciones_recientes)
-    que se reinyectan como contexto para que la IA acierte mejor en el futuro."""
-    diag = evaluar_parcela(tipo, subtipo, serie, fecha_iso, eventos_cerca=eventos_cerca, spec=spec)
+    que se reinyectan como contexto para que la IA acierte mejor en el futuro.
+
+    `parcela` y `heterogeneidad_activa` van tal cual a `evaluar_parcela` y hay que
+    pasarlos: esta funcion vuelve a evaluar por su cuenta, y si evalua con otros
+    argumentos que quien pinto la cabecera, el semaforo y el texto que hay debajo
+    salen de DOS diagnosticos distintos. Sin `parcela` se pierden los umbrales
+    calibrados de esa finca (cabecera «OK», texto «Vigilar»); con la
+    heterogeneidad forzada a True, una parcela con el analisis de zonas APAGADO
+    recibia igualmente el aviso de «foco localizado» -y se guardaba en la base-."""
+    diag = evaluar_parcela(tipo, subtipo, serie, fecha_iso, eventos_cerca=eventos_cerca,
+                           spec=spec, parcela=parcela,
+                           heterogeneidad_activa=heterogeneidad_activa)
 
     if diag["clave"] in ("NA", "Sin"):
         return diag["motivo"], diag
@@ -794,5 +817,5 @@ def _texto_reglas(diag):
     if c and c["señales"] >= 2:
         txt += (f" Cubierta vegetal: {c['hipotesis_preliminar']} "
                 f"(brecha NDVI-MSAVI={c['brecha_suelo_ndvi_msavi']}, "
-                f"{c['señales']}/4 senales).")
+                f"{c['señales']}/{TOTAL_SENALES_CUBIERTA} senales).")
     return txt

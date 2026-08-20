@@ -283,6 +283,47 @@ todas las parcelas.
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
    humedad comercial y no predice con ellos. Es el único dato objetivo del
    sistema: viene de la báscula, no de una imagen.
+22. **`filterDate` de Earth Engine EXCLUYE el límite derecho.** `rango_campana`
+   devuelve un fin **inclusivo** («1-sep a 31-ago»), así que hay que pedir hasta el
+   día siguiente. Sin eso, el 31 de agosto de cada campaña no se descargaba nunca
+   —y al cerrarse la campaña ya no había de dónde sacarlo— y la pasada de hoy no
+   aparecía hasta mañana. El módulo ya lo hacía bien en `rellenar_rejillas` y en
+   los mapas de un día: era una incoherencia dentro del mismo fichero.
+
+23. **`is None`, nunca un test de verdad, sobre un índice.** `0.0` es un NDVI
+   legítimo —suelo desnudo, rastrojo— y `not p.get("ndvi")` lo descartaba como si
+   fuera un hueco. Un NDVI negativo (agua, nieve) sí pasaba, así que además era
+   incoherente. `rejilla` ya avisaba de este peligro exacto.
+
+24. **Un vacío puede significar dos cosas distintas.** En `guardar_ficha`,
+   `buffer_m` ausente es «este guardado no sabe del margen, no lo toques» y
+   `buffer_m=None` es «vuelve al margen por defecto». `COALESCE` solo ve el valor,
+   no si la clave estaba, así que trataba los dos igual y una parcela puesta a 40 m
+   no podía volver al valor por defecto **nunca**, aunque el diálogo dijera que se
+   había guardado. La decisión se toma en Python, que sí lo sabe. En el panel hace
+   la misma falta un centinela (`_SIN_TOCAR`): la ficha se carga de la base antes
+   de actualizarla, así que «si no viene no lo toco» conserva el valor viejo.
+
+25. **`3.500` se rechaza en vez de adivinarlo.** Es lo que imprime `_num_es` en la
+   línea de cosecha, así que el usuario lo tiene delante para copiarlo; leído como
+   decimal da 3,5, o sea el rendimiento **dividido por mil**. Y los kg/ha son el
+   único dato que no se puede recalcular: sale de la báscula. Con coma («3.500,25»)
+   o con dos grupos («1.234.567») no hay ambigüedad y se acepta.
+
+26. **Quien vuelve a evaluar, evalúa con los MISMOS argumentos.**
+   `texto_interpretacion` rellama a `evaluar_parcela` por dentro; sin `parcela` se
+   perdían los umbrales calibrados de esa finca y sin `heterogeneidad_activa` se
+   forzaba el análisis de zonas. Resultado: la cabecera podía decir «OK» y el texto
+   de debajo «Vigilar» —la contradicción que el módulo dice haber arreglado—, y una
+   parcela con las zonas apagadas recibía igual el aviso de «foco localizado», que
+   además se guardaba en la base.
+
+27. **Un parámetro que no se mira es peor que no tenerlo.**
+   `suelo_de_la_parcela` recibía `umbral_copa` y nunca lo leía, mientras sus dos
+   llamantes calculaban un valor para tirarlo y su docstring dedicaba dos párrafos
+   a la relación entre ambos. Quien lo leyera supondría que participa. Se quitó el
+   parámetro y se quedó la explicación.
+
 20. **Un solo selector de campaña, en la barra de abajo.** Había dos a la vez
    —uno en la cabecera de la ficha y otro en la barra— y podían acabar diciendo
    cosas distintas. Ahora la barra sirve a las dos vistas: en la lista ofrece las

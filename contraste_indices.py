@@ -300,7 +300,14 @@ def diagnostico_lenoso(serie, fecha_iso, subtipo=""):
     c = contrastes(serie)
     if not c:
         return None
-    mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    try:
+        mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    except (TypeError, ValueError):
+        # Sin fecha legible no se puede situar la pasada en el ano, y la ventana
+        # estacional es parte del juicio. Todos los hermanos de este modulo ya se
+        # guardan igual (`fase_fenologica`, `detectar_cubierta`, `fase_lenoso`):
+        # aqui faltaba, y una fecha mal formada tumbaba `evaluar_parcela` entero.
+        return None
     ventana = mes in (12, 1, 2, 3, 4, 5)      # epoca de cubierta viva
 
     ev = []      # evidencias a favor de CUBIERTA
@@ -387,7 +394,14 @@ def diagnostico_extensivo(serie, fecha_iso, subtipo=""):
     c = contrastes(serie)
     if not c:
         return None
-    mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    try:
+        mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    except (TypeError, ValueError):
+        # Sin fecha legible no se puede situar la pasada en el ano, y la ventana
+        # estacional es parte del juicio. Todos los hermanos de este modulo ya se
+        # guardan igual (`fase_fenologica`, `detectar_cubierta`, `fase_lenoso`):
+        # aqui faltaba, y una fecha mal formada tumbaba `evaluar_parcela` entero.
+        return None
 
     d_ndvi = c.get("d_ndvi")
     d_ndmi = c.get("d_ndmi")

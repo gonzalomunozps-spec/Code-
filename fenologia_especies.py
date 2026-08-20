@@ -564,7 +564,7 @@ def margen_mezcla(fc, medido=False):
     return round((1.0 - fc) * inc, 3)
 
 
-def suelo_de_la_parcela(p10, por_defecto, umbral_copa=None):
+def suelo_de_la_parcela(p10, por_defecto):
     """El termino de suelo de la mezcla, MEDIDO en la propia parcela si se puede.
 
     En un lenoso el decil peor de la parcela (`p10`) es la calle: es el suelo de
@@ -575,7 +575,10 @@ def suelo_de_la_parcela(p10, por_defecto, umbral_copa=None):
 
     Que el p10 salga MAS ALTO que el umbral de copa no es un error: es una calle
     con hierba alta, y entonces el umbral de parcela debe subir por encima del de
-    copa. Es lo que hace que la cuenta salga bien sola: la media de la parcela y el
+    copa. Por eso esta funcion NO recibe el umbral de copa: no hay nada que topar
+    con el. Lo recibia y no lo miraba, que es peor que no recibirlo -quien lo lea
+    supondra que participa, y los dos sitios que llamaban calculaban un valor para
+    tirarlo-. Es lo que hace que la cuenta salga bien sola: la media de la parcela y el
     umbral suben los dos con el fondo, y lo que queda comparandose es la copa
     contra el umbral de copa, sea cual sea el fondo.
 
@@ -717,7 +720,7 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
     # escalaba por el factor de densidad (un +-15 %) cuando la diferencia real entre
     # un tradicional y un seto es de mas del doble. Se convierte con la misma mezcla
     # que el MSAVI, y con el mismo criterio: si no hay marco, no se convierte nada.
-    suelo_ndvi, ndvi_medido = suelo_de_la_parcela(p10_ndvi, NDVI_SUELO, lo)
+    suelo_ndvi, ndvi_medido = suelo_de_la_parcela(p10_ndvi, NDVI_SUELO)
     lo2 = round(umbral_en_escala_parcela(lo, fc, suelo_ndvi), 2)
     hi2 = round(min(0.92, umbral_en_escala_parcela(hi, fc, suelo_ndvi)), 2)
     caduco = info["hoja"] == "caducifolio"
@@ -729,8 +732,7 @@ def fase_lenoso(especie, fecha_iso, marco_calle=None, marco_pie=None, regimen=No
     if invierno_sin_hoja:
         # sin hoja no hay dosel que medir: ningun indice habla del arbol
         umb.update({"ndmi_min": None, "msavi_min": None, "lai_min": None, "sin_hoja": True})
-    suelo_msavi, msavi_medido = suelo_de_la_parcela(p10_msavi, MSAVI_SUELO,
-                                                    umb.get("msavi_min"))
+    suelo_msavi, msavi_medido = suelo_de_la_parcela(p10_msavi, MSAVI_SUELO)
     return dict(umb, fase=fase, lo=lo2, hi=hi2, caida=bool(caida), caduco=caduco,
                 brota_tarde=brota_tarde, invierno_sin_hoja=invierno_sin_hoja,
                 densidad=dens, tipo=nombre_tipo, factor=factor,

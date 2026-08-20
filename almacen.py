@@ -485,6 +485,16 @@ def guardar_ficha(nombre, ficha):
         # ya hubiera (COALESCE). Asi un guardado que no sabe de ellos -por ejemplo
         # una version antigua del dialogo- no borra la ubicacion.
         sig = ficha.get("sigpac") or None
+        # `buffer_m` tiene DOS vacios distintos y hay que separarlos:
+        #   - la clave NO viene    -> un guardado que no sabe del margen: no se toca
+        #   - la clave viene None  -> «usa el margen por defecto»: hay que poner NULL
+        # COALESCE solo ve el valor, no si la clave estaba, asi que con COALESCE
+        # siempre se conservaba lo viejo y una parcela puesta a 40 m no podia volver
+        # al valor por defecto NUNCA, aunque el dialogo dijera que se habia guardado.
+        # La decision se toma aqui, donde si se sabe. (Los dos fragmentos son
+        # constantes del propio modulo: no entra nada del usuario en el SQL.)
+        set_buffer = ("buffer_m=excluded.buffer_m, " if "buffer_m" in ficha
+                      else "buffer_m=COALESCE(excluded.buffer_m, parcelas.buffer_m), ")
         c.execute("INSERT INTO parcelas(nombre,propietario,coordenadas,superficie_ha,"
                   "anio_inicio,provincia,municipio,sigpac,buffer_m,heterogeneidad) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?) "
@@ -494,7 +504,7 @@ def guardar_ficha(nombre, ficha):
                   "provincia=COALESCE(excluded.provincia, parcelas.provincia), "
                   "municipio=COALESCE(excluded.municipio, parcelas.municipio), "
                   "sigpac=COALESCE(excluded.sigpac, parcelas.sigpac), "
-                  "buffer_m=COALESCE(excluded.buffer_m, parcelas.buffer_m), "
+                  + set_buffer +
                   "heterogeneidad=COALESCE(excluded.heterogeneidad, parcelas.heterogeneidad)",
                   (nombre, ficha.get("propietario", ""),
                    json.dumps(ficha.get("coordenadas", []), ensure_ascii=False),
@@ -847,6 +857,23 @@ def guardar_rejilla(nombre, campana, fecha, datos):
         c.execute("INSERT OR REPLACE INTO pixeles(nombre,campana,fecha,datos) VALUES(?,?,?,?)",
                   (nombre, campana, fecha, json.dumps(datos, ensure_ascii=False)))
         c.commit()
+
+
+def fechas_de(nombre, campana, radar=False):
+    """Las fechas guardadas de esa parcela y campana, y NADA mas.
+
+    La sincronizacion solo necesita saber que dias tiene ya para no volver a
+    pedirlos. Pidiendo `pasadas()` se traia cada fila entera y se deserializaba su
+    JSON -todos los indices, los percentiles, la interpretacion cacheada- para
+    quedarse con un campo y tirar el resto: en una parcela con varias campanas de
+    historico son miles de blobs parseados por sincronizacion. Igual que
+    `fechas_con_rejilla`, que ya lo hacia bien."""
+    tabla = "pasadas_radar" if radar else "pasadas"
+    c = _c()
+    with _LOCK:
+        return {r["fecha"] for r in c.execute(
+            f"SELECT fecha FROM {tabla} WHERE nombre=? AND campana=?", (nombre, campana))
+            if r["fecha"]}
 
 
 def fechas_con_rejilla(nombre, campana):

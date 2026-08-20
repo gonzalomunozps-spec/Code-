@@ -313,7 +313,7 @@ def pruebas_fenologia():
     check("fase_por_especie: barbecho", lambda: fase_por_especie("BARBECHO", "", "2026-06-01"),
           lambda r: r.get("barbecho") is True)
     # --- calendario propio por cultivo extensivo (12 cultivos diferenciados) ---
-    from fenologia_especies import EXTENSIVO_ESPECIES, ESPECIES, fase_extensivo
+    from fenologia_especies import ESPECIES, fase_extensivo
     check("extensivo: la UI lista los 12 cultivos",
           lambda: ESPECIES["EXTENSIVO"], lambda r: len(r) == 12 and "MAIZ" in r and "GIRASOL" in r)
     check("maiz: das~65 -> floracion, NDVI alto, sin caida",
@@ -1051,7 +1051,7 @@ def pruebas_lenosos():
           lambda: FEN.suelo_de_la_parcela(0.062, FEN.MSAVI_SUELO),
           lambda r: r == (0.062, True))
     check("suelo: una calle VERDE es fondo valido y sube el umbral por encima del de copa",
-          lambda: (FEN.suelo_de_la_parcela(0.37, FEN.MSAVI_SUELO, 0.30)[0],
+          lambda: (FEN.suelo_de_la_parcela(0.37, FEN.MSAVI_SUELO)[0],
                    FEN.umbral_en_escala_parcela(0.30, 0.20, 0.37)),
           lambda r: r[0] == 0.37 and r[1] > 0.30)
     check("suelo: un p10 negativo (agua o sombra) no es suelo y se descarta",
@@ -2958,6 +2958,142 @@ def pruebas_clima():
           lambda r: r[0] == 0 and "earthengine" in r[1])
 
 
+class _EeEspia(_EeFalso):
+    """Como `_EeFalso`, pero apunta con que fechas se pidio la coleccion.
+
+    Hace falta para comprobar la VENTANA de la peticion, no solo lo que se hace
+    con la respuesta: el fallo del ultimo dia de campana estaba en los argumentos
+    de `filterDate`, y ningun doble que se los tragase podia verlo."""
+
+    def __init__(self, features):
+        super().__init__(features)
+        object.__setattr__(self, "ventanas", [])
+
+    def filterDate(self, desde, hasta):
+        object.__getattribute__(self, "ventanas").append((desde, hasta))
+        return self
+
+
+def pruebas_repaso():
+    """Fallos encontrados en el repaso completo del codigo. Cada uno con su caso.
+
+    Estaban todos CONFIRMADOS reproduciendolos antes de tocar nada; estas pruebas
+    son lo que impide que vuelvan."""
+    import almacen as DB
+    import gee_cliente as G
+    import registro_parcela as REG
+    import rejilla as REJ
+    import fenologia_especies as FEN
+    from interpretacion_fenologica import evaluar_parcela, TOTAL_SENALES_CUBIERTA
+
+    # --- la ventana de descarga incluye el ultimo dia de la campana ---
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "repaso.db"))
+    DB.guardar_ficha("P_Rep", {"propietario": "x",
+                               "coordenadas": [[-4.1, 41.65], [-4.09, 41.65],
+                                               [-4.09, 41.66], [-4.1, 41.66]]})
+    espia = _EeEspia([])
+    real = G.ee
+    try:
+        G.ee = espia
+        G.sincronizar_parcela("P_Rep", "2013-2014")     # campana cerrada: fin = 31-ago
+        check("repaso: la descarga pide MAS ALLA del ultimo dia de la campana",
+              lambda: espia.ventanas[-1] if espia.ventanas else None,
+              lambda r: r is not None and r[0] == "2013-09-01" and r[1] == "2014-09-01")
+        G.sincronizar_radar("P_Rep", "2013-2014")
+        check("repaso: y el radar tambien (filterDate excluye el limite derecho)",
+              lambda: espia.ventanas[-1], lambda r: r[1] == "2014-09-01")
+
+        # --- un NDVI de 0.0 es un dato, no un hueco ---
+        cero = {"properties": {"fecha": "2026-03-02", "cobertura_valida": 0.95, "ndvi": 0.0,
+                               "evi": 0.0, "savi": 0.0, "gndvi": 0.0, "lai": 0.0,
+                               "msavi": 0.0, "ndmi": 0.0, "ndvi_std": 0.01, "n_pixeles": 800}}
+        G.ee = _EeFalso([cero])
+        n, _ = G.sincronizar_parcela("P_Rep", "2025-2026")
+        check("repaso: una pasada con NDVI exactamente 0.0 se guarda (suelo desnudo)",
+              lambda: (n, [p["fecha"] for p in DB.pasadas("P_Rep", "2025-2026")]),
+              lambda r: r[0] == 1 and r[1] == ["2026-03-02"])
+    finally:
+        G.ee = real
+
+    # --- fechas_de trae solo fechas, y las mismas que pasadas() ---
+    check("repaso: fechas_de coincide con las fechas de pasadas()",
+          lambda: (DB.fechas_de("P_Rep", "2025-2026"),
+                   {p["fecha"] for p in DB.pasadas("P_Rep", "2025-2026")}),
+          lambda r: r[0] == r[1] and r[0] == {"2026-03-02"})
+    check("repaso: fechas_de del radar mira su propia tabla",
+          lambda: DB.fechas_de("P_Rep", "2025-2026", radar=True), lambda r: r == set())
+
+    # --- el separador de miles no puede dividir un rendimiento por mil ---
+    check("repaso: '3.500' es ambiguo y se rechaza en vez de valer 3,5",
+          lambda: _lanza(REG.numero_opcional, ValueError, "3.500"), lambda r: r is True)
+    check("repaso: con coma decimal no hay duda: '3.500,25' son 3500,25",
+          lambda: REG.numero_opcional("3.500,25"), lambda r: r == 3500.25)
+    check("repaso: dos grupos de miles tampoco tienen duda",
+          lambda: REG.numero_opcional("1.234.567"), lambda r: r == 1234567.0)
+    check("repaso: y un decimal normal sigue valiendo",
+          lambda: (REG.numero_opcional("4.5"), REG.numero_opcional("12,5")),
+          lambda r: r == (4.5, 12.5))
+
+    # --- el margen interior se puede devolver al de por defecto ---
+    DB.guardar_ficha("P_Buf", {"propietario": "x", "coordenadas": [[0, 0]],
+                               "superficie_ha": 8, "buffer_m": 40.0})
+    check("repaso: vaciar el margen vuelve al de por defecto (antes se quedaba en 40)",
+          lambda: (DB.guardar_ficha("P_Buf", dict(DB.ficha("P_Buf"), buffer_m=None)),
+                   DB.ficha("P_Buf")["buffer_m"])[1], lambda r: r is None)
+
+    # --- lo que revienta con datos malos ahora degrada ---
+    check("repaso: una fecha mal formada no tumba el juicio de un lenoso",
+          lambda: evaluar_parcela("LENOSO", "TRADICIONAL",
+                                  [{"fecha": "2026-13-45", "ndvi": 0.5, "msavi": 0.4,
+                                    "lai": 1.0, "evi": 0.2, "ndmi": 0.1}],
+                                  spec={"especie": "OLIVO", "marco_calle": 12,
+                                        "marco_pie": 12})["estado"],
+          lambda r: isinstance(r, str))
+    check("repaso: un evento con objetivo nulo no revienta",
+          lambda: REG.explicacion_por_eventos(
+              [(3, {"tipo": "PRODUCTO", "fecha": "2026-02-01", "objetivo": None})], -0.20),
+          lambda r: r == (False, None))
+    check("repaso: 'Herbicida' con mayuscula tambien explica la caida",
+          lambda: REG.explicacion_por_eventos(
+              [(3, {"tipo": "PRODUCTO", "fecha": "2026-02-01",
+                    "objetivo": "Herbicida de contacto"})], -0.20)[0], lambda r: r is True)
+    check("repaso: una fecha de aplicacion ilegible devuelve None, no una excepcion",
+          lambda: REG.efecto_producto(
+              [{"fecha": "2026-01-01", "ndvi": 0.5}, {"fecha": "2026-03-01", "ndvi": 0.3}],
+              {"fecha": "01/02/2026"}), lambda r: r is None)
+    check("repaso: una pasada suelta con fecha ilegible no invalida las demas",
+          lambda: REG.efecto_producto(
+              [{"fecha": "2026-01-01", "ndvi": 0.5}, {"fecha": "XX", "ndvi": 0.4},
+               {"fecha": "2026-03-01", "ndvi": 0.3}],
+              {"fecha": "2026-01-15"})["disponible"], lambda r: r is True)
+    _rej = {"v": REJ.FORMATO, "filas": 10, "columnas": 10, "crs": "EPSG:32630",
+            "escala": 10, "i0": 0, "j0": 0,
+            "ndvi": REJ._comprimir(bytes(100)), "validos": REJ._comprimir(bytes(2))}
+    check("repaso: una mascara de validos truncada devuelve None, no un IndexError",
+          lambda: REJ.decodificar(_rej), lambda r: r is None)
+
+    # --- escalas y guardias que no cuadraban ---
+    check("repaso: el denominador de las senales sale de la misma constante",
+          lambda: TOTAL_SENALES_CUBIERTA, lambda r: r == 4)
+    check("repaso: un NDVI previo de 0.0 no dispara la regla de la proporcion",
+          lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE",
+                                  [{"fecha": "2026-04-01", "ndvi": 0.0},
+                                   {"fecha": "2026-04-20", "ndvi": 0.0}])["estado"],
+          lambda r: r != "Segado")
+    check("repaso: recuperarse desde un NDVI negativo no es una «caida drastica»",
+          lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE",
+                                  [{"fecha": "2026-04-01", "ndvi": -0.10},
+                                   {"fecha": "2026-04-20", "ndvi": -0.07}])["estado"],
+          lambda r: r != "Segado")
+    check("repaso: suelo_de_la_parcela ya no recibe un umbral que no mira",
+          lambda: _lanza(FEN.suelo_de_la_parcela, TypeError, 0.37, FEN.MSAVI_SUELO, 0.30),
+          lambda r: r is True)
+    check("repaso: la imagen de radar y su paleta caen en el MISMO parametro",
+          lambda: (G.PARAM_RADAR_DEF, G.PARAM_RADAR_DEF in G.RADAR_VIS),
+          lambda r: r[1] is True)
+
+
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
@@ -2965,7 +3101,7 @@ def main():
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
-              pruebas_escala_indices, pruebas_clima):
+              pruebas_escala_indices, pruebas_clima, pruebas_repaso):
         try:
             f()
         except Exception as e:

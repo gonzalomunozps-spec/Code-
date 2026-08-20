@@ -129,10 +129,15 @@ def decodificar(d):
     if not d or d.get("v") != FORMATO:
         return None
     n = int(d["filas"]) * int(d["columnas"])
-    validos = _de_bits(_descomprimir(d["validos"]), n)
+    crudo_validos = _descomprimir(d["validos"])
     valores = _de_bytes(_descomprimir(d["ndvi"]))
-    if len(valores) != n:
+    # Se comprueban las DOS longitudes antes de tocar nada. La mascara se miraba
+    # sin comprobar y `_de_bits` se salia del buffer con un IndexError, justo lo
+    # contrario de la politica del modulo -«mejor nada que mal»- que si aplicaba
+    # al vector de NDVI. Un bit por pixel: (n+7)//8 bytes.
+    if len(valores) != n or len(crudo_validos) < (n + 7) // 8:
         return None                       # datos truncados: mejor nada que mal
+    validos = _de_bits(crudo_validos, n)
     return {"valores": valores, "validos": validos,
             "geo": {k: d[k] for k in CLAVES_GEO},
             "sin_buffer": bool(d.get("sin_buffer")),

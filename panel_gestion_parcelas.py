@@ -112,6 +112,11 @@ except Exception:
 # arrastra `ee`) solo por un numero que hay que ensenar en un formulario.
 BUFFER_POR_DEFECTO = 15.0
 
+# Distingue «no me han dicho nada» de «ponlo a None». Sin esto no se puede volver
+# al margen por defecto: `None` como valor por defecto del argumento y `None` como
+# «borralo» son indistinguibles.
+_SIN_TOCAR = object()
+
 # Cuanto se espera desde la ultima tecla antes de repintar la lista. Lo bastante
 # para no repintar a media palabra, lo bastante poco para que no parezca que la
 # caja de busqueda no responde.
@@ -1426,7 +1431,13 @@ class PanelGestionParcelas(ttk.Frame):
         VentanaAltaParcela(self)
 
     def guardar_parcela(self, nombre, propietario, tipo, spec, coords, campana=None,
-                        sigpac=None, buffer_m=None):
+                        sigpac=None, buffer_m=_SIN_TOCAR):
+        """Alta o edicion de una parcela.
+
+        `buffer_m`: un numero fija el margen interior; `None` lo devuelve al del
+        programa; omitirlo deja el que hubiera. Hacen falta los tres casos: la
+        ficha se carga de la base ANTES de actualizarla, asi que no basta con «si
+        no viene, no lo toco» -el valor viejo ya esta dentro y sobrevive-."""
         camp = campana or self.campana
         cerrado = coords + [coords[0]] if coords and coords[0] != coords[-1] else coords
         ficha = DB.ficha(nombre) or {}
@@ -1440,8 +1451,8 @@ class PanelGestionParcelas(ttk.Frame):
             ficha["provincia"] = str(sigpac["Prov"]).strip()
             ficha["municipio"] = f"{str(sigpac['Prov']).strip()}/{str(sigpac['Mun']).strip()}"
             ficha["sigpac"] = {k: str(v).strip() for k, v in sigpac.items() if str(v).strip()}
-        if buffer_m is not None:
-            ficha["buffer_m"] = float(buffer_m)
+        if buffer_m is not _SIN_TOCAR:
+            ficha["buffer_m"] = None if buffer_m is None else float(buffer_m)
         # subtipo derivado (compatibilidad y visualizacion):
         #   leñoso -> tipo de plantacion segun el marco; cereal -> COSECHA_GRANO
         spec = dict(spec or {})
@@ -3536,9 +3547,15 @@ class FichaParcela:
         self.txt.insert(tk.END, "Generando interpretacion...")
 
         def worker():
+            # Los MISMOS argumentos con que se evaluo la cabecera (linea de
+            # arriba): `texto_interpretacion` vuelve a evaluar por dentro, y con
+            # otros argumentos el semaforo y el texto que hay debajo salen de dos
+            # diagnosticos distintos -y el texto ademas se guarda en la base-.
             texto, _d = texto_interpretacion(tipo, sub, regs, actual.get("fecha"),
                                              eventos_cerca=eventos_cerca, spec=spec,
-                                             aprendizaje=aprendizaje)
+                                             aprendizaje=aprendizaje,
+                                             parcela=self.nombre,
+                                             heterogeneidad_activa=hetero_on)
             DB.set_interpretacion(self.nombre, self.campana, actual.get("fecha"), texto)
 
             def pintar():

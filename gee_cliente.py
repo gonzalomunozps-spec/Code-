@@ -93,6 +93,12 @@ RADAR_VIS = {
     "RVI": {"rango": (0, 1),    "paleta": ["9c6b30", "d9d59b", "3a9d23", "0b6623"]},
 }
 
+# Parametro de radar al que se cae si piden uno que no existe. Lo comparten la
+# imagen y su paleta A PROPOSITO: si cada una cae en un sitio, un parametro
+# desconocido pinta la banda VV (dB, en torno a -25..0) con la paleta del RVI
+# (0..1) y sale un mapa uniforme, sin error, perfectamente creible.
+PARAM_RADAR_DEF = "VV"
+
 MAX_PIXELES = 2048          # tope por lado, para no pedir imagenes gigantes a GEE
 
 # Sesion HTTP compartida para las descargas de mapas. Reutiliza la conexion
@@ -145,9 +151,15 @@ def reflectancia(img):
     return img.select(BANDAS_OPTICAS).multiply(ESCALA_SR)
 
 
+# El EVI aparece en dos indices (el propio EVI y el LAI, que es una recta sobre
+# el). Se escribe UNA vez: dos copias de una formula con constantes aditivas son
+# dos sitios donde corregir, y el fallo del escalado de bandas nacio justo ahi.
+_EVI = "2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))"
+
+
 def construir_indice(img, indice):
     ref = reflectancia(img)
-    nir, red, green, blue = ref.select("B8"), ref.select("B4"), ref.select("B3"), ref.select("B2")
+    nir, red, blue = ref.select("B8"), ref.select("B4"), ref.select("B2")
     if indice == "NDVI":
         return ref.normalizedDifference(["B8", "B4"]).rename("IDX")
     if indice == "GNDVI":
@@ -157,14 +169,12 @@ def construir_indice(img, indice):
     if indice == "SAVI":
         return ref.expression("((NIR-RED)/(NIR+RED+0.5))*1.5", {"NIR": nir, "RED": red}).rename("IDX")
     if indice == "EVI":
-        return ref.expression("2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))",
-                              {"NIR": nir, "RED": red, "BLUE": blue}).rename("IDX")
+        return ref.expression(_EVI, {"NIR": nir, "RED": red, "BLUE": blue}).rename("IDX")
     if indice == "MSAVI":
         return ref.expression("(2*NIR+1-sqrt((2*NIR+1)**2-8*(NIR-RED)))/2",
                               {"NIR": nir, "RED": red}).rename("IDX")
     if indice == "LAI":
-        evi = ref.expression("2.5*((NIR-RED)/(NIR+6.0*RED-7.5*BLUE+1.0))",
-                             {"NIR": nir, "RED": red, "BLUE": blue})
+        evi = ref.expression(_EVI, {"NIR": nir, "RED": red, "BLUE": blue})
         return evi.expression("3.618*EVI-0.118", {"EVI": evi}).rename("IDX")
     return ref.normalizedDifference(["B8", "B4"]).rename("IDX")
 
@@ -208,7 +218,7 @@ def imagen_param_radar(img, param):
         vvl = ee.Image(10).pow(vv.divide(10))
         vhl = ee.Image(10).pow(vh.divide(10))
         return vhl.multiply(4).divide(vvl.add(vhl)).rename("RVI")
-    return vv
+    return img.select(PARAM_RADAR_DEF)     # respaldo compartido con su paleta
 
 
 def descargar_mapa_radar(coords, iso, param, metros, png_destino):
@@ -224,7 +234,10 @@ def descargar_mapa_radar(coords, iso, param, metros, png_destino):
            .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
            .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
            .first())
-    vis = RADAR_VIS.get(param, RADAR_VIS["RVI"])
+    # Mismo respaldo que `imagen_param_radar`: si no coinciden, un parametro
+    # desconocido pinta la banda VV (dB, en torno a -25..0) con la paleta de RVI
+    # (0..1) y sale un mapa uniforme perfectamente creible.
+    vis = RADAR_VIS.get(param, RADAR_VIS[PARAM_RADAR_DEF])
     ov = imagen_param_radar(img, param).clip(geom).visualize(
         min=vis["rango"][0], max=vis["rango"][1], palette=vis["paleta"]).getThumbURL(
         {"region": region, "dimensions": dim, "format": "png"})
@@ -441,7 +454,7 @@ def rellenar_rejillas(nombre, campanas=None, silencioso=True):
             campanas = DB.campanas_de(nombre)
         total, sin_falta = 0, True
         for camp in campanas:
-            fechas = sorted({p["fecha"] for p in DB.pasadas(nombre, camp) if p.get("fecha")}
+            fechas = sorted(DB.fechas_de(nombre, camp)
                             - DB.fechas_con_rejilla(nombre, camp))
             if not fechas:
                 continue
@@ -475,7 +488,7 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
         ini_camp, fin_camp = rango_campana(campana)
 
         ultima = DB.ultima_fecha(nombre, campana)      # MAX(fecha) via SQLite (indexado)
-        fechas_existentes = {p["fecha"] for p in DB.pasadas(nombre, campana) if p.get("fecha")}
+        fechas_existentes = DB.fechas_de(nombre, campana)
 
         # ventana incremental: desde el dia siguiente a la ultima fecha guardada
         try:
@@ -488,8 +501,14 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
         if inicio > fin:
             return (0, "ya esta al dia")
 
+        # `filterDate` EXCLUYE el limite derecho, pero `fin` es un dia inclusivo
+        # (`rango_campana` documenta «1-sep a 31-ago», y `hoy` es hoy). Sin el dia
+        # siguiente, el 31 de agosto de cada campana no se descargaba NUNCA -y al
+        # cerrarse la campana ya no habia de donde sacarlo- y la pasada de hoy no
+        # aparecia hasta manana. El propio modulo ya lo hacia bien en
+        # `rellenar_rejillas` y en los mapas de un solo dia.
         col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-               .filterBounds(geom).filterDate(inicio, fin)
+               .filterBounds(geom).filterDate(inicio, _dia_siguiente(fin))
                .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))   # prefiltro amplio;
                .sort("system:time_start", True))                       # el SCL decide de verdad
 
@@ -561,7 +580,11 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
             cob = p.get("cobertura_valida")
             if not fecha or fecha in fechas_existentes:
                 continue
-            if cob is None or cob < 0.80 or not p.get("ndvi"):
+            # `is None`, NO un test de verdad: 0.0 es un NDVI legitimo (suelo
+            # desnudo, rastrojo) y descartarlo por falsy seria justo el fallo que
+            # `rejilla` avisa de no cometer. Un NDVI negativo (agua, nieve) tambien
+            # es un dato y ya pasaba, asi que rechazar el cero era ademas incoherente.
+            if cob is None or cob < 0.80 or p.get("ndvi") is None:
                 descartadas += 1
                 continue
             p["cobertura_valida"] = round(cob, 3)
@@ -618,7 +641,7 @@ def sincronizar_radar(nombre, campana, silencioso=True):
         geom = ee.Geometry.Polygon(ficha["coordenadas"])
         ini_camp, fin_camp = rango_campana(campana)
         ultima = DB.ultima_fecha_radar(nombre, campana)
-        existentes = {p["fecha"] for p in DB.radar(nombre, campana) if p.get("fecha")}
+        existentes = DB.fechas_de(nombre, campana, radar=True)
         try:
             inicio = ((datetime.strptime(ultima, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
                       if ultima else ini_camp)
@@ -629,8 +652,14 @@ def sincronizar_radar(nombre, campana, silencioso=True):
         if inicio > fin:
             return (0, "radar ya al dia")
 
+        # `filterDate` EXCLUYE el limite derecho, pero `fin` es un dia inclusivo
+        # (`rango_campana` documenta «1-sep a 31-ago», y `hoy` es hoy). Sin el dia
+        # siguiente, el 31 de agosto de cada campana no se descargaba NUNCA -y al
+        # cerrarse la campana ya no habia de donde sacarlo- y la pasada de hoy no
+        # aparecia hasta manana. El propio modulo ya lo hacia bien en
+        # `rellenar_rejillas` y en los mapas de un solo dia.
         col = (ee.ImageCollection("COPERNICUS/S1_GRD")
-               .filterBounds(geom).filterDate(inicio, fin)
+               .filterBounds(geom).filterDate(inicio, _dia_siguiente(fin))
                .filter(ee.Filter.eq("instrumentMode", "IW"))
                .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
                .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
