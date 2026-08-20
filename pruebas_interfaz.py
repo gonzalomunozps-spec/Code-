@@ -575,26 +575,30 @@ def escenario_campanas(P, DB):
     f = ultima["f"]
 
     cambios = 0
+    # Hay UN solo selector de campana, el de la barra. Con una ficha abierta lista
+    # las campanas de ESA parcela, con sus marcas.
+    _paso("campanas: la ficha no trae un segundo selector propio",
+          lambda: _check(not hasattr(f, "cb_campana_ficha"),
+                         "la ficha volvio a montar su propio desplegable de campana"))
     _paso("campanas: el desplegable existe y lista mas de una",
-          lambda: (_check(len(f.cb_campana_ficha["values"]) > 1,
+          lambda: (_check(len(panel.cb_campana["values"]) > 1,
                           "el selector de campana no ofrece campanas anteriores")))
     _paso("campanas: la campana en curso viene seleccionada",
-          lambda: _check(campana_actual() in f.cb_campana_ficha.get(),
-                         f"la ficha no abre en la campana en curso: {f.cb_campana_ficha.get()!r}"))
+          lambda: _check(campana_actual() in panel.cb_campana.get(),
+                         f"la ficha no abre en la campana en curso: {panel.cb_campana.get()!r}"))
     _paso("campanas: el archivo anterior al satelite esta en la lista",
-          lambda: _check(any("2013-2014" in v for v in f.cb_campana_ficha["values"]),
+          lambda: _check(any("2013-2014" in v for v in panel.cb_campana["values"]),
                          "una campana guardada fuera del alcance del satelite no se ofrece"))
     _paso("campanas: y se marca como solo archivo",
           lambda: _check(any("2013-2014" in v and "archivo" in v
-                             for v in f.cb_campana_ficha["values"]),
+                             for v in panel.cb_campana["values"]),
                          "la campana de archivo no se distingue de una descargable"))
 
     def ir_a(texto):
-        f2 = ultima["f"]
-        vals = list(f2.cb_campana_ficha["values"])
+        vals = list(panel.cb_campana["values"])
         i = next(k for k, v in enumerate(vals) if texto in v)
-        f2.cb_campana_ficha.current(i)
-        f2.cb_campana_ficha.event_generate("<<ComboboxSelected>>")
+        panel.cb_campana.current(i)
+        panel.cb_campana.event_generate("<<ComboboxSelected>>")
         root.update()
 
     for destino in ("2013-2014", PRIMERA_CAMPANA_S2, campana_actual()):
@@ -603,6 +607,22 @@ def escenario_campanas(P, DB):
             _paso(f"campanas: la ficha queda en {destino}",
                   lambda d=destino: _check(panel.campana == d,
                                            f"se pidio {d} y el panel esta en {panel.campana}"))
+    # La barra es UNA y sirve a las dos vistas: tiene que ensenar lo que aplica.
+    _paso("con ficha abierta, la busqueda se retira de la barra",
+          lambda: _check(not panel.card_buscar.winfo_ismapped(),
+                         "la caja de busqueda sigue en la barra dentro de una ficha"))
+    _paso("y al volver a la lista, vuelve",
+          lambda: (panel.mostrar_lista(), root.update(),
+                   _check(panel.card_buscar.winfo_ismapped(),
+                          "la busqueda no volvio al salir de la ficha")))
+    _paso("en la lista el selector vuelve a las campanas sin marcas",
+          lambda: _check(all("pasadas" not in v and "archivo" not in v
+                             for v in panel.cb_campana["values"]),
+                         f"la barra conservo las etiquetas de la ficha: "
+                         f"{panel.cb_campana['values']}"))
+    panel.mostrar_ficha(nombre)
+    root.update()
+
     _paso("campanas: el dialogo de descarga se abre con la lista nueva",
           lambda: (ultima["f"]._sincronizar_anteriores(), root.update()))
     for w in root.winfo_children():

@@ -117,6 +117,12 @@ BUFFER_POR_DEFECTO = 15.0
 # caja de busqueda no responde.
 RETARDO_BUSQUEDA_MS = 180
 
+# El selector de campana de la barra sirve a las dos vistas: en la lista basta con
+# el nombre de la campana; con una ficha abierta lleva ademas que se puede hacer
+# con ella ("en curso", "solo archivo", "✓ 3 pasadas"), y necesita mas sitio.
+ANCHO_CAMPANA_LISTA = 11
+ANCHO_CAMPANA_FICHA = 34
+
 # La lista ya evaluada es un dato DERIVADO de las parcelas: si se borra una, deja
 # de valer. Segun la regla de `almacen`, quien guarda algo derivado se apunta al
 # aviso en vez de esperar a que quien borra se acuerde -el borrado se llama desde
@@ -1007,6 +1013,10 @@ class PanelGestionParcelas(ttk.Frame):
     def __init__(self, master, *a, **k):
         super().__init__(master, *a, **k)
         self.campana = campana_actual()
+        # La ficha abierta, si la hay. El selector de campana de la barra sirve a
+        # las dos vistas y necesita saber a cual esta sirviendo.
+        self.ficha = None
+        self._campanas_barra = None      # campanas de la ficha, cuando hay ficha
         # Lista ya evaluada (ver `_refrescar`), con la campana y la version de los
         # datos con que se calculo. `None` = todavia no hay nada.
         self._filas = None
@@ -1015,12 +1025,17 @@ class PanelGestionParcelas(ttk.Frame):
         self._tarea_busqueda = None      # el repintado pendiente de la busqueda
 
         self.contenedor = tk.Frame(self, bg=TEMA["page"])
-        self.contenedor.pack(fill="both", expand=True)
         self.vista_lista = tk.Frame(self.contenedor, bg=TEMA["page"])
         self.vista_ficha = tk.Frame(self.contenedor, bg=TEMA["page"])
 
-        self._build_cabecera()
-        self._build_barra()
+        # El ORDEN de estos tres importa, y estaba mal: `contenedor` se
+        # empaquetaba el primero con expand=True, se quedaba con todo el alto y
+        # empujaba la cabecera por debajo del contenido -el titulo del programa
+        # salia al pie de la ventana-. Se reservan primero los bordes y el
+        # contenido ocupa lo que queda.
+        self._build_cabecera()          # titulo y estado, arriba
+        self._build_barra()             # campana, busqueda y acciones, abajo
+        self.contenedor.pack(fill="both", expand=True)
         self._build_lista()
         self.mostrar_lista()
 
@@ -1137,20 +1152,21 @@ class PanelGestionParcelas(ttk.Frame):
 
     def _build_barra(self):
         barra = tk.Frame(self, bg=TEMA["page"])
-        barra.pack(fill="x", padx=18, pady=12)
+        barra.pack(fill="x", side="bottom", padx=18, pady=12)
 
         camp = tarjeta(barra)
         camp.pack(side="left")
         tk.Label(camp, text=" Campana ", bg=TEMA["surface"], fg=TEMA["text_muted"],
                  font=FUENTES["small"]).pack(side="left", padx=(6, 0), pady=4)
-        self.cb_campana = ttk.Combobox(camp, state="readonly", width=11, values=self._campanas())
+        self.cb_campana = ttk.Combobox(camp, state="readonly", width=ANCHO_CAMPANA_LISTA,
+                                       values=self._campanas())
         self.cb_campana.set(self.campana)
         self.cb_campana.pack(side="left", padx=6, pady=4)
-        self.cb_campana.bind("<<ComboboxSelected>>",
-                             lambda e: (setattr(self, "campana", self.cb_campana.get()),
-                                        self._refrescar()))
+        self.cb_campana.bind("<<ComboboxSelected>>", lambda e: self._elegir_campana())
 
-        centro = tarjeta(barra)
+        # Buscar y ordenar son de la LISTA: con una ficha abierta no hacen nada,
+        # asi que se retiran en vez de quedarse ahi de adorno (ver `_sincronizar_barra`).
+        self.card_buscar = centro = tarjeta(barra)
         centro.pack(side="left", fill="x", expand=True, padx=10)
         tk.Label(centro, text="  \U0001F50D  ", bg=TEMA["surface"],
                  fg=TEMA["text_muted"]).pack(side="left")
@@ -1211,6 +1227,43 @@ class PanelGestionParcelas(ttk.Frame):
                                     f"{n_par} parcela(s) revisadas. Sin pasadas nuevas por ahora.")
         self.after(0, fin)
 
+    def _elegir_campana(self):
+        """UNA sola campana para todo el programa: la de esta barra.
+
+        En la lista elige que campana se resume. Con una ficha abierta elige que
+        campana de ESA parcela se mira, con su aviso de descarga y sus campanas de
+        solo archivo. Antes habia dos selectores a la vez -uno en la cabecera de la
+        ficha y otro aqui- que podian acabar diciendo cosas distintas."""
+        if self.ficha is not None and self._campanas_barra is not None:
+            return self.ficha.cambiar_a(self.cb_campana.current())
+        self.campana = self.cb_campana.get()
+        self._refrescar()
+
+    def _sincronizar_barra(self):
+        """Deja la barra de abajo acorde con lo que se esta mirando.
+
+        Es la unica barra del programa y sirve a las dos vistas, asi que tiene que
+        ensenar lo que aplica en cada una: con una ficha abierta, las campanas de
+        ESA parcela y sin la busqueda, que ahi no filtra nada."""
+        if not hasattr(self, "cb_campana") or not self.cb_campana.winfo_exists():
+            return
+        if self.card_buscar.winfo_exists():
+            if self.ficha is not None:
+                self.card_buscar.pack_forget()
+            elif not self.card_buscar.winfo_ismapped():
+                self.card_buscar.pack(side="left", fill="x", expand=True, padx=10,
+                                      before=self.btn_sync)
+        if self.ficha is not None:
+            etiquetas, disponibles, actual = self.ficha.campanas_para_barra()
+            self._campanas_barra = disponibles
+            self.cb_campana.configure(values=etiquetas, width=ANCHO_CAMPANA_FICHA)
+            if 0 <= actual < len(etiquetas):
+                self.cb_campana.current(actual)
+        else:
+            self._campanas_barra = None
+            self.cb_campana.configure(values=self._campanas(), width=ANCHO_CAMPANA_LISTA)
+            self.cb_campana.set(self.campana)
+
     def _campanas(self):
         # solo la actual + las campanas con datos de satelite (las vacias no se muestran)
         c = {campana_actual()}
@@ -1247,6 +1300,8 @@ class PanelGestionParcelas(ttk.Frame):
     def mostrar_lista(self):
         self.vista_ficha.pack_forget()
         self.vista_lista.pack(fill="both", expand=True)
+        self.ficha = None
+        self._sincronizar_barra()
         self._refrescar()
 
     # Orden de gravedad para ordenar por estado: lo que hay que mirar, arriba.
@@ -1417,7 +1472,8 @@ class PanelGestionParcelas(ttk.Frame):
         for w in self.vista_ficha.winfo_children():
             w.destroy()
         self.vista_ficha.pack(fill="both", expand=True)
-        FichaParcela(self.vista_ficha, self, nombre, self.campana)
+        self.ficha = FichaParcela(self.vista_ficha, self, nombre, self.campana)
+        self._sincronizar_barra()
 
     def _historico(self, nombre):
         return DB.pasadas(nombre, self.campana)
@@ -2732,7 +2788,6 @@ class FichaParcela:
                    command=panel.mostrar_lista).pack(side="left", padx=12, pady=10)
         tk.Label(cab, text=nombre.replace("_", " "),
                  bg=TEMA["header_bg"], fg=TEMA["text_inv"], font=FUENTES["h2"]).pack(side="left")
-        self._build_selector_campana(cab)
         ttk.Button(cab, text="  \u21BB Sincronizar Copernicus  ", style="Ghost.TButton",
                    command=self.sincronizar).pack(side="right", padx=(0, 12), pady=10)
         ttk.Button(cab, text="  \U0001F4E1 Sentinel-1 (radar)  ", style="Ghost.TButton",
@@ -2806,16 +2861,6 @@ class FichaParcela:
     # Cambiar de campana aqui cambia tambien la del panel: la ficha lee la serie a
     # traves de `panel._historico`, asi que las dos tienen que ir a la vez o la
     # ficha ensenaria una campana y la lista otra.
-    def _build_selector_campana(self, cab):
-        marco = tk.Frame(cab, bg=TEMA["header_bg"])
-        marco.pack(side="left", padx=(14, 0))
-        tk.Label(marco, text="Campana", bg=TEMA["header_bg"], fg=TEMA["header_sub"],
-                 font=FUENTES["small"]).pack(side="left", padx=(0, 6))
-        self.cb_campana_ficha = ttk.Combobox(marco, state="readonly", width=26)
-        self.cb_campana_ficha.pack(side="left")
-        self.cb_campana_ficha.bind("<<ComboboxSelected>>", self._cambiar_campana)
-        self._refrescar_campanas()
-
     def _campanas_ficha(self):
         return campanas_de_parcela(DB.campanas_de(self.nombre))
 
@@ -2832,23 +2877,30 @@ class FichaParcela:
         return marca + ("  ·  sin descargar (parcial)" if c["parcial"]
                         else "  ·  sin descargar")
 
-    def _refrescar_campanas(self):
-        if not hasattr(self, "cb_campana_ficha") or not self.cb_campana_ficha.winfo_exists():
-            return
+    def campanas_para_barra(self):
+        """Lo que el selector de la barra necesita para servir a esta ficha.
+
+        Devuelve (etiquetas, campanas, indice de la abierta). Las campanas son las
+        de ESTA parcela, no las que tengan datos en general: una parcela puede
+        guardar campanas mas antiguas que el satelite y esas no se ocultan nunca
+        (ver `campanas_de_parcela`)."""
         self._campanas_disp = self._campanas_ficha()
         # el numero de pasadas solo de la campana abierta: contarlas todas seria
         # una consulta por campana cada vez que se refresca la ficha
         etiquetas = [self._etiqueta_campana(
             c, len(DB.pasadas(self.nombre, c["campana"])) if c["campana"] == self.campana else None)
             for c in self._campanas_disp]
-        self.cb_campana_ficha["values"] = etiquetas
-        for i, c in enumerate(self._campanas_disp):
-            if c["campana"] == self.campana:
-                self.cb_campana_ficha.current(i)
-                break
+        actual = next((i for i, c in enumerate(self._campanas_disp)
+                       if c["campana"] == self.campana), -1)
+        return etiquetas, self._campanas_disp, actual
 
-    def _cambiar_campana(self, _=None):
-        i = self.cb_campana_ficha.current()
+    def _refrescar_campanas(self):
+        """Vuelve a rellenar el selector de la barra, que es el unico que hay."""
+        if self.panel is not None:
+            self.panel._sincronizar_barra()
+
+    def cambiar_a(self, i):
+        """Abre la campana numero `i` de las que ofrece la barra para esta ficha."""
         if not (0 <= i < len(getattr(self, "_campanas_disp", []))):
             return
         elegida = self._campanas_disp[i]
@@ -2871,15 +2923,11 @@ class FichaParcela:
         self._abrir_campana(camp)
 
     def _abrir_campana(self, camp):
-        """Cambia la campana del panel y vuelve a montar la ficha en ella."""
+        """Cambia la campana del panel y vuelve a montar la ficha en ella.
+
+        No hay que remendar el desplegable: `mostrar_ficha` deja la barra
+        sincronizada con las campanas de la parcela recien montada."""
         self.panel.campana = camp
-        if hasattr(self.panel, "cb_campana") and self.panel.cb_campana.winfo_exists():
-            # el selector del panel solo lista campanas CON datos; si se abre una
-            # vacia hay que meterla o quedaria puesta una campana que no esta en la
-            # lista y el desplegable ensenaria otra cosa
-            self.panel.cb_campana["values"] = sorted(
-                set(self.panel._campanas()) | {camp}, reverse=True)
-            self.panel.cb_campana.set(camp)
         self.panel.mostrar_ficha(self.nombre)
 
     def _sincronizar_campana(self, camp):

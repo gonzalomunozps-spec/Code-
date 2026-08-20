@@ -283,6 +283,21 @@ todas las parcelas.
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
    humedad comercial y no predice con ellos. Es el único dato objetivo del
    sistema: viene de la báscula, no de una imagen.
+20. **Un solo selector de campaña, en la barra de abajo.** Había dos a la vez
+   —uno en la cabecera de la ficha y otro en la barra— y podían acabar diciendo
+   cosas distintas. Ahora la barra sirve a las dos vistas: en la lista ofrece las
+   campañas con datos; con una ficha abierta ofrece las de **esa parcela**, con
+   sus marcas («en curso», «solo archivo», «✓ 3 pasadas») y su aviso de descarga,
+   y retira la búsqueda, que ahí no filtra nada. `FichaParcela.campanas_para_barra`
+   y `cambiar_a(i)` son la interfaz entre ambos; `_sincronizar_barra` la aplica al
+   entrar y salir de la ficha. El botón «Campañas anteriores» sigue en la ficha.
+
+21. **El orden de empaquetado de `PanelGestionParcelas` importa.** `contenedor` se
+   empaquetaba el primero con `expand=True`, se quedaba con todo el alto y
+   empujaba la cabecera **por debajo del contenido**: el título del programa salía
+   al pie de la ventana. Primero se reservan los bordes (cabecera arriba, barra
+   abajo con `side="bottom"`) y el contenido ocupa lo que queda.
+
 17. **El cromo va en `TEMA`; los colores de datos, no.** Un color de serie
    identifica un **índice**, no decora la ventana: tiene que sobrevivir al cambio
    de tema en vez de seguirlo. Por eso vive en `PALETA_DATOS`, con una **ranura
