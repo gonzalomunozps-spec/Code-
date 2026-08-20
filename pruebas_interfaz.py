@@ -830,6 +830,95 @@ def escenario_cierre(P, DB):
     return f"{len(hechas)} escenas de cierre"
 
 
+def _contraste(a, b):
+    """Relacion de contraste WCAG entre dos colores. Puro: no necesita pantalla."""
+    def canal(v):
+        v /= 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    def lum(h):
+        h = h.lstrip("#")
+        r, g, bl = (canal(int(h[i:i + 2], 16)) for i in (0, 2, 4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * bl
+    la, lb = lum(a), lum(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+# Pares texto/fondo que tienen que poder leerse, con su minimo. 4.5 es el listado
+# AA para texto normal; 3.0 basta para una insignia o un elemento de interfaz.
+PARES_CONTRASTE = [
+    ("text", "surface", 4.5), ("text", "page", 4.5), ("text", "campo_bg", 4.5),
+    ("text", "surface_alt", 4.5), ("text", "fila_alt", 4.5), ("text", "sel_bg", 4.5),
+    ("text", "nota_bg", 4.5), ("text", "nota_radar", 4.5),
+    ("text_sec", "surface", 4.5), ("text_sec", "page", 4.5),
+    ("text_muted", "surface_alt", 3.0),
+    ("text_inv", "header_bg", 4.5), ("text_inv_sec", "header_bg", 4.5),
+    ("text_inv", "primary", 4.5), ("tab_sel_fg", "surface", 4.5),
+    ("sync_ok", "header_bg", 3.0), ("sync_fallo", "header_bg", 3.0),
+    ("ok_fg", "ok_bg", 4.5), ("warn_fg", "warn_bg", 4.5),
+    ("danger_fg", "danger_bg", 4.5), ("muted_fg", "muted_bg", 4.5),
+    ("tooltip_fg", "tooltip_bg", 4.5),
+]
+
+
+def escenario_tema(P, DB):
+    """Los dos temas: que esten completos, que se lean y que la aplicacion monte.
+
+    El contraste se CALCULA, no se mira: un color elegido a ojo sobre fondo oscuro
+    parece bien y luego no se lee. Y los dos temas tienen que llevar exactamente
+    las mismas claves: la que falte en uno revienta al pintar, pero solo en ese."""
+    from tkinter import ttk
+    hechos = []
+
+    claves_claro = set(P.TEMAS["claro"])
+    claves_oscuro = set(P.TEMAS["oscuro"])
+    _paso("los dos temas llevan las mismas claves",
+          lambda: _check(claves_claro == claves_oscuro,
+                         f"solo en claro: {sorted(claves_claro - claves_oscuro)} · "
+                         f"solo en oscuro: {sorted(claves_oscuro - claves_claro)}"))
+
+    for modo in ("claro", "oscuro"):
+        T = P.TEMAS[modo]
+        malos = [(f, b, round(_contraste(T[f], T[b]), 2), m)
+                 for f, b, m in PARES_CONTRASTE
+                 if f in T and b in T and _contraste(T[f], T[b]) < m]
+        _paso(f"tema {modo}: todo el texto se lee",
+              lambda malos=malos: _check(not malos, f"por debajo del minimo: {malos}"))
+        hechos.append(f"{modo}: {len(PARES_CONTRASTE)} pares")
+
+    # la paleta de datos: mismas ranuras en los dos modos, y ninguna repetida
+    _paso("la paleta de datos tiene 8 ranuras en los dos modos",
+          lambda: _check(len(P.PALETA_DATOS["claro"]) == 8 == len(P.PALETA_DATOS["oscuro"]),
+                         "la paleta de series no tiene ocho ranuras"))
+    _paso("ninguna serie de una misma grafica comparte color", lambda: _check(
+        len({P.RANURA_SERIE[k] for k in ("NDVI", "EVI", "SAVI", "GNDVI",
+                                         "LAI", "MSAVI", "NDMI", "RVI")}) == 8,
+        "dos indices de la ficha caen en la misma ranura"))
+    _paso("y el color de una serie cambia con el modo", lambda: _check(
+        P.PALETA_DATOS["claro"][P.RANURA_SERIE["NDVI"]]
+        != P.PALETA_DATOS["oscuro"][P.RANURA_SERIE["NDVI"]],
+        "el paso oscuro es igual que el claro"))
+
+    # y la aplicacion monta de verdad en oscuro, con ficha y grafica incluidas
+    root = _raiz()
+    P.aplicar_tema(root, escala=1.0, modo="oscuro")
+    _paso("con el tema oscuro puesto, TEMA queda relleno",
+          lambda: _check(P.TEMA["surface"] == P.TEMAS["oscuro"]["surface"],
+                         "TEMA no recogio el modo oscuro"))
+    nb = ttk.Notebook(root)
+    nb.pack(fill="both", expand=True)
+    panel = P.PanelGestionParcelas(nb)
+    nb.add(panel, text="x")
+    root.update()
+    _paso("la ficha se monta entera en oscuro", lambda: (
+        panel.mostrar_ficha(sorted(DB.nombres())[0]), root.update()))
+    _paso("y el panel de credenciales tambien", lambda: (
+        nb.add(P.PanelCredenciales(nb), text="cred"), root.update()))
+    _derribar(root)
+    P.aplicar_tema(_raiz(), escala=1.0, modo="claro")   # se deja como estaba
+    return ", ".join(hechos)
+
+
 def escenario_fluidez(P, DB):
     """La lista evaluada que se reutiliza, y la busqueda con retardo.
 
@@ -1021,6 +1110,7 @@ ESCENARIOS = [("arranque", escenario_arranque), ("lista de parcelas", escenario_
               ("campanas de la ficha", escenario_campanas),
               ("dialogos", escenario_dialogos), ("presentacion (DPI, icono, arranque)", escenario_presentacion),
               ("fluidez (lista reutilizada, busqueda con retardo)", escenario_fluidez),
+              ("tema claro/oscuro y paleta de datos", escenario_tema),
               ("cierre a media sincronizacion", escenario_cierre)]
 
 

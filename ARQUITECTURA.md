@@ -283,6 +283,40 @@ todas las parcelas.
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
    humedad comercial y no predice con ellos. Es el único dato objetivo del
    sistema: viene de la báscula, no de una imagen.
+17. **El cromo va en `TEMA`; los colores de datos, no.** Un color de serie
+   identifica un **índice**, no decora la ventana: tiene que sobrevivir al cambio
+   de tema en vez de seguirlo. Por eso vive en `PALETA_DATOS`, con una **ranura
+   fija por serie** (`RANURA_SERIE`) y un paso propio para cada modo —el oscuro no
+   es el claro aclarado—. Encender o apagar índices no repinta los que quedan.
+   La paleta anterior **no pasaba la validación**: RVI (`#0d9488`) y NDMI
+   (`#3182ce`) quedaban a ΔE 13,6 con visión **normal** —bajo el mínimo de 15, o
+   sea confundibles incluso viendo todos los colores— y GNDVI y LAI no llegaban a
+   3:1 contra el blanco. Con ocho curvas sobre la misma gráfica eso no es estética:
+   es no poder decir cuál es cuál.
+   Los eventos del cuaderno ya **no** llevan color propio: siete colores más
+   encima de ocho series se comían el canal de identidad. Van en tinta apagada
+   (`TEMA["traza"]`, punteada) y se distinguen por su etiqueta.
+
+18. **El contraste se calcula, no se mira.** Los dos temas se comprueban contra
+   22 pares texto/fondo con la fórmula WCAG (4,5:1 para texto, 3:1 para insignias)
+   en `pruebas_interfaz.escenario_tema`, que además exige que **ambos temas lleven
+   exactamente las mismas claves**: la que falte en uno revienta al pintar, pero
+   solo en ese. Salieron tres defectos así, dos de ellos ya presentes en la paleta
+   original (`warn_fg` a 4,39:1 y `muted_fg` a 3,56:1).
+   Ojo con un token que hace dos trabajos: `primary_dk` era a la vez fondo de botón
+   pulsado (tiene que ser **oscuro**) y texto de la pestaña activa (tiene que
+   **leerse**). En claro coincidían por casualidad; en oscuro se quedaba en 2,72:1.
+   Están separados (`tab_sel_fg`).
+
+19. **El tema se elige al arrancar, no en caliente.** Tk no repinta las ventanas ya
+   creadas: los `tk.Frame`/`tk.Label` llevan su `bg` fijado al construirse. El modo
+   se guarda en la configuración (`cfg["tema"]`) y se aplica en el siguiente
+   arranque; la pantalla de Credenciales lo dice. `aplicar_tema` rellena `TEMA`
+   **mutándolo en el sitio**, nunca reasignándolo, para no invalidar referencias ya
+   tomadas — y por eso lo que capture colores en tiempo de importación es un
+   problema: había uno (`_SYNC_COLOR`) y ahora guarda el nombre del token, no el
+   color.
+
 15. **Filtrar y ordenar no vuelven a evaluar; todo lo demás sí.** Evaluar una
    parcela cuesta traer su serie de pasadas y pasarla entera por
    `evaluar_parcela`. El texto de búsqueda y el criterio de orden **no pueden

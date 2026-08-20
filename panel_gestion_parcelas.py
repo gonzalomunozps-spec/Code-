@@ -247,7 +247,13 @@ def poner_icono(root):
 # =====================================================================
 # TEMA / SISTEMA DE DISENO
 # =====================================================================
-TEMA = {
+# `TEMA` es el diccionario VIVO: lo lee todo el programa como `TEMA["surface"]`.
+# Se rellena con el modo elegido y se muta EN EL SITIO -nunca se reasigna-, para
+# que siga valiendo cualquier referencia que alguien tenga ya cogida.
+MODO = {"m": "claro"}
+
+TEMAS = {}
+TEMAS["claro"] = {
     "page":        "#eef1f4",
     "surface":     "#ffffff",
     "surface_alt": "#f7fafc",
@@ -261,10 +267,113 @@ TEMA = {
     "text_sec":    "#4a5568",
     "text_muted":  "#718096",
     "ok_fg": "#276749", "ok_bg": "#f0fff4",
-    "warn_fg": "#c05621", "warn_bg": "#fffaf0",
+    "warn_fg": "#bc5420", "warn_bg": "#fffaf0",
     "danger_fg": "#c53030", "danger_bg": "#fff5f5",
-    "muted_fg": "#718096", "muted_bg": "#edf2f7",
+    "muted_fg": "#616e83", "muted_bg": "#edf2f7",
+
+    # --- sobre la cabecera verde oscura -------------------------------------
+    "tab_sel_fg":   "#276749",   # texto de la pestana activa (NO es primary_dk:
+                                 # ese es un FONDO y ha de ser oscuro; este se lee)
+    "text_inv":     "#ffffff",   # titulos y botones de la cabecera
+    "text_inv_sec": "#cbd5e1",   # lo secundario de la cabecera
+    "header_hover": "#2a5540",   # boton de cabecera con el raton encima
+    "sync_ok":      "#86efac",   # insignia de conexion, legible sobre el verde
+    "sync_fallo":   "#fca5a5",
+
+    # --- superficies concretas ----------------------------------------------
+    "campo_bg":     "#ffffff",   # fondo de un campo que se puede escribir
+    "fila_alt":     "#fcfdfe",   # franja alterna de las tablas
+    "sel_bg":       "#d7ecdf",   # fila seleccionada
+    "nota_bg":      "#f2f8ff",   # panel de texto de la interpretacion
+    "nota_radar":   "#eef7f5",   # el mismo panel, en la ventana de radar
+    "lienzo_bg":    "#d7ddd9",   # fondo del mapa cuando no hay imagen
+
+    # --- graficas (cromo, NO series: eso va en PALETA_DATOS) -----------------
+    "eje":          "#cbd5e0",   # borde de los ejes
+    "traza":        "#94a3b8",   # linea vertical que sigue al raton
+    "tooltip_bg":   "#111827",
+    "tooltip_fg":   "#f8fafc",
+    "parcela_borde": "#22d3ee",  # contorno al dibujar una parcela sobre el mapa
 }
+
+# El oscuro NO es el claro invertido: es la misma identidad -verde de campo sobre
+# gris pizarra- elegida contra un fondo oscuro. Los pares de texto sobre fondo se
+# comprueban con un script, no a ojo (ver `pruebas_interfaz.escenario_tema`).
+TEMAS["oscuro"] = {
+    "page":        "#121714",
+    "surface":     "#1b211d",
+    "surface_alt": "#232a25",
+    "border":      "#323b35",
+    "border_soft": "#28302a",
+    "header_bg":   "#16261c",
+    "header_sub":  "#8fae9e",
+    "primary":     "#34855c",
+    "primary_dk":  "#2b6f4c",
+    "text":        "#e7ece9",
+    "text_sec":    "#b6c2ba",
+    "text_muted":  "#8d9a92",
+    "ok_fg": "#7fe0a6", "ok_bg": "#16301f",
+    "warn_fg": "#f0ac6e", "warn_bg": "#33261a",
+    "danger_fg": "#f39191", "danger_bg": "#351e1e",
+    "muted_fg": "#8d9a92", "muted_bg": "#28302a",
+
+    "tab_sel_fg":   "#5cc08c",
+    "text_inv":     "#ffffff",
+    "text_inv_sec": "#a9b6ad",
+    "header_hover": "#223b2b",
+    "sync_ok":      "#86efac",
+    "sync_fallo":   "#fca5a5",
+
+    "campo_bg":     "#232a25",
+    "fila_alt":     "#1f2621",
+    "sel_bg":       "#2d4938",
+    "nota_bg":      "#1a2430",
+    "nota_radar":   "#172a26",
+    "lienzo_bg":    "#232925",
+
+    "eje":          "#3d4842",
+    "traza":        "#6d7c74",
+    "tooltip_bg":   "#e7ece9",
+    "tooltip_fg":   "#121714",
+    "parcela_borde": "#22d3ee",
+}
+
+TEMA = dict(TEMAS["claro"])
+
+
+# =====================================================================
+# PALETA DE DATOS  (esto NO es cromo: no va dentro de TEMA)
+# =====================================================================
+# El color de una serie identifica un INDICE; no decora la ventana. Tiene que
+# sobrevivir al cambio de tema, no seguirlo, y por eso vive aparte. El paso
+# oscuro no es el claro «aclarado»: son los mismos ocho tonos re-escalonados
+# contra el fondo oscuro.
+#
+# La paleta anterior no pasaba la validacion: RVI (#0d9488) y NDMI (#3182ce)
+# quedaban a ΔE 13,6 con vision NORMAL -por debajo de 15, o sea confundibles
+# incluso viendo todos los colores- y GNDVI y LAI no llegaban a 3:1 de contraste
+# contra el blanco. Con ocho curvas sobre la misma grafica eso no es un detalle
+# estetico: es no poder decir cual es cual.
+PALETA_DATOS = {
+    "claro":  ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+               "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
+    "oscuro": ["#3987e5", "#d95926", "#199e70", "#c98500",
+               "#d55181", "#008300", "#9085e9", "#e66767"],
+}
+
+# Cada serie tiene su RANURA fija: el color va con la serie, no con su posicion
+# en pantalla, asi que encender o apagar indices no repinta los que quedan.
+# VV/VH/CR solo aparecen en la ventana de radar y por eso reaprovechan ranuras
+# del grafico de la ficha, con el que nunca comparten imagen; RVI conserva la
+# suya para ser del mismo color en los dos sitios.
+RANURA_SERIE = {"NDVI": 0, "EVI": 1, "SAVI": 2, "GNDVI": 3,
+                "LAI": 4, "MSAVI": 5, "NDMI": 6, "RVI": 7,
+                "VV": 0, "VH": 1, "CR": 2}
+
+
+def color_serie(nombre):
+    """El color de una serie de datos, en el modo vigente."""
+    return PALETA_DATOS[MODO["m"]][RANURA_SERIE.get(nombre, 0)]
 
 FUENTES = {}
 
@@ -277,8 +386,11 @@ def _familia_disponible(root, candidatas):
     return "TkDefaultFont"
 
 
-def aplicar_tema(root, escala=None):
+def aplicar_tema(root, escala=None, modo=None):
     """Configura ttk.Style y fuentes. Llamar una vez tras crear la ventana.
+
+    `modo` es "claro" u "oscuro". Rellena `TEMA` mutandolo EN EL SITIO, para no
+    invalidar ninguna referencia que alguien tenga ya cogida.
 
     `escala` fija a mano el factor de ampliacion en vez de deducirlo de la
     pantalla. Existe para las PRUEBAS: si el factor sale del DPI del monitor, la
@@ -287,6 +399,10 @@ def aplicar_tema(root, escala=None):
 
     matplotlib ya no se toca aqui: su tema se aplica solo, al cargarla la primera
     grafica (ver `_matplotlib`)."""
+    if modo in TEMAS:
+        MODO["m"] = modo
+    TEMA.clear()
+    TEMA.update(TEMAS[MODO["m"]])
     _ESCALA["f"] = float(escala) if escala else _factor_escala(root)
     try:
         # `tk scaling` son pixeles por punto tipografico. Con el DPI real, una
@@ -323,13 +439,13 @@ def aplicar_tema(root, escala=None):
                  font=FUENTES["body"])
     st.map("TButton", background=[("active", TEMA["surface_alt"])],
            bordercolor=[("focus", TEMA["primary"])])
-    st.configure("Accent.TButton", background=TEMA["primary"], foreground="#ffffff",
+    st.configure("Accent.TButton", background=TEMA["primary"], foreground=TEMA["text_inv"],
                  relief="flat", padding=(14, 8), font=FUENTES["body"])
     st.map("Accent.TButton", background=[("active", TEMA["primary_dk"]),
                                          ("pressed", TEMA["primary_dk"])])
-    st.configure("Ghost.TButton", background=TEMA["header_bg"], foreground="#ffffff",
+    st.configure("Ghost.TButton", background=TEMA["header_bg"], foreground=TEMA["text_inv"],
                  relief="flat", padding=(10, 6))
-    st.map("Ghost.TButton", background=[("active", "#2a5540")])
+    st.map("Ghost.TButton", background=[("active", TEMA["header_hover"])])
 
     for cls in ("TEntry", "TCombobox"):
         st.configure(cls, fieldbackground=TEMA["surface"], background=TEMA["surface"],
@@ -344,18 +460,20 @@ def aplicar_tema(root, escala=None):
                  foreground=TEMA["text_muted"], relief="flat", padding=(10, 8),
                  font=tkfont.Font(family=fam, size=10, weight="bold"))
     st.map("Treeview.Heading", background=[("active", TEMA["border_soft"])])
-    st.map("Treeview", background=[("selected", "#d7ecdf")],
+    st.map("Treeview", background=[("selected", TEMA["sel_bg"])],
            foreground=[("selected", TEMA["text"])])
 
     st.configure("TNotebook", background=TEMA["page"], borderwidth=0)
-    st.configure("TNotebook.Tab", background=TEMA["page"], foreground=TEMA["text_muted"],
+    st.configure("TNotebook.Tab", background=TEMA["page"], foreground=TEMA["text_sec"],
                  padding=(16, 9), font=FUENTES["body"])
     st.map("TNotebook.Tab", background=[("selected", TEMA["surface"])],
-           foreground=[("selected", TEMA["primary_dk"])])
+           foreground=[("selected", TEMA["tab_sel_fg"])])
 
     st.configure("Vertical.TScrollbar", background=TEMA["border"], troughcolor=TEMA["page"],
                  bordercolor=TEMA["page"], arrowcolor=TEMA["text_muted"])
 
+    if Figure is not None:      # ya cargada: hay que volver a vestirle las graficas
+        _tema_matplotlib()
     return st
 
 
@@ -364,7 +482,7 @@ def _tema_matplotlib():
     mpl.rcParams.update({
         "font.size": 9,
         "figure.facecolor": TEMA["surface"], "axes.facecolor": TEMA["surface"],
-        "axes.edgecolor": "#cbd5e0", "axes.linewidth": 0.8,
+        "axes.edgecolor": TEMA["eje"], "axes.linewidth": 0.8,
         "axes.grid": True, "grid.color": TEMA["border_soft"], "grid.linewidth": 0.9,
         "axes.spines.top": False, "axes.spines.right": False,
         "axes.titlesize": 10, "axes.titleweight": "bold",
@@ -499,7 +617,8 @@ class LienzoMapa:
     """Canvas que muestra un PNG con ZOOM (rueda / botones) y DESPLAZAMIENTO
     (arrastrar con el raton) para recorrer las distintas zonas de la parcela.
     Lo usan tanto la ficha como la ventana de comparacion."""
-    def __init__(self, parent, bg="#d7ddd9", on_info=None):
+    def __init__(self, parent, bg=None, on_info=None):
+        bg = bg or TEMA["lienzo_bg"]
         self.canvas = tk.Canvas(parent, bg=bg, highlightthickness=0)
         self.on_info = on_info                 # callback(texto) para el estado (zoom/resolucion)
         self.png = None
@@ -693,7 +812,7 @@ class CampoFecha(tk.Frame):
         super().__init__(parent, bg=TEMA["surface"], **kw)
         self.var = tk.StringVar()
         self.entry = tk.Entry(self, textvariable=self.var, width=width, justify="center",
-                              bd=1, relief="solid", bg="#ffffff", fg=TEMA["text"],
+                              bd=1, relief="solid", bg=TEMA["campo_bg"], fg=TEMA["text"],
                               insertbackground=TEMA["text"], highlightthickness=0)
         self.entry.pack(side="left", ipady=1)
         ttk.Button(self, text="📅", width=3, command=self._abrir_cal).pack(side="left", padx=(2, 0))
@@ -755,10 +874,13 @@ class CampoFecha(tk.Frame):
 _FMT_DIAS = ("lun", "mar", "mie", "jue", "vie", "sab", "dom")
 _FMT_MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 # color y etiqueta de cada tipo de evento del cuaderno para las lineas de la grafica
-_ICONOS_EVENTO = {"PRODUCTO": ("#c05621", "Producto"), "SIEGA": ("#2b6cb0", "Siega"),
-                  "COSECHA": ("#b7791f", "Cosecha"), "RIEGO": ("#3182ce", "Riego"),
-                  "LABOREO": ("#718096", "Laboreo"), "SIEMBRA": ("#276749", "Siembra"),
-                  "OTRO": ("#718096", "Evento")}
+# Los eventos del cuaderno se marcan sobre la grafica como lineas verticales de
+# apoyo. NO llevan color propio: siete colores mas, encima de hasta ocho series de
+# datos, se comen el canal que sirve para saber que curva es cual. Van en tinta
+# apagada y se distinguen por su ETIQUETA, que es lo que se lee de todas formas.
+_NOMBRE_EVENTO = {"PRODUCTO": "Producto", "SIEGA": "Siega", "COSECHA": "Cosecha",
+                  "RIEGO": "Riego", "LABOREO": "Laboreo", "SIEMBRA": "Siembra",
+                  "OTRO": "Evento"}
 
 
 # --- texto emergente de la grafica: valores de los indices y fiabilidad del dia ---
@@ -815,8 +937,7 @@ def _colores_estado(clave):
 # Las paletas, INDICES e INDICES_ORDEN viven en gee_cliente (los usa la descarga
 # y los reutiliza la leyenda de la interfaz).
 
-COLOR_INDICE = {"NDVI": "#2f855a", "EVI": "#805ad5", "SAVI": "#dd6b20", "GNDVI": "#0ea5e9",
-                "LAI": "#d69e2e", "MSAVI": "#e53e3e", "NDMI": "#3182ce", "RVI": "#0d9488"}
+# (los colores de serie viven en PALETA_DATOS; se piden con `color_serie`)
 # indices que se muestran por defecto en la grafica (los demas, a eleccion)
 INDICES_GRAFICA_DEF = ["NDVI", "EVI", "SAVI", "NDMI"]
 
@@ -984,12 +1105,14 @@ class PanelGestionParcelas(ttk.Frame):
         izq = tk.Frame(cab, bg=TEMA["header_bg"])
         izq.pack(side="left", fill="x")
         tk.Label(izq, text="Gestion y Monitoreo de Parcelas", bg=TEMA["header_bg"],
-                 fg="#ffffff", font=FUENTES["h1"]).pack(anchor="w", padx=18, pady=(12, 0))
+                 fg=TEMA["text_inv"], font=FUENTES["h1"]).pack(anchor="w", padx=18, pady=(12, 0))
         tk.Label(izq, text="Ecosistema Copernicus  -  Sentinel-2", bg=TEMA["header_bg"],
                  fg=TEMA["header_sub"], font=FUENTES["small"]).pack(anchor="w", padx=18, pady=(0, 12))
 
     # colores legibles sobre la cabecera verde oscura
-    _SYNC_COLOR = {"ok": "#86efac", "fallo": "#fca5a5", None: TEMA["header_sub"]}
+    # Se resuelve al pintar, no al importar: al importar aun no se sabe con que
+    # tema va a arrancar el programa.
+    _SYNC_TOKEN = {"ok": "sync_ok", "fallo": "sync_fallo", None: "header_sub"}
     _SYNC_TEXTO = {"ok": "● GEE: conectado", "fallo": "● GEE: fallo",
                    None: "○ GEE: sin sincronizar"}
 
@@ -999,7 +1122,7 @@ class PanelGestionParcelas(ttk.Frame):
             return          # la ventana se cerro mientras el hilo sincronizaba
         est = ULTIMO_SYNC.get("estado")
         self.lbl_sync.config(text=self._SYNC_TEXTO.get(est, self._SYNC_TEXTO[None]),
-                             fg=self._SYNC_COLOR.get(est, self._SYNC_COLOR[None]))
+                             fg=TEMA[self._SYNC_TOKEN.get(est, self._SYNC_TOKEN[None])])
 
     def _detalle_sync(self):
         est = ULTIMO_SYNC.get("estado")
@@ -1113,7 +1236,7 @@ class PanelGestionParcelas(ttk.Frame):
         sb.pack(side="right", fill="y", pady=1)
 
         self.tree.tag_configure("par", background=TEMA["surface"])
-        self.tree.tag_configure("impar", background="#fcfdfe")
+        self.tree.tag_configure("impar", background=TEMA["fila_alt"])
         for clave in ("OK", "Vigilar", "Revisar"):
             self.tree.tag_configure(f"est_{clave}", foreground=_colores_estado(clave)[0])
         self.tree.tag_configure("est_NA", foreground=TEMA["text_muted"])
@@ -1331,7 +1454,7 @@ class VentanaAltaParcela(tk.Toplevel):
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
         _tit = f"Editar parcela · {editar.replace('_', ' ')}" if editar else "Nueva parcela"
-        tk.Label(cab, text=_tit, bg=TEMA["header_bg"], fg="#fff",
+        tk.Label(cab, text=_tit, bg=TEMA["header_bg"], fg=TEMA["text_inv"],
                  font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=10)
 
         cuerpo = tk.Frame(self, bg=TEMA["page"])
@@ -1612,7 +1735,7 @@ class VentanaAltaParcela(tk.Toplevel):
             self.poligono = None
         if len(self.coords) >= 3:
             self.poligono = self.mapa.set_polygon([(c[1], c[0]) for c in self.coords],
-                                                  fill_color="#2f855a", outline_color="#22d3ee",
+                                                  fill_color=TEMA["primary"], outline_color=TEMA["parcela_borde"],
                                                   border_width=2)
 
     def _deshacer(self):
@@ -1748,7 +1871,7 @@ class DialogoRelevoCampana(tk.Toplevel):
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
-        tk.Label(cab, text=f"Campana {panel.campana}", bg=TEMA["header_bg"], fg="#fff",
+        tk.Label(cab, text=f"Campana {panel.campana}", bg=TEMA["header_bg"], fg=TEMA["text_inv"],
                  font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=8)
         tk.Label(cab, text="Indica el cultivo de cada parcela para la nueva campana.",
                  bg=TEMA["header_bg"], fg=TEMA["header_sub"],
@@ -2310,11 +2433,11 @@ class VentanaComparaMapas(tk.Toplevel):
         coords = (DB.ficha(nombre) or {}).get("coordenadas") or []
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
-        tk.Label(cab, text="Comparar mapas de indices", bg=TEMA["header_bg"], fg="#fff",
+        tk.Label(cab, text="Comparar mapas de indices", bg=TEMA["header_bg"], fg=TEMA["text_inv"],
                  font=FUENTES["h2"]).pack(side="left", padx=16, pady=10)
         tk.Label(cab, text="Elige dia e indice en cada panel: dos dias distintos, "
                            "o el mismo dia con distinto indice.",
-                 bg=TEMA["header_bg"], fg="#cbd5e1", font=FUENTES["small"]).pack(side="left", padx=6)
+                 bg=TEMA["header_bg"], fg=TEMA["text_inv_sec"], font=FUENTES["small"]).pack(side="left", padx=6)
 
         cuerpo = tk.Frame(self, bg=TEMA["page"])
         cuerpo.pack(fill="both", expand=True, padx=8, pady=8)
@@ -2370,7 +2493,7 @@ class DialogoEfectoProducto(tk.Toplevel):
             sel = self._etq(cercana)
         self.cb.set(sel)
 
-        self.txt = tk.Text(self, width=52, height=9, bd=0, relief="flat", bg="#f2f8ff",
+        self.txt = tk.Text(self, width=52, height=9, bd=0, relief="flat", bg=TEMA["nota_bg"],
                            fg=TEMA["text"], font=FUENTES["body"], padx=12, pady=10, highlightthickness=0)
         self.txt.pack(fill="both", expand=True, padx=16, pady=(8, 0))
 
@@ -2450,9 +2573,9 @@ class VentanaRadar(tk.Toplevel):
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
         tk.Label(cab, text="Radar Sentinel-1  ·  parametros, interpretacion y mapa",
-                 bg=TEMA["header_bg"], fg="#fff", font=FUENTES["h2"]).pack(side="left", padx=16, pady=10)
+                 bg=TEMA["header_bg"], fg=TEMA["text_inv"], font=FUENTES["h2"]).pack(side="left", padx=16, pady=10)
         est = (f"{msg}" if n == 0 else f"descargadas {n} pasadas de radar nuevas")
-        tk.Label(cab, text=f"({est})", bg=TEMA["header_bg"], fg="#cbd5e1",
+        tk.Label(cab, text=f"({est})", bg=TEMA["header_bg"], fg=TEMA["text_inv_sec"],
                  font=FUENTES["small"]).pack(side="left", padx=6)
 
         cuerpo = tk.Frame(self, bg=TEMA["page"])
@@ -2468,7 +2591,7 @@ class VentanaRadar(tk.Toplevel):
         self.cv = FigureCanvasTkAgg(self.fig, master=izq)
         self.cv.get_tk_widget().pack(fill="x", padx=12, pady=(0, 6))
         self._pintar_grafica_radar()
-        txt = tk.Text(izq, wrap="word", height=8, bd=0, relief="flat", bg="#eef7f5",
+        txt = tk.Text(izq, wrap="word", height=8, bd=0, relief="flat", bg=TEMA["nota_radar"],
                       fg=TEMA["text"], font=FUENTES["body"], padx=12, pady=10, highlightthickness=0)
         txt.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         txt.insert(tk.END, (info or {}).get("texto", ""))
@@ -2525,8 +2648,9 @@ class VentanaRadar(tk.Toplevel):
                 continue
         if pts:
             fechas = [p[0] for p in pts]
-            for k, color, lbl in [("vv", "#64748b", "VV (dB)"), ("vh", "#0ea5e9", "VH (dB)"),
-                                  ("cr", "#d97706", "CR=VH-VV (dB)")]:
+            for k, color, lbl in [("vv", color_serie("VV"), "VV (dB)"),
+                                  ("vh", color_serie("VH"), "VH (dB)"),
+                                  ("cr", color_serie("CR"), "CR=VH-VV (dB)")]:
                 ys = [p[1].get(k) for p in pts]
                 if any(v is not None for v in ys):
                     ax.plot(fechas, [v if v is not None else float("nan") for v in ys],
@@ -2536,11 +2660,11 @@ class VentanaRadar(tk.Toplevel):
             rvis = [p[1].get("rvi") for p in pts]
             if any(v is not None for v in rvis):
                 ax2.plot(fechas, [v if v is not None else float("nan") for v in rvis],
-                         marker="s", ms=3, lw=1.8, ls="--", label="RVI", color="#0d9488")
+                         marker="s", ms=3, lw=1.8, ls="--", label="RVI", color=color_serie("RVI"))
                 los = [p[1].get("rvi_lo") for p in pts]
                 his = [p[1].get("rvi_hi") for p in pts]
                 if all(x is not None for x in los) and all(x is not None for x in his):
-                    ax2.fill_between(fechas, los, his, color="#0d9488", alpha=0.15)
+                    ax2.fill_between(fechas, los, his, color=color_serie("RVI"), alpha=0.15)
                 ax2.set_ylabel("RVI", fontsize=8)
                 ax2.set_ylim(0, 1)
             h1, l1 = ax.get_legend_handles_labels()
@@ -2607,7 +2731,7 @@ class FichaParcela:
         ttk.Button(cab, text="  \u2190 Volver  ", style="Ghost.TButton",
                    command=panel.mostrar_lista).pack(side="left", padx=12, pady=10)
         tk.Label(cab, text=nombre.replace("_", " "),
-                 bg=TEMA["header_bg"], fg="#fff", font=FUENTES["h2"]).pack(side="left")
+                 bg=TEMA["header_bg"], fg=TEMA["text_inv"], font=FUENTES["h2"]).pack(side="left")
         self._build_selector_campana(cab)
         ttk.Button(cab, text="  \u21BB Sincronizar Copernicus  ", style="Ghost.TButton",
                    command=self.sincronizar).pack(side="right", padx=(0, 12), pady=10)
@@ -2799,7 +2923,7 @@ class FichaParcela:
             self.tv.column(c, width=esc(88) if c == "fecha" else esc(56),
                            anchor="w" if c == "fecha" else "center")
         self.tv.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self.tv.tag_configure("ult", background="#fffaf0")
+        self.tv.tag_configure("ult", background=TEMA["warn_bg"])
 
     # Columnas de la tabla de estadistica espacial: (clave, titulo, ancho, decimales)
     COLS_ESTAD = [("fecha", "FECHA", 88, None), ("media", "MEDIA", 62, 3),
@@ -2885,7 +3009,7 @@ class FichaParcela:
             self.tv_est.column(clave, width=esc(ancho),
                                anchor="w" if clave == "fecha" else "center")
         self.tv_est.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self.tv_est.tag_configure("ult", background="#fffaf0")
+        self.tv_est.tag_configure("ult", background=TEMA["warn_bg"])
 
     def _pintar_estadisticas(self, regs):
         """Vuelca los estadisticos espaciales de cada pasada. Los valores ya venian
@@ -3037,7 +3161,7 @@ class FichaParcela:
         self.chk_hetero.pack(anchor="w")
 
         self.txt = tk.Text(card, wrap="word", height=8, bd=0, relief="flat",
-                           bg="#f2f8ff", fg=TEMA["text"], font=FUENTES["body"],
+                           bg=TEMA["nota_bg"], fg=TEMA["text"], font=FUENTES["body"],
                            padx=12, pady=10, highlightthickness=0)
         self.txt.pack(fill="both", expand=True, padx=12, pady=(0, 6))
 
@@ -3161,7 +3285,7 @@ class FichaParcela:
                 ys = [r.get(K.lower()) for r in validos]
                 if any(v is not None for v in ys):
                     ax.plot(fechas, [v if v is not None else float("nan") for v in ys],
-                            marker="o", ms=3, lw=1.8, label=K, color=COLOR_INDICE.get(K, "#666"))
+                            marker="o", ms=3, lw=1.8, label=K, color=color_serie(K))
             # RVI de Sentinel-1 (radar): serie propia, con sus fechas, si existe y esta marcada
             if (idx_vars and idx_vars.get("RVI") and idx_vars["RVI"].get()
                     and getattr(self, "_radar", None)):
@@ -3176,12 +3300,12 @@ class FichaParcela:
                 rp = [(f, y) for f, y, _lo, _hi in rad if y is not None]
                 if rp:
                     ax.plot([p[0] for p in rp], [p[1] for p in rp], marker="s", ms=3, lw=1.6,
-                            ls="--", label="RVI·S1", color=COLOR_INDICE["RVI"])
+                            ls="--", label="RVI·S1", color=color_serie("RVI"))
                     # banda de incertidumbre del RVI (rango por speckle/dispersion)
                     banda = [(f, lo, hi) for f, _y, lo, hi in rad if lo is not None and hi is not None]
                     if len(banda) >= 2:
                         ax.fill_between([b[0] for b in banda], [b[1] for b in banda],
-                                        [b[2] for b in banda], color=COLOR_INDICE["RVI"], alpha=0.15)
+                                        [b[2] for b in banda], color=color_serie("RVI"), alpha=0.15)
             # --- marcadores de eventos del cuaderno de campo ---
             vistos = set()
             for e in REG.eventos_de(self.nombre, self.campana):
@@ -3189,20 +3313,21 @@ class FichaParcela:
                     fx = datetime.strptime(e["fecha"], "%Y-%m-%d")
                 except Exception:
                     continue
-                col, et = _ICONOS_EVENTO.get(e.get("tipo"), _ICONOS_EVENTO["OTRO"])
+                et = _NOMBRE_EVENTO.get(e.get("tipo"), _NOMBRE_EVENTO["OTRO"])
                 lbl = et if et not in vistos else None
                 vistos.add(et)
-                ax.axvline(fx, color=col, ls="--", lw=1.0, alpha=0.7, label=lbl)
+                ax.axvline(fx, color=TEMA["traza"], ls=":", lw=1.0, alpha=0.8, label=lbl)
             ax.legend(fontsize=7, ncol=5, loc="upper center", bbox_to_anchor=(0.5, 1.18))
             self.fig.autofmt_xdate()
             # --- puntero interactivo: linea vertical + caja con los valores del dia ---
-            self._hover_linea = ax.axvline(fechas[0], color="#94a3b8", lw=0.8,
+            self._hover_linea = ax.axvline(fechas[0], color=TEMA["traza"], lw=0.8,
                                            alpha=0.0, zorder=1)
             self._hover_caja = ax.annotate(
                 "", xy=(0, 0), xytext=(12, 12), textcoords="offset points",
                 fontsize=7.5, ha="left", va="bottom", visible=False, zorder=6,
-                bbox=dict(boxstyle="round,pad=0.4", fc="#111827", ec="#111827", alpha=0.92),
-                color="#f8fafc")
+                bbox=dict(boxstyle="round,pad=0.4", fc=TEMA["tooltip_bg"],
+                                          ec=TEMA["tooltip_bg"], alpha=0.92),
+                color=TEMA["tooltip_fg"])
             if getattr(self, "_hover_cid", None) is not None:
                 try:
                     self.cv.mpl_disconnect(self._hover_cid)
@@ -3547,7 +3672,7 @@ class FichaParcela:
         wrap_rend.pack(fill="x", padx=12, pady=(2, 10))
         self.lst_rend = tk.Listbox(wrap_rend, height=self.ALTO_RENDIMIENTOS,
                                    font=FUENTES["small"], bd=1, relief="solid",
-                                   bg="#ffffff", fg=TEMA["text"],
+                                   bg=TEMA["campo_bg"], fg=TEMA["text"],
                                    highlightthickness=0, activestyle="none",
                                    exportselection=False)
         sb_rend = ttk.Scrollbar(wrap_rend, orient="vertical", command=self.lst_rend.yview)
@@ -3883,7 +4008,7 @@ class PanelCredenciales(ttk.Frame):
     def _build(self):
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
-        tk.Label(cab, text="Credenciales y conexiones", bg=TEMA["header_bg"], fg="#fff",
+        tk.Label(cab, text="Credenciales y conexiones", bg=TEMA["header_bg"], fg=TEMA["text_inv"],
                  font=FUENTES["h1"]).pack(anchor="w", padx=18, pady=(12, 0))
         tk.Label(cab, text="Configura los servicios externos y comprueba que responden",
                  bg=TEMA["header_bg"], fg=TEMA["header_sub"],
@@ -3944,6 +4069,22 @@ class PanelCredenciales(ttk.Frame):
                        variable=self.var_recordar, bg=TEMA["surface"], fg=TEMA["text_muted"],
                        font=FUENTES["small"], activebackground=TEMA["surface"],
                        selectcolor=TEMA["surface"], bd=0).pack(anchor="w", pady=(8, 0))
+
+        # --- Aspecto ---
+        asp = tarjeta(cuerpo)
+        asp.pack(fill="x", pady=(0, 14))
+        tk.Label(asp, text="Aspecto", bg=TEMA["surface"], fg=TEMA["text"],
+                 font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 0))
+        tk.Label(asp, text="El tema se aplica al volver a abrir el programa: Tk no puede repintar "
+                           "en caliente las ventanas ya creadas.",
+                 bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"],
+                 wraplength=esc(760), justify="left").pack(anchor="w", padx=16, pady=(2, 8))
+        fila_tema = tk.Frame(asp, bg=TEMA["surface"])
+        fila_tema.pack(anchor="w", padx=16, pady=(0, 14))
+        self.var_tema = tk.StringVar(value=MODO["m"])
+        for valor, etiqueta in (("claro", "Claro"), ("oscuro", "Oscuro")):
+            ttk.Radiobutton(fila_tema, text=etiqueta, value=valor,
+                            variable=self.var_tema).pack(side="left", padx=(0, 16))
 
         barra = tk.Frame(cuerpo, bg=TEMA["page"])
         barra.pack(fill="x", pady=(4, 0))
@@ -4019,7 +4160,8 @@ class PanelCredenciales(ttk.Frame):
         return {"gee_project": self.e_gee_project.get().strip(),
                 "gee_service_account": self.e_gee_sa.get().strip(),
                 "gee_key_file": self.e_gee_key.get().strip(),
-                "openai_api_key": self.e_openai.get().strip()}
+                "openai_api_key": self.e_openai.get().strip(),
+                "tema": self.var_tema.get()}
 
     def _probar(self, servicio):
         self._set_badge(servicio, "prueba", "Probando conexion…")
@@ -4074,7 +4216,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     root.withdraw()                  # se monta a escondidas y se ensena ya hecha
     root.title("Gestion de Parcelas - Copernicus")
-    aplicar_tema(root)
+    aplicar_tema(root, modo=_cfg.get("tema"))     # "claro" u "oscuro"; None = claro
     poner_icono(root)
     root.geometry(geom(1440, 900))
     # Por debajo de esto las filas de la ficha -que tienen altura fija- dejan de
