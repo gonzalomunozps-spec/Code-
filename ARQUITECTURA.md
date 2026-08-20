@@ -283,6 +283,30 @@ todas las parcelas.
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
    humedad comercial y no predice con ellos. Es el único dato objetivo del
    sistema: viene de la báscula, no de una imagen.
+15. **Filtrar y ordenar no vuelven a evaluar; todo lo demás sí.** Evaluar una
+   parcela cuesta traer su serie de pasadas y pasarla entera por
+   `evaluar_parcela`. El texto de búsqueda y el criterio de orden **no pueden
+   cambiar ningún diagnóstico**, así que se aplican sobre la lista ya evaluada
+   (`_refrescar(recargar=False)` → `_pintar_filas`). Lo que sí lo cambia
+   —sincronizar, dar de alta, editar, borrar, cambiar de campaña— llama a
+   `_refrescar()` a secas y vuelve a evaluar. Antes cada tecla de la caja de
+   búsqueda recorría la base y evaluaba **todas** las parcelas: escribir «Olivar»
+   eran seis pasadas completas del motor agronómico en el hilo de la interfaz
+   (medido: 239 ms con 500 parcelas; ahora 2 ms).
+   La lista evaluada es un dato **derivado**, así que cumple la regla 2: se apunta
+   a `almacen.al_eliminar_parcela` mediante un contador de versión (`_GENERACION`),
+   no con una referencia al panel —que retendría viva una ventana ya cerrada—. Y
+   guarda con qué campaña se calculó: enseñar los diagnósticos de otra campaña
+   sería exactamente la clase de error callado que este programa no se permite.
+   Hay pruebas para las cuatro guardias, y se ha comprobado que **fallan** al
+   romper cada una a propósito: una prueba que no muerde es decoración.
+
+16. **La búsqueda repinta tras la última tecla, no en cada una.**
+   `RETARDO_BUSQUEDA_MS` (180 ms) con `after_cancel` del repintado anterior. De
+   los seis repintados que provocaba escribir «Olivar», cinco no los llegaba a
+   leer nadie. Ojo al probarlo: hay que dejar vencer el plazo antes de mirar la
+   tabla, o se lee la de antes (`_teclear(..., espera_ms=...)` en el arnés).
+
 14. **Toda medida en píxeles pasa por `esc()`.** La aplicación se declara
    consciente del DPI (`activar_dpi()`, y hay que llamarlo **antes** de crear
    `tk.Tk()`: después Windows ya ha decidido cómo escalarla). A partir de ahí las
@@ -317,7 +341,7 @@ todas las parcelas.
 
 | Clase | Qué es |
 |---|---|
-| `PanelGestionParcelas` | Lista de parcelas, búsqueda, orden, autosincronización. |
+| `PanelGestionParcelas` | Lista de parcelas, búsqueda, orden, autosincronización. La lista se evalúa una vez y se reutiliza al filtrar y ordenar (ver §4.15). |
 | `FichaParcela` | Ficha: tabla de pasadas, gráfica, mapa, interpretación, cuaderno. |
 | `LienzoMapa` | Mapa con zoom y arrastre. Cachea la imagen escalada y **mueve** el elemento al arrastrar (si no, cada movimiento reescalaba: ~38 ms). |
 | `VentanaRadar` | Sentinel-1: gráfica de parámetros y mapa de radar. |
@@ -403,7 +427,7 @@ python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py 
 
 ## 8. Deuda técnica pendiente (por orden de valor)
 
-1. **El panel sigue siendo un monolito** de ~3.400 líneas. Partirlo (ficha, radar,
+1. **El panel sigue siendo un monolito** de ~3.900 líneas. Partirlo (ficha, radar,
    diálogos, tema) es viable, pero conviene hacerlo con la aplicación abierta para
    verificar cada paso.
 2. **Arranque**: resuelto. `matplotlib` ya no se importa al arrancar, sino la

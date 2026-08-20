@@ -118,9 +118,14 @@ def _botones(w, out=None):
     return out
 
 
-def _teclear(widget, texto, root):
+def _teclear(widget, texto, root, espera_ms=0):
     """Escribe como una persona. OJO: un evento de teclado SIN keysym no se
-    despacha, asi que hay que darselo o la busqueda parece que no filtra."""
+    despacha, asi que hay que darselo o la busqueda parece que no filtra.
+
+    `espera_ms` deja correr el reloj antes de mirar el resultado. La busqueda no
+    repinta en cada tecla sino poco despues de la ultima, asi que sin esperar se
+    leeria la tabla de ANTES y la prueba pasaria -o fallaria- por la razon
+    equivocada."""
     import tkinter as tk
     widget.delete(0, tk.END)
     widget.insert(0, texto)
@@ -129,6 +134,11 @@ def _teclear(widget, texto, root):
     except Exception:
         pass
     widget.event_generate("<KeyRelease>", keysym="a")
+    if espera_ms:
+        # Se deja vencer el plazo y se despierta a Tk UNA vez: los `after` saltan
+        # en el siguiente update(). Machacar update() mientras se espera cuesta
+        # segundos de reloj en la tanda y no adelanta nada.
+        time.sleep(espera_ms / 1000.0)
     root.update()
 
 
@@ -231,7 +241,7 @@ def escenario_lista(P, DB):
     total = len(panel.tree.get_children())
 
     def filas(txt):
-        _teclear(panel.entry_buscar, txt, root)
+        _teclear(panel.entry_buscar, txt, root, espera_ms=P.RETARDO_BUSQUEDA_MS + 120)
         return len(panel.tree.get_children())
 
     for txt, condicion, desc in (
@@ -820,6 +830,98 @@ def escenario_cierre(P, DB):
     return f"{len(hechas)} escenas de cierre"
 
 
+def escenario_fluidez(P, DB):
+    """La lista evaluada que se reutiliza, y la busqueda con retardo.
+
+    Lo que se vigila: que filtrar y ordenar NO vuelvan a evaluar (que era el coste
+    de cada tecla), y -mas importante- que ese atajo no acabe ensenando datos
+    viejos. Una cache que miente es peor que no tener cache."""
+    from tkinter import ttk
+    root = _raiz()
+    P.aplicar_tema(root, escala=1.0)
+    nb = ttk.Notebook(root)
+    nb.pack(fill="both", expand=True)
+    panel = P.PanelGestionParcelas(nb)
+    nb.add(panel, text="x")
+    root.update()
+
+    # se cuenta cuantas veces se evalua de verdad
+    evaluaciones = [0]
+    original = panel._evaluar_parcelas
+
+    def contado():
+        evaluaciones[0] += 1
+        return original()
+    panel._evaluar_parcelas = contado
+
+    def nombres():
+        return {panel.tree.item(i, "values")[0] for i in panel.tree.get_children()}
+
+    total = len(nombres())
+
+    # --- 1. filtrar no evalua nada ---
+    evaluaciones[0] = 0
+    _teclear(panel.entry_buscar, "olivar", root, espera_ms=P.RETARDO_BUSQUEDA_MS + 120)
+    filtradas = len(nombres())
+    _paso("filtrar no vuelve a evaluar ninguna parcela",
+          lambda: _check(evaluaciones[0] == 0, f"{evaluaciones[0]} evaluaciones de mas"))
+    _paso("y aun asi filtra bien",
+          lambda: _check(0 < filtradas < total, f"{filtradas} de {total}"))
+
+    # --- 2. ordenar tampoco ---
+    evaluaciones[0] = 0
+    _paso("ordenar tampoco evalua", lambda: (
+        panel.cb_orden.set("nombre"),
+        panel.cb_orden.event_generate("<<ComboboxSelected>>"), root.update(),
+        _check(evaluaciones[0] == 0, f"{evaluaciones[0]} evaluaciones al ordenar")))
+
+    # --- 3. varias teclas seguidas = UN repintado ---
+    pintados = [0]
+    pinta = panel._pintar_filas
+
+    def contado_pintar():
+        pintados[0] += 1
+        return pinta()
+    panel._pintar_filas = contado_pintar
+    _teclear(panel.entry_buscar, "", root, espera_ms=P.RETARDO_BUSQUEDA_MS + 120)
+    pintados[0] = 0
+    for k in range(1, 7):
+        _teclear(panel.entry_buscar, "Olivar"[:k], root)      # sin esperar: seguidas
+    time.sleep((P.RETARDO_BUSQUEDA_MS + 120) / 1000.0)
+    root.update()
+    _paso("seis teclas seguidas repintan UNA vez, no seis",
+          lambda: _check(pintados[0] == 1, f"{pintados[0]} repintados"))
+    panel._pintar_filas = pinta
+
+    # --- 4. la cache NO puede sobrevivir a un borrado hecho por fuera ---
+    _teclear(panel.entry_buscar, "", root, espera_ms=P.RETARDO_BUSQUEDA_MS + 120)
+    victima = sorted(DB.nombres())[0]
+    DB.eliminar_parcela(victima)
+    panel._buscar_ahora()                 # el camino BARATO, el que reutiliza
+    root.update()
+    _paso("una parcela borrada por fuera desaparece hasta en el camino barato",
+          lambda: _check(victima.replace("_", " ") not in nombres(),
+                         f"{victima} sigue en la lista tras borrarla"))
+
+    # --- 5. ni a un cambio de campana ---
+    # El guardia de campana es DEFENSIVO: hoy el desplegable llama a `_refrescar()`
+    # entero, asi que por ahi nunca salta. Cubre a quien cambie `panel.campana`
+    # por su cuenta y repinte por el camino barato -ensenar los diagnosticos de
+    # OTRA campana es justo la clase de error callado que aqui no vale-. Se prueba
+    # como se llegaria a el, no como no se llega.
+    otras = [c for c in panel.cb_campana["values"] if c != panel.campana]
+    if otras:
+        panel.campana = otras[0]          # a mano, sin pasar por el desplegable
+        panel._buscar_ahora()             # y repintando por el camino barato
+        root.update()
+        _paso("cambiar de campana a mano no reutiliza la lista de la otra",
+              lambda: _check(panel._filas_campana == otras[0],
+                             f"cache de {panel._filas_campana} con campana {panel.campana}"))
+
+    _derribar(root)
+    return f"{total} parcelas, filtrado y orden sin reevaluar"
+
+
 # Si matplotlib estaba cargada ya al importar el panel, la carga perezosa se ha
 # roto: se anota en el momento del import (ver `main`) porque despues es tarde.
 _MPL_AL_IMPORTAR = []
@@ -918,6 +1020,7 @@ ESCENARIOS = [("arranque", escenario_arranque), ("lista de parcelas", escenario_
               ("validacion por indice", escenario_validacion_indices),
               ("campanas de la ficha", escenario_campanas),
               ("dialogos", escenario_dialogos), ("presentacion (DPI, icono, arranque)", escenario_presentacion),
+              ("fluidez (lista reutilizada, busqueda con retardo)", escenario_fluidez),
               ("cierre a media sincronizacion", escenario_cierre)]
 
 

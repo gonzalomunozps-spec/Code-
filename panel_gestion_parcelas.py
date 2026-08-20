@@ -112,6 +112,27 @@ except Exception:
 # arrastra `ee`) solo por un numero que hay que ensenar en un formulario.
 BUFFER_POR_DEFECTO = 15.0
 
+# Cuanto se espera desde la ultima tecla antes de repintar la lista. Lo bastante
+# para no repintar a media palabra, lo bastante poco para que no parezca que la
+# caja de busqueda no responde.
+RETARDO_BUSQUEDA_MS = 180
+
+# La lista ya evaluada es un dato DERIVADO de las parcelas: si se borra una, deja
+# de valer. Segun la regla de `almacen`, quien guarda algo derivado se apunta al
+# aviso en vez de esperar a que quien borra se acuerde -el borrado se llama desde
+# el panel, desde la demo y desde las pruebas, y basta con que uno se olvide-.
+# Se lleva un contador de version, no una referencia al panel: asi no se retiene
+# viva ninguna ventana ya cerrada.
+_GENERACION = {"n": 0}
+
+
+def _datos_cambiaron(_nombre=None):
+    """Invalida la lista evaluada de todos los paneles vivos."""
+    _GENERACION["n"] += 1
+
+
+DB.al_eliminar_parcela(_datos_cambiaron)
+
 
 def _abrir_archivo(ruta):
     """Abre un fichero con la aplicacion por defecto del sistema (multiplataforma)."""
@@ -865,6 +886,12 @@ class PanelGestionParcelas(ttk.Frame):
     def __init__(self, master, *a, **k):
         super().__init__(master, *a, **k)
         self.campana = campana_actual()
+        # Lista ya evaluada (ver `_refrescar`), con la campana y la version de los
+        # datos con que se calculo. `None` = todavia no hay nada.
+        self._filas = None
+        self._filas_campana = None
+        self._filas_gen = -1
+        self._tarea_busqueda = None      # el repintado pendiente de la busqueda
 
         self.contenedor = tk.Frame(self, bg=TEMA["page"])
         self.contenedor.pack(fill="both", expand=True)
@@ -1007,7 +1034,7 @@ class PanelGestionParcelas(ttk.Frame):
         self.entry_buscar = tk.Entry(centro, bd=0, bg=TEMA["surface"], fg=TEMA["text"],
                                      font=FUENTES["body"], insertbackground=TEMA["text"])
         self.entry_buscar.pack(side="left", fill="x", expand=True, padx=4, pady=6, ipady=2)
-        self.entry_buscar.bind("<KeyRelease>", lambda e: self._refrescar())
+        self.entry_buscar.bind("<KeyRelease>", self._buscar_pronto)
         tk.Label(centro, text="Ordenar", bg=TEMA["surface"], fg=TEMA["text_muted"],
                  font=FUENTES["small"]).pack(side="left", padx=(6, 2))
         self.cb_orden = ttk.Combobox(centro, state="readonly", width=13,
@@ -1015,7 +1042,8 @@ class PanelGestionParcelas(ttk.Frame):
                                              "anio_inicio", "estado"])
         self.cb_orden.set("estado")
         self.cb_orden.pack(side="left", padx=6, pady=4)
-        self.cb_orden.bind("<<ComboboxSelected>>", lambda e: self._refrescar())
+        self.cb_orden.bind("<<ComboboxSelected>>",
+                           lambda e: self._refrescar(recargar=False))
 
         ttk.Button(barra, text="  + Nueva parcela  ", style="Accent.TButton",
                    command=self.abrir_alta_parcela).pack(side="right")
@@ -1098,19 +1126,41 @@ class PanelGestionParcelas(ttk.Frame):
         self.vista_lista.pack(fill="both", expand=True)
         self._refrescar()
 
-    def _refrescar(self):
+    # Orden de gravedad para ordenar por estado: lo que hay que mirar, arriba.
+    SEVERIDAD = {"Revisar": 0, "Vigilar": 1, "OK": 2, "Segado": 2,
+                 "Sin dato": 3, "N.A.": 4, "Sin asignar": 5}
+
+    def _refrescar(self, recargar=True):
+        """Repinta la lista. Con `recargar=False` reutiliza lo ya evaluado.
+
+        Evaluar una parcela no es gratis: hay que traer su serie de pasadas y
+        pasarla entera por `evaluar_parcela`. Filtrar por texto y cambiar el orden
+        NO pueden cambiar ningun diagnostico, asi que se hacen sobre lo ya
+        calculado. Lo que si lo cambia -sincronizar, dar de alta, editar, borrar,
+        cambiar de campana- llama a `_refrescar()` a secas y vuelve a evaluar.
+
+        Antes cada tecla de la caja de busqueda recorria la base y evaluaba todas
+        las parcelas: escribir «Olivar» eran seis pasadas completas del motor
+        agronomico, en el hilo de la interfaz."""
         if not hasattr(self, "tree") or not self.tree.winfo_exists():
             return          # la ventana se cerro mientras el hilo sincronizaba
-        self.tree.delete(*self.tree.get_children())   # vaciado en UNA llamada a Tk
-        texto = self.entry_buscar.get().lower() if hasattr(self, "entry_buscar") else ""
-        orden = self.cb_orden.get() if hasattr(self, "cb_orden") else "nombre"
+        if (recargar or self._filas is None or self._filas_campana != self.campana
+                or self._filas_gen != _GENERACION["n"]):
+            self._filas = self._evaluar_parcelas()
+            self._filas_campana = self.campana
+            self._filas_gen = _GENERACION["n"]
+        self._pintar_filas()
+
+    def _evaluar_parcelas(self):
+        """Una fila por parcela de la campana, con su diagnostico ya resuelto.
+
+        Devuelve TODAS las parcelas, sin filtrar: el filtro es cosa de
+        `_pintar_filas`, que se ejecuta muchas mas veces y no debe evaluar nada."""
         parcelas = DB.parcelas_dict()
         historico = DB.pasadas_de_campana(self.campana)   # {nombre: [pasadas]} en una consulta
 
         filas = []
         for nombre, ficha in parcelas.items():
-            if texto and texto not in nombre.lower() and texto not in ficha.get("propietario", "").lower():
-                continue
             cult = ficha.get("cultivos_por_campana", {}).get(self.campana)
             if cult is None:                              # sin cultivo asignado en esta campana
                 cc, clave, txt = "SIN_ASIGNAR", "SinAsig", "Sin asignar"
@@ -1123,27 +1173,54 @@ class PanelGestionParcelas(ttk.Frame):
                 diag = evaluar_parcela(cult.get("tipo"), cult.get("subtipo", ""), serie,
                                        spec=spec_de(cult))
                 clave, txt = diag["clave"], diag["estado"]
+            propietario = ficha.get("propietario", "")
             filas.append({"nombre": nombre.replace("_", " "),
                           "cultivo": NOMBRE_CULTIVO.get(cc, "Sin asignar" if cc == "SIN_ASIGNAR"
                                                         else cc.replace("_", " ").title()),
                           "superficie": f"{ficha.get('superficie_ha', 0.0):.2f} ha",
                           "_sup": ficha.get("superficie_ha", 0.0),
-                          "propietario": ficha.get("propietario", ""),
-                          "estado": txt, "_clave": clave})
+                          "propietario": propietario,
+                          "estado": txt, "_clave": clave,
+                          # la clave de busqueda se deja hecha: se compara en cada
+                          # tecla y no vale la pena repetir el .lower() por fila
+                          "_busca": f"{nombre} {propietario}".lower()})
+        return filas
 
-        sev = {"Revisar": 0, "Vigilar": 1, "OK": 2, "Segado": 2, "Sin dato": 3, "N.A.": 4, "Sin asignar": 5}
+    def _pintar_filas(self):
+        """Filtra por el texto, ordena y vuelca en la tabla. No evalua nada."""
+        texto = self.entry_buscar.get().lower() if hasattr(self, "entry_buscar") else ""
+        orden = self.cb_orden.get() if hasattr(self, "cb_orden") else "nombre"
+        filas = [r for r in self._filas if not texto or texto in r["_busca"]]
+
         keys = {"superficie": lambda r: -r["_sup"],
                 "propietario": lambda r: r["propietario"].lower(),
-                "estado": lambda r: sev.get(r["estado"], 9),
+                "estado": lambda r: self.SEVERIDAD.get(r["estado"], 9),
                 "nombre": lambda r: r["nombre"].lower()}
         filas.sort(key=keys.get(orden, keys["nombre"]))
 
+        self.tree.delete(*self.tree.get_children())   # vaciado en UNA llamada a Tk
         for k, r in enumerate(filas):
             tags = ("par" if k % 2 == 0 else "impar", f"est_{r['_clave']}")
             dot = "\u25CF " if r["_clave"] in ("OK", "Vigilar", "Revisar") else ""
             self.tree.insert("", tk.END, tags=tags,
                              values=(r["nombre"], r["cultivo"], r["superficie"],
                                      r["propietario"], dot + r["estado"]))
+
+    def _buscar_pronto(self, _=None):
+        """Repinta poco despues de la ULTIMA tecla, no en cada una.
+
+        Sin esto, escribir «Olivar» repinta la tabla entera seis veces, y cinco de
+        esas seis no las llega a leer nadie: el usuario sigue tecleando."""
+        if self._tarea_busqueda is not None:
+            try:
+                self.after_cancel(self._tarea_busqueda)
+            except Exception:
+                pass       # ya habia saltado: nada que cancelar
+        self._tarea_busqueda = self.after(RETARDO_BUSQUEDA_MS, self._buscar_ahora)
+
+    def _buscar_ahora(self):
+        self._tarea_busqueda = None
+        self._refrescar(recargar=False)      # el texto no cambia ningun diagnostico
 
     def _menu_ctx(self, event):
         fila = self.tree.identify_row(event.y)
@@ -2214,7 +2291,7 @@ class PanelMapaComparado:
                                               orientation="vertical")
         cb.ax.tick_params(labelsize=7)
         cb.set_label(idx, fontsize=8)
-        self.cv_ley.draw()
+        self.cv_ley.draw_idle()   # agrupado por Tk, no bloquea
 
 
 class VentanaComparaMapas(tk.Toplevel):
@@ -2472,7 +2549,7 @@ class VentanaRadar(tk.Toplevel):
                       bbox_to_anchor=(0.5, 1.18))
             self.fig.autofmt_xdate()
         self.fig.tight_layout()
-        self.cv.draw()
+        self.cv.draw_idle()       # agrupado por Tk, no bloquea
 
     def _leyenda_radar(self, param):
         _matplotlib()      # se carga aqui, no al abrir el programa
@@ -2485,7 +2562,7 @@ class VentanaRadar(tk.Toplevel):
                                               orientation="vertical")
         cb.ax.tick_params(labelsize=7)
         cb.set_label(param + (" (dB)" if param in ("VV", "VH") else ""), fontsize=8)
-        self.cv_ley.draw()
+        self.cv_ley.draw_idle()   # agrupado por Tk, no bloquea
 
     def _cargar_mapa(self):
         param = self.cb_par.get()
@@ -3133,7 +3210,7 @@ class FichaParcela:
                     pass    # silencio deliberado: el callback ya no existe tras redibujar
             self._hover_cid = self.cv.mpl_connect("motion_notify_event", self._on_hover)
         self.fig.tight_layout()
-        self.cv.draw()
+        self.cv.draw_idle()       # agrupado por Tk, no bloquea
 
     def _on_hover(self, event):
         """Muestra los valores de los indices y la fiabilidad del dia mas cercano."""
@@ -3175,7 +3252,7 @@ class FichaParcela:
                                               orientation="vertical")
         cb.ax.tick_params(labelsize=7)
         cb.set_label(idx, fontsize=8)
-        self.cv_ley.draw()
+        self.cv_ley.draw_idle()   # agrupado por Tk, no bloquea
 
     def _pintar_interp(self, regs):
         self.txt.delete("1.0", tk.END)
