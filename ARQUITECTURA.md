@@ -74,6 +74,7 @@ Son la base testeable. Ninguno importa a otro.
 | `interpretacion_fenologica.py` | **El cerebro.** `evaluar_parcela` produce el diagnóstico; `texto_interpretacion` lo redacta (ChatGPT si hay clave, si no por reglas); `ajuste_por_validaciones` aprende de las correcciones del usuario. |
 | `registro_parcela.py` | Cuaderno de campo: eventos, `efecto_producto` (respuesta del cultivo tras una aplicación) y captura de **cosecha** (kg/ha, humedad, superficie, origen del dato). |
 | `sentinel1.py` | Radar: VV/VH, RVI, CR, incertidumbre y fiabilidad; relación con el óptico. **Puro**: la descarga está en `gee_cliente`. |
+| `vista_ficha.py` | La LÓGICA de la ficha, sin Tk: decide **qué** interpretación mostrar (recorta la serie a la pasada elegida, evalúa, afina con el historial, aplica tu validación) y monta los contextos que usan los diálogos. La ficha (`ui_ficha`) solo lo pinta. Probado sin pantalla — antes esta lógica solo la veía `pruebas_interfaz`. |
 
 ### Capa 2b — Satélite (lo único que habla con Earth Engine)
 | Módulo | Responsabilidad |
