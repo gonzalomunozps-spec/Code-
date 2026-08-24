@@ -30,6 +30,14 @@ try:
 except Exception:
     _MAPVIEW = False
 
+# Integrales termicas (grados-dia): modulo OPCIONAL. Si no esta, el formulario no
+# ensena la seccion y la parcela se guarda sin integrales, exactamente como antes.
+try:
+    import grados_dia as _GDD
+    _HAY_GDD = True
+except Exception:
+    _HAY_GDD = False
+
 # Margen interior por defecto de la rejilla. Mismo valor que
 # gee_cliente.BUFFER_INTERIOR_M; se repite para no importar ese modulo (que
 # arrastra `ee`) solo por un numero que hay que ensenar en un formulario.
@@ -59,6 +67,9 @@ class VentanaAltaParcela(tk.Toplevel):
         self.configure(bg=TEMA["page"])
         self.coords = []
         self.poligono = None
+        # integrales termicas (grados-dia) que el usuario anade a mano. Vacia = el
+        # programa sigue con el calendario de siempre; con alguna, manda el GDD.
+        self.integrales = []
         # de donde salio la geometria actual: "dibujo" (a mano), "sigpac" o
         # "editar". El dibujo a mano MANDA (ver `_clic` y `_sigpac`).
         self._origen_coords = "editar" if editar else None
@@ -127,6 +138,8 @@ class VentanaAltaParcela(tk.Toplevel):
                  font=FUENTES["small"]).pack(anchor="w")
         self.cb_sub = ttk.Combobox(cols, state="readonly", values=[])
         self.cb_sub.pack(fill="x")
+        # al cambiar la especie, refrescar las fases que ofrece la seccion de integrales
+        self.cb_sub.bind("<<ComboboxSelected>>", lambda e: self._refrescar_fases_integral())
 
         # campos especificos de la especie: siembra (cereal) o marco (leñoso)
         self.frame_spec = tk.Frame(form, bg=TEMA["surface"])
@@ -198,6 +211,13 @@ class VentanaAltaParcela(tk.Toplevel):
         fila_btn = 1 + (len(campos) + 2) // 3
         ttk.Button(box, text="Capturar recinto SIGPAC", command=self._sigpac).grid(
             row=fila_btn, column=0, columnspan=6, sticky="ew", padx=8, pady=(6, 8))
+
+        # --- INTEGRALES TERMICAS (grados-dia): seccion OPCIONAL, debajo de SIGPAC ---
+        # Solo aparece si el modulo grados_dia esta presente. Si el usuario no anade
+        # ninguna, la parcela se guarda igual que antes y manda el calendario; en
+        # cuanto anade una, esa integral pasa a fijar la fase del extensivo.
+        if _HAY_GDD:
+            self._construir_integrales(form, pad)
 
         tk.Label(form, text="...o dibuja los bordes en el mapa (clic izquierdo).",
                  bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(anchor="w", **pad)
@@ -277,6 +297,12 @@ class VentanaAltaParcela(tk.Toplevel):
                 # que es el supuesto que no avisa donde el deficit es normal
                 self.cb_regimen.set("Regadio" if cult.get("regimen") == "REGADIO" else "Secano")
                 self._calc_marco()
+        # integrales termicas ya guardadas: reponerlas para poder verlas/editarlas
+        guardadas = cult.get("integrales_termicas")
+        if guardadas:
+            self.integrales = [dict(it) for it in guardadas]
+            self._refrescar_fases_integral()
+            self._pintar_lista_integrales()
         # geometria: cargar los vertices y dibujarlos (sin el punto de cierre duplicado)
         coords = ficha.get("coordenadas") or []
         if len(coords) >= 2 and coords[0] == coords[-1]:
@@ -326,6 +352,8 @@ class VentanaAltaParcela(tk.Toplevel):
             self.cb_regimen.pack(anchor="w", pady=(0, 2))
             self.lbl_tipo_calc.pack(anchor="w")
             self._calc_marco()
+        # las fases posibles cambian con el tipo/especie: repoblar desde/hasta
+        self._refrescar_fases_integral()
 
     def _calc_marco(self):
         """Al teclear el marco (o la copa), enseña lo que implica.
@@ -340,6 +368,100 @@ class VentanaAltaParcela(tk.Toplevel):
                 self.cb_sub.get() or "OLIVO", c, p, _copa_de(self.e_copa)))
         except Exception:
             self.lbl_tipo_calc.config(text="")
+
+    # ------------------------------------------------------------------
+    # Integrales termicas (grados-dia). Todo lo de esta seccion solo se
+    # construye si el modulo grados_dia esta disponible (_HAY_GDD).
+    # ------------------------------------------------------------------
+    def _construir_integrales(self, parent, pad):
+        caja = tarjeta(parent)
+        caja.pack(fill="x", padx=16, pady=(0, 12))
+        tk.Label(caja, text="Integrales térmicas (grados-día) — opcional",
+                 bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["small"]).pack(
+            anchor="w", padx=8, pady=(8, 0))
+        tk.Label(caja, text="Si añades alguna, la fase del cultivo la marca el GDD y no el "
+                            "calendario.\nElige el método y desde/hasta qué fase cuenta. Si no "
+                            "añades ninguna, todo sigue igual.",
+                 bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"],
+                 justify="left").pack(anchor="w", padx=8, pady=(0, 4))
+
+        # metodo (Tbase). Se guarda la CLAVE, se ensena la etiqueta.
+        self._int_metodo = {et: cl for cl, et, _tb, _tope in _GDD.METODOS}
+        tk.Label(caja, text="Método", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=8)
+        self.cb_int_metodo = ttk.Combobox(caja, state="readonly",
+                                           values=[et for _cl, et, _tb, _tope in _GDD.METODOS])
+        self.cb_int_metodo.pack(fill="x", padx=8, pady=(0, 4))
+
+        fila = tk.Frame(caja, bg=TEMA["surface"])
+        fila.pack(fill="x", padx=8)
+        cdesde = tk.Frame(fila, bg=TEMA["surface"])
+        cdesde.pack(side="left", fill="x", expand=True)
+        tk.Label(cdesde, text="Desde", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w")
+        self.cb_int_desde = ttk.Combobox(cdesde, values=[])
+        self.cb_int_desde.pack(fill="x")
+        chasta = tk.Frame(fila, bg=TEMA["surface"])
+        chasta.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        tk.Label(chasta, text="Hasta", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w")
+        self.cb_int_hasta = ttk.Combobox(chasta, values=[])
+        self.cb_int_hasta.pack(fill="x")
+
+        ttk.Button(caja, text="Añadir integral", command=self._anadir_integral).pack(
+            fill="x", padx=8, pady=(6, 4))
+        self.lst_integrales = tk.Listbox(caja, height=3, font=FUENTES["small"])
+        self.lst_integrales.pack(fill="x", padx=8)
+        ttk.Button(caja, text="Quitar seleccionada", command=self._quitar_integral).pack(
+            fill="x", padx=8, pady=(4, 8))
+        self._refrescar_fases_integral()
+        self._pintar_lista_integrales()
+
+    def _opciones_fases(self):
+        """Endpoints para desde/hasta: siembra, las fases del cultivo y cosecha.
+
+        El usuario puede teclear otro nombre (combobox editable); la referencia de
+        bibliografia solo la sabe calcular si coincide con una fase conocida."""
+        fases = []
+        try:
+            fases = FEN.fases_posibles(self.cb_tipo.get(), self.cb_sub.get())
+        except Exception:
+            fases = []
+        return ["siembra"] + list(fases) + ["cosecha"]
+
+    def _refrescar_fases_integral(self):
+        """Repuebla desde/hasta con las fases del cultivo elegido (si la seccion existe)."""
+        if not hasattr(self, "cb_int_desde"):
+            return
+        ops = self._opciones_fases()
+        self.cb_int_desde["values"] = ops
+        self.cb_int_hasta["values"] = ops
+
+    def _anadir_integral(self):
+        et = self.cb_int_metodo.get().strip()
+        clave = self._int_metodo.get(et)
+        if not clave:
+            return messagebox.showwarning("Integral térmica", "Elige un método.", parent=self)
+        desde = (self.cb_int_desde.get() or "").strip() or "siembra"
+        hasta = (self.cb_int_hasta.get() or "").strip() or "cosecha"
+        self.integrales.append({"metodo": clave, "desde": desde, "hasta": hasta})
+        self._pintar_lista_integrales()
+
+    def _quitar_integral(self):
+        sel = self.lst_integrales.curselection()
+        if not sel:
+            return
+        del self.integrales[sel[0]]
+        self._pintar_lista_integrales()
+
+    def _pintar_lista_integrales(self):
+        if not hasattr(self, "lst_integrales"):
+            return
+        self.lst_integrales.delete(0, tk.END)
+        for it in self.integrales:
+            et = _GDD.etiqueta_metodo(it.get("metodo"))
+            self.lst_integrales.insert(
+                tk.END, f"{it.get('desde')} → {it.get('hasta')}  ·  {et}")
 
     def _clic(self, coords):
         # El dibujo a mano tiene PRIORIDAD: si el recinto actual venia de SIGPAC
@@ -447,6 +569,12 @@ class VentanaAltaParcela(tk.Toplevel):
             # opcional: sin diametro de copa se estima del marco, como siempre
             spec["diametro_copa"] = _copa_de(self.e_copa)
             spec["regimen"] = "REGADIO" if self.cb_regimen.get().startswith("Rega") else "SECANO"
+
+        # integrales termicas: si el usuario anadio alguna, se guardan y a partir de
+        # ahi mandan sobre el calendario. Sin ninguna, no se guarda la clave y la
+        # parcela se comporta exactamente como antes de que existiera esta seccion.
+        if self.integrales:
+            spec["integrales_termicas"] = [dict(it) for it in self.integrales]
 
         # los codigos SIGPAC tecleados se guardan con la parcela (provincia y
         # municipio), aunque el recinto se haya dibujado a mano despues

@@ -301,6 +301,20 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
             lo, hi, caida_ok = fase_esp["lo"], fase_esp["hi"], fase_esp["caida"]
         except Exception:
             fase_esp = None
+    # OVERRIDE por GRADOS-DIA (opcional, gated y extraible): si la parcela tiene
+    # integrales termicas definidas y hay clima, en un EXTENSIVO la fase la manda
+    # el GDD, no el calendario -reusando el rango de indice de esa misma fase-. Si
+    # `grados_dia.py` se borra, o no hay integrales/clima/tabla GDD, esto no hace
+    # nada y se sigue con el calendario. El usuario lo pide a proposito (§ audit 1).
+    if fase_esp is not None and spec and spec.get("integrales_termicas"):
+        try:
+            import grados_dia as _GDD
+            fo = _GDD.fase_override(tipo, spec.get("especie"), spec, fecha, parcela)
+            if fo:
+                fase_esp = fo
+                fase, lo, hi, caida_ok = fo["fase"], fo["lo"], fo["hi"], fo["caida"]
+        except Exception:
+            pass
     if fase_esp is None:
         fase, lo, hi, caida_ok = fase_fenologica(tipo, subtipo, fecha)
 

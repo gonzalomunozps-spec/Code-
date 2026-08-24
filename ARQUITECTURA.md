@@ -40,6 +40,7 @@ CAPA 1  DATOS                 almacen.py ──► bitacora.py ──► rutas.p
            │
 CAPA 0  HOJAS PURAS    fechas  geo  campanas  cultivo  sigpac
                        contraste_indices  fenologia_especies  herbicida_contexto*
+                       grados_dia*
 ```
 `*` = módulo **opcional y extraíble** (ver §6).
 
@@ -59,6 +60,7 @@ Son la base testeable. Ninguno importa a otro.
 | `clima_era5.py` | Contexto climático de ERA5-Land: conversión de unidades, punto de rejilla, resumen y descarga. **Opcional.** |
 | `herbicida_contexto.py` | Interpretación del herbicida con LAI constante. **Opcional.** |
 | `calibracion_umbrales.py` | Ajusta los umbrales de los índices con las validaciones del usuario, por ámbito (parcela / municipio / provincia / global). No toca la bibliografía. **Opcional.** |
+| `grados_dia.py` | Integrales térmicas (grados-día): métodos por cultivo, acumulación desde el clima diario, hitos de GDD por fase y `fase_override` (si el usuario define integrales, la fase del extensivo la marca el GDD y no el calendario). El núcleo es puro; el clima lo pide de forma perezosa a `clima_era5`/`almacen` dentro de las funciones. **Opcional.** |
 
 ### Capa 1 — Datos
 | Módulo | Responsabilidad |
@@ -286,6 +288,9 @@ todas las parcelas.
    «límite honesto» de `contraste_indices`). Sirve para el reparto copa/cubierta y
    para contarlo. Sin marco no hay traducción posible, y entonces el aviso no pasa
    de «Vigilar».
+   En el **recuento de evidencias** de ese reparto, el LAI **no** cuenta aparte del
+   EVI: el LAI se deriva del EVI (`gee_cliente`), así que sumar «NDVI/EVI» y
+   «LAI/NDVI» era contar dos veces la misma señal física. Se cuenta una sola vez.
 9. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
    superficie cosechada y el origen del dato se anotan a mano en un evento
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
@@ -510,11 +515,16 @@ resto sigue igual**; no hay interruptor que tocar.
 - `clima_era5.py` → desaparece la tarjeta de clima de la ficha. Lo descargado se
   queda en la tabla `clima`. **Hoy solo enseña datos**: no mueve ningún
   diagnóstico, ni un umbral, ni una fase.
+- `grados_dia.py` → desaparecen la sección de integrales térmicas del alta y la de
+  grados-día de la ficha; la fase del extensivo vuelve a decidirla el calendario
+  (que es lo que hace también si no se ha definido ninguna integral). Lo guardado
+  en el cultivo (`integrales_termicas`) se queda en la base, por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 595, sin `informe_anual` 584,
-sin `herbicida_contexto` 593, sin `calibracion_umbrales` 566, sin `clima_era5` 564
-— los cinco en verde (y la interfaz también, sin `clima_era5`).
+Comprobado borrando cada fichero: completo 642, sin `grados_dia` 633,
+y antes sin `informe_anual` 584, sin `herbicida_contexto` 593,
+sin `calibracion_umbrales` 566, sin `clima_era5` 564 — todos en verde
+(y la interfaz también, sin `clima_era5` y sin `grados_dia`).
 
 ---
 

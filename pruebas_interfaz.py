@@ -796,6 +796,45 @@ def escenario_dialogos(P, DB):
         return v
     abrir("el dibujo del mapa tiene prioridad sobre SIGPAC", _dibujo_manda)
 
+    def _alta_integral_termica():
+        """La seccion de integrales termicas (grados-dia) del alta: anadir una y que
+        se guarde con la parcela. Solo corre si el modulo opcional grados_dia esta;
+        si no, la seccion no existe y no hay nada que probar."""
+        import almacen as _DB
+        v = P.VentanaAltaParcela(panel)
+        root.update()
+        if not getattr(v, "cb_int_metodo", None):
+            v.destroy()
+            return None                      # modulo grados_dia ausente: nada que probar
+        v.cb_tipo.set("EXTENSIVO")
+        v._sub()
+        v.cb_sub.set("TRIGO")
+        v._refrescar_fases_integral()
+        root.update()
+        # las fases del cultivo llegan a los desplegables desde/hasta
+        _check("siembra" in v.cb_int_desde["values"] and "cosecha" in v.cb_int_hasta["values"],
+               "los desplegables desde/hasta no traen los extremos siembra/cosecha")
+        import grados_dia as _GDD
+        v.cb_int_metodo.set(_GDD.METODOS[0][1])       # primera etiqueta
+        v.cb_int_desde.set("siembra")
+        v.cb_int_hasta.set("cosecha")
+        v._anadir_integral()
+        _check(len(v.integrales) == 1, f"anadir integral no la registro: {v.integrales}")
+        _check(v.integrales[0]["metodo"] == _GDD.METODOS[0][0],
+               f"la integral no guardo la clave del metodo: {v.integrales[0]}")
+        # y al guardar, la integral viaja con el cultivo
+        v.e_nombre.delete(0, "end"); v.e_nombre.insert(0, "Integral Test")
+        v.e_prop.delete(0, "end"); v.e_prop.insert(0, "x")
+        v.coords = [[-4.10, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.10, 41.66]]
+        v._guardar()
+        cult = ((_DB.ficha("Integral_Test") or {}).get("cultivos_por_campana", {})
+                or {}).get(CAMP, {})
+        _check(bool(cult.get("integrales_termicas")),
+               "la parcela se guardo sin la integral termica")
+        _DB.eliminar_parcela("Integral_Test")
+        return v
+    abrir("alta con integral termica (grados-dia)", _alta_integral_termica)
+
     def _borrar_campana_doble():
         """El borrado de campana exige DOS actos: marcar la casilla y pulsar."""
         d = P.DialogoBorrarCampana(root, NOM, CAMP)

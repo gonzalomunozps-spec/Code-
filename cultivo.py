@@ -31,7 +31,12 @@ def spec_de(cultivo: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
             # regimen hidrico (lenosos). Los registros antiguos no lo traen y
             # `regimen_valido` los deja en SECANO, que es el supuesto que NO avisa
             # de falta de agua donde el deficit es normal.
-            "regimen": cultivo.get("regimen")}
+            "regimen": cultivo.get("regimen"),
+            # integrales termicas (grados-dia) definidas por el usuario. Lista o
+            # None. Con ellas, la fase de un extensivo la manda el GDD y no el
+            # calendario (modulo OPCIONAL grados_dia). Los registros sin ellas se
+            # comportan como siempre.
+            "integrales_termicas": cultivo.get("integrales_termicas")}
 
 
 def clave_cultivo(tipo: str, subtipo: str) -> str:

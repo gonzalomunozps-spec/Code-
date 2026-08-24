@@ -3,6 +3,27 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.2.0] — 2026-08
+
+### Añadido
+- **Integrales térmicas (grados-día)**, en un módulo **opcional y extraíble**
+  (`grados_dia.py`): si el archivo no está, el programa funciona igual que antes.
+  - Al **crear o editar** una parcela, debajo de SIGPAC, se pueden **añadir varias
+    integrales**, eligiendo el **método** (base 0/5/6/10 °C, con o sin tope) y
+    **desde/hasta qué fase** cuenta cada una (p. ej. «de siembra a cosecha»,
+    «de nascencia a floración»).
+  - Si **no se añade ninguna**, todo sigue con el calendario de siempre. Si se
+    **añade alguna**, en los extensivos con tabla de referencia **la fase la marca
+    el GDD** en vez del calendario (prima la integral).
+  - En la **ficha**, dentro de «Clima de la comarca», una sección de **grados-día**
+    muestra el GDD acumulado, la fase por GDD y deja **elegir cada integral
+    definida** para ver su referencia de bibliografía y comparar adelanto/atraso.
+
+### Corregido
+- **Cobertura de copa/cubierta (evidencias)**: el LAI se deriva del EVI, así que
+  contar «NDVI/EVI» y «LAI/NDVI» a la vez contaba dos veces la misma señal física.
+  Ahora esa evidencia se cuenta **una sola vez**, sin cambiar ningún umbral.
+
 ## [1.1.0] — 2026-08
 
 ### Añadido

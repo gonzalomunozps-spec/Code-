@@ -228,8 +228,20 @@ def separacion_copa_cubierta(serie, fase_esp, reg=None):
         elif brecha < 0.05:
             ev_copa.append(f"brecha NDVI-MSAVI {brecha}: el verde aguanta la correccion "
                            f"de suelo, es dosel")
+    ne = c.get("ndvi_evi")
+    if ne is not None and ne > 2.2:
+        ev_cubierta.append(f"NDVI/EVI={ne}: el NDVI va muy por delante del EVI, "
+                           f"senal de fondo")
+    # OJO: el LAI de este programa es una RECTA sobre el EVI (LAI = 3.618*EVI -
+    # 0.118, ver gee_cliente), asi que LAI/NDVI y NDVI/EVI son el MISMO hecho
+    # fisico -la relacion EVI/NDVI- contado dos veces. Cuando el EVI va bajo
+    # respecto al NDVI, saltaban las DOS evidencias de cubierta a la vez y una
+    # sola senal metia dos votos. Se cuenta UNA: el NDVI/EVI directo manda, y el
+    # LAI/NDVI solo se usa si por lo que sea no hay EVI (entonces tampoco hay LAI,
+    # asi que en la practica no vota; se deja por si algun dia el LAI viene de otra
+    # base independiente del EVI).
     lpn = c.get("lai_por_ndvi")
-    if lpn is not None:
+    if ne is None and lpn is not None:
         if lpn < 2.2:
             ev_cubierta.append(f"poca area foliar para el verdor (LAI/NDVI={lpn}): "
                                f"verde sin estructura")
@@ -239,10 +251,6 @@ def separacion_copa_cubierta(serie, fase_esp, reg=None):
     gn = c.get("gndvi_ndvi")
     if gn is not None and gn > 1.05:
         ev_copa.append(f"GNDVI/NDVI={gn}: hoja densa y con clorofila, propia de copa")
-    ne = c.get("ndvi_evi")
-    if ne is not None and ne > 2.2:
-        ev_cubierta.append(f"NDVI/EVI={ne}: el NDVI va muy por delante del EVI, "
-                           f"senal de fondo")
     dvl = c.get("divergencia_ndvi_lai")
     if dvl is not None:
         if dvl > 0.06:

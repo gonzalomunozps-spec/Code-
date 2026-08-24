@@ -68,6 +68,10 @@ try:
     import clima_era5 as _CLIMA
 except Exception:
     _CLIMA = None
+try:
+    import grados_dia as _GDD
+except Exception:
+    _GDD = None
 
 _EE = gee_cliente.hay_ee()
 
@@ -653,6 +657,37 @@ class FichaParcela:
         ttk.Button(card, text="  Descargar clima  ",
                    command=self._sincronizar_clima).pack(side="bottom", anchor="w",
                                                          padx=12, pady=(0, 8))
+        # GRADOS-DIA (integral termica): seccion OPCIONAL, dentro del clima. Solo
+        # aparece si el modulo grados_dia esta y la parcela tiene integrales.
+        self.gdd_card = None
+        if _GDD is not None:
+            self._build_gdd(parent)
+
+    def _build_gdd(self, parent):
+        """Grados-dia acumulados y las integrales termicas definidas en la parcela.
+
+        Es lectura: ensena el GDD y la fase que sale de el, y deja ELEGIR cual de las
+        integrales definidas se mira, con su referencia de bibliografia. Que la fase
+        del diagnostico la mande el GDD ya lo decide el motor si hay integral; aqui
+        solo se muestra."""
+        card = tarjeta(parent)
+        self.gdd_card = card
+        self._titulo(card, "Grados-día (integral térmica)")
+        self.lbl_gdd = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                font=FUENTES["small"], justify="left", anchor="w",
+                                wraplength=1180)
+        self.lbl_gdd.pack(fill="x", padx=12, pady=(0, 4))
+        fila = tk.Frame(card, bg=TEMA["surface"])
+        fila.pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(fila, text="Integral que se mira:", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(side="left")
+        self.cb_gdd = ttk.Combobox(fila, state="readonly", width=48, values=[])
+        self.cb_gdd.pack(side="left", padx=(6, 0))
+        self.cb_gdd.bind("<<ComboboxSelected>>", lambda e: self._pintar_gdd_sel())
+        self.lbl_gdd_ref = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text"],
+                                    font=FUENTES["small"], justify="left", anchor="w",
+                                    wraplength=1180)
+        self.lbl_gdd_ref.pack(fill="x", padx=12, pady=(0, 10))
 
     def _pintar_clima(self):
         """Vuelca los dias de clima del punto de rejilla de esta parcela."""
@@ -673,6 +708,79 @@ class FichaParcela:
                 text="Sin datos de clima para esta campana. Pulsa «Descargar clima» "
                      "(hace falta Earth Engine). El dato es de comarca, no de parcela: "
                      "el pixel de ERA5-Land son 11 km de lado.")
+        self._pintar_gdd(dias)
+
+    def _pintar_gdd(self, dias):
+        """Recalcula y ensena los grados-dia. Solo actua si el modulo esta, la
+        parcela tiene integrales y hay una fecha a la que acumular."""
+        self._gdd_resumen = None
+        if _GDD is None or not getattr(self, "gdd_card", None) or not self.gdd_card.winfo_exists():
+            return
+        cult = self._cultivo_de(self.campana)
+        spec = spec_de(cult)
+        # Sin integrales definidas, esta seccion no aporta nada: se esconde y el
+        # programa sigue con el calendario, como si no existiera.
+        if not spec or not spec.get("integrales_termicas"):
+            self.gdd_card.pack_forget()
+            return
+        self.gdd_card.pack(fill="both", expand=True)
+        fecha = dias[-1]["fecha"] if dias else None
+        res = _GDD.resumen_parcela(cult.get("tipo"), spec.get("especie"), spec, fecha, self.nombre)
+        self._gdd_resumen = res
+        if not res:
+            self.lbl_gdd.config(text="Integrales térmicas definidas, pero aún no hay clima "
+                                     "descargado para acumular grados-día. Pulsa «Descargar clima».")
+            self.cb_gdd["values"] = []
+            self.cb_gdd.set("")
+            self.lbl_gdd_ref.config(text="")
+            return
+        ac = res.get("gdd_acumulado")
+        partes = []
+        if ac is not None:
+            partes.append(f"GDD acumulado desde la siembra: {ac:.0f} °C·día "
+                          f"({res.get('dias', 0)} días" +
+                          (f", {res['huecos']} sin dato" if res.get("huecos") else "") + ").")
+        if res.get("fase_gdd"):
+            partes.append(f"Fase por grados-día: {res['fase_gdd']}.")
+        if res.get("faltan_siguiente") is not None:
+            partes.append(f"Faltan ~{res['faltan_siguiente']:.0f} °C·día para la siguiente fase.")
+        if not res.get("hay_referencia"):
+            partes.append("(Este cultivo no tiene tabla de referencia de GDD: la fase la sigue "
+                          "marcando el calendario.)")
+        elif spec.get("integrales_termicas"):
+            partes.append("Con integral definida, la fase del diagnóstico la marca el GDD.")
+        self.lbl_gdd.config(text="  ".join(partes) if partes else
+                            "Sin fecha de siembra o sin clima: no se puede acumular todavía.")
+        etiquetas = [f"{it['desde']} → {it['hasta']}  ·  {it['metodo']}" for it in res.get("integrales", [])]
+        self.cb_gdd["values"] = etiquetas
+        if etiquetas:
+            self.cb_gdd.current(0)
+            self._pintar_gdd_sel()
+        else:
+            self.cb_gdd.set("")
+            self.lbl_gdd_ref.config(text="")
+
+    def _pintar_gdd_sel(self):
+        """Ensena la referencia de bibliografia de la integral elegida en el combo."""
+        res = getattr(self, "_gdd_resumen", None)
+        if not res:
+            return
+        i = self.cb_gdd.current()
+        filas = res.get("integrales", [])
+        if i < 0 or i >= len(filas):
+            self.lbl_gdd_ref.config(text="")
+            return
+        it = filas[i]
+        ref = it.get("referencia_gdd")
+        if ref is not None:
+            txt = (f"De «{it['desde']}» a «{it['hasta']}» ({it['metodo']}): "
+                   f"referencia de bibliografía ≈ {ref:.0f} °C·día. "
+                   "Compárala con el acumulado real para ver si el cultivo va adelantado o atrasado.")
+        else:
+            txt = (f"De «{it['desde']}» a «{it['hasta']}» ({it['metodo']}): "
+                   "sin referencia de bibliografía para ese tramo (los extremos deben ser "
+                   "fases conocidas del cultivo).")
+        self.lbl_gdd_ref.config(text=txt)
 
     def _sincronizar_clima(self):
         if _CLIMA is None:

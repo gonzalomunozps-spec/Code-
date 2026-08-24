@@ -361,6 +361,18 @@ def pruebas_contraste():
     check("heterogeneidad: deterioro localizado", lambda: heterogeneidad(stat).get("patron"),
           lambda r: r == "deterioro LOCALIZADO")
 
+    # #4 de la auditoria: LAI/NDVI y NDVI/EVI son el MISMO hecho (el LAI es una
+    # recta sobre el EVI), asi que una sola senal de fondo no puede meter DOS votos
+    # de cubierta. Antes, con EVI bajo respecto al NDVI, saltaban las dos.
+    from contraste_indices import separacion_copa_cubierta
+    reg = {"ndvi": 0.5, "msavi": 0.2, "evi": 0.20, "lai": 0.6, "gndvi": 0.5, "ndmi": 0.1,
+           "ndvi_p10": 0.35, "ndvi_p50": 0.45, "ndvi_p90": 0.62}
+    fase = {"marco_calle": 10, "tipo": "tradicional", "ventana_cubierta": True}
+    check("contraste: la relacion EVI/NDVI cuenta como UNA evidencia, no dos",
+          lambda: sum(1 for e in separacion_copa_cubierta([reg], fase)["evidencias_cubierta"]
+                      if "NDVI/EVI" in e or "LAI/NDVI" in e),
+          lambda n: n == 1)
+
 
 # =====================================================================
 # 4. CUADERNO DE CAMPO
@@ -3198,6 +3210,60 @@ def pruebas_vista_ficha():
           lambda: (rb["es_barbecho"], bool(rb["motivo"])), lambda x: x == (True, True))
 
 
+def pruebas_grados_dia():
+    """Integral termica (grados-dia). Modulo OPCIONAL: si se borra, se omite."""
+    try:
+        import grados_dia as G
+    except Exception:
+        return
+    import almacen as DB
+    from interpretacion_fenologica import evaluar_parcela
+    from cultivo import spec_de
+
+    # --- nucleo puro ---
+    check("gdd: un dia de 8/22 base 0 son 15 grados-dia",
+          lambda: G.gdd_dia(8, 22, 0.0), lambda r: r == 15.0)
+    check("gdd: el tope superior corta la Tmax antes de promediar",
+          lambda: G.gdd_dia(18, 34, 10.0, 30.0), lambda r: r == 14.0)
+    check("gdd: un dia por debajo de la base no resta (no baja de 0)",
+          lambda: G.gdd_dia(2, 4, 10.0), lambda r: r == 0.0)
+    check("gdd: la fase por GDD sale de los hitos del cultivo",
+          lambda: (G.fase_por_gdd("TRIGO", 550), G.fase_por_gdd("TRIGO", 1100)),
+          lambda r: r == ("encanado", "espigado / floracion"))
+    check("gdd: fase_desde_gdd reusa el rango de indice de esa fase",
+          lambda: G.fase_desde_gdd("TRIGO", 1100),
+          lambda d: d["fase"] == "espigado / floracion" and d["lo"] == 0.6 and d["por_gdd"])
+    check("gdd: un cultivo sin tabla GDD no tiene referencia (usara calendario)",
+          lambda: G.hay_referencia_gdd("VEZA"), lambda r: r is False)
+
+    # --- con clima real (base sintetica) + override en el diagnostico ---
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "gdd.db"))
+    import clima_era5 as C
+    coords = [[-4.1, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.1, 41.66]]
+    DB.guardar_ficha("PG", {"propietario": "x", "coordenadas": coords, "superficie_ha": 10})
+    punto = C.punto_de(coords)
+    DB.anadir_clima(punto, [{"fecha": f"2026-{m:02d}-{dd:02d}", "t_min": 12, "t_max": 24}
+                            for m in range(1, 7) for dd in range(1, 29)])
+    serie = [{"fecha": "2026-04-01", "ndvi": 0.62, "cobertura_valida": 0.97,
+              "msavi": 0.5, "lai": 3.0, "evi": 0.4, "ndmi": 0.2}]
+    cult = {"tipo": "EXTENSIVO", "subtipo": "COSECHA_GRANO", "especie": "TRIGO",
+            "fecha_siembra": "2026-01-01"}
+    fcal = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, fecha_iso="2026-04-01",
+                           spec=spec_de(cult), parcela="PG")["fase"]
+    cult_g = dict(cult, integrales_termicas=[
+        {"metodo": "base0", "desde": "nascencia", "hasta": "espigado / floracion"}])
+    fgdd = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, fecha_iso="2026-04-01",
+                           spec=spec_de(cult_g), parcela="PG")["fase"]
+    check("gdd: SIN integral la fase la manda el calendario (comportamiento de siempre)",
+          lambda: fcal, lambda f: f in ("nascencia", "ahijado"))
+    check("gdd: CON integral y ano calido, la fase la manda el GDD (va adelantada)",
+          lambda: (fgdd, fcal), lambda r: r[0] != r[1] and r[0] == "llenado de grano")
+    check("gdd: el resumen para la ficha trae el GDD y la referencia de la integral",
+          lambda: G.resumen_parcela("EXTENSIVO", "TRIGO", spec_de(cult_g), "2026-04-01", "PG"),
+          lambda r: r and r["gdd_acumulado"] and r["integrales"][0]["referencia_gdd"] == 1000)
+
+
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
@@ -3206,7 +3272,7 @@ def main():
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
               pruebas_escala_indices, pruebas_clima, pruebas_repaso,
-              pruebas_vista_ficha):
+              pruebas_vista_ficha, pruebas_grados_dia):
         try:
             f()
         except Exception as e:
