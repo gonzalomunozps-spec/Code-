@@ -31,7 +31,7 @@ import ui_tema
 from ui_tema import (TEMA, FUENTES, esc, geom, tarjeta, centrar_sobre,
                      marco_scroll, enlazar_rueda, color_serie)
 from ui_widgets import LienzoMapa
-from ui_dialogos import (DialogoCorreccion, DialogoValidacionIndices,
+from ui_dialogos import (DialogoCorreccion, DialogoValidacionIndices, DialogoBorrarCampana,
                          DialogoSincronizarCampanas, DialogoEfectoProducto)
 
 import almacen as DB
@@ -459,6 +459,8 @@ class FichaParcela:
                    command=self._sincronizar_anteriores).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u270E Editar parcela  ", style="Ghost.TButton",
                    command=self._editar).pack(side="right", padx=(0, 4), pady=10)
+        ttk.Button(cab, text="  \U0001F5D1 Borrar campana  ", style="Ghost.TButton",
+                   command=self._borrar_campana).pack(side="right", padx=(0, 4), pady=10)
 
         cont, scroll = marco_scroll(master, bg=TEMA["page"])
         cont.pack(fill="both", expand=True)
@@ -1152,7 +1154,8 @@ class FichaParcela:
         else:
             self.lbl_val.config(text=f"✗ Corregido a: {v.get('estado_real','?')}.", fg=TEMA["danger_fg"])
 
-    def _validar(self, veredicto, estado_real=None, nota="", solo_parcela=False):
+    def _validar(self, veredicto, estado_real=None, nota="", solo_parcela=False,
+                 fase_real=None):
         ctx = getattr(self, "_val_ctx", None)
         if not ctx or not ctx.get("fecha"):
             return messagebox.showinfo("Validacion", "No hay ninguna pasada que validar.", parent=self.master)
@@ -1163,7 +1166,7 @@ class FichaParcela:
             clave = ambito_parcela(clave, self.nombre)
         DB.guardar_validacion(self.nombre, self.campana, ctx["fecha"], ctx.get("fase"),
                               clave, ctx.get("estado"), veredicto,
-                              estado_real=estado_real, nota=nota)
+                              estado_real=estado_real, nota=nota, fase_real=fase_real)
         # APRENDER AL MOMENTO: si corriges o escribes una observacion, se descarta la
         # interpretacion cacheada de esta pasada para que se regenere teniendo en cuenta
         # lo que acabas de decir; ademas se vuelve a pintar la interpretacion ya mismo.
@@ -1496,6 +1499,13 @@ class FichaParcela:
 
     def _sincronizar_anteriores(self):
         DialogoSincronizarCampanas(self.master, self.panel, self.nombre, self.campana)
+
+    def _borrar_campana(self):
+        """Borra TODO lo de la campana abierta, con doble confirmacion. Al terminar
+        vuelve a la lista, porque la campana que se estaba mirando ya no existe."""
+        def hecho():
+            self.panel.mostrar_lista()
+        DialogoBorrarCampana(self.master, self.nombre, self.campana, hecho)
 
     # ---- Sentinel-1 (radar): SOLO bajo demanda desde el boton ----
     def _sincronizar_radar(self):

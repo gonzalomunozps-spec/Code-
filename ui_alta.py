@@ -59,6 +59,9 @@ class VentanaAltaParcela(tk.Toplevel):
         self.configure(bg=TEMA["page"])
         self.coords = []
         self.poligono = None
+        # de donde salio la geometria actual: "dibujo" (a mano), "sigpac" o
+        # "editar". El dibujo a mano MANDA (ver `_clic` y `_sigpac`).
+        self._origen_coords = "editar" if editar else None
         # que la ventana se mantenga SIEMPRE por encima de la principal (no se
         # cuele detras al aparecer un aviso de error).
         self.transient(panel.winfo_toplevel())
@@ -339,6 +342,12 @@ class VentanaAltaParcela(tk.Toplevel):
             self.lbl_tipo_calc.config(text="")
 
     def _clic(self, coords):
+        # El dibujo a mano tiene PRIORIDAD: si el recinto actual venia de SIGPAC
+        # (o de editar), el primer clic empieza uno NUEVO en vez de anadir vertices
+        # sueltos a un poligono que no es del usuario. Asi dibujar siempre gana.
+        if self._origen_coords not in (None, "dibujo"):
+            self.coords = []
+        self._origen_coords = "dibujo"
         self.coords.append([coords[1], coords[0]])
         self._redibujar()
 
@@ -367,6 +376,15 @@ class VentanaAltaParcela(tk.Toplevel):
         # obligatorios; Agr/Zona valen 0 si se dejan vacios (recintos sin agregado/zona)
         if not all(v.get(k) for k in ("Prov", "Mun", "Pol", "Par", "Rec")):
             return messagebox.showwarning("SIGPAC", "Rellena al menos Prov, Mun, Pol, Par y Rec.", parent=self)
+        # El dibujo a mano manda: si ya hay un recinto DIBUJADO, no se pisa sin
+        # permiso. Traer SIGPAC encima de un dibujo tiene que ser una decision.
+        if self._origen_coords == "dibujo" and len(self.coords) >= 3:
+            if not messagebox.askyesno(
+                    "SIGPAC",
+                    "Ya has dibujado un recinto a mano en el mapa.\n\n"
+                    "El dibujo tiene prioridad. ¿Seguro que quieres reemplazarlo "
+                    "por el recinto de SIGPAC?", parent=self):
+                return
         # Un recinto SIGPAC se identifica por 7 codigos: prov/mun/agregado/zona/pol/par/rec.
         try:
             coords = sigpac_consultar(v, _sigpac_get)
@@ -377,6 +395,7 @@ class VentanaAltaParcela(tk.Toplevel):
         except Exception as e:
             return messagebox.showerror("SIGPAC", f"No se pudo capturar el recinto: {e}", parent=self)
         self.coords = coords
+        self._origen_coords = "sigpac"
         if _MAPVIEW:
             self._redibujar()
             self.mapa.set_position(coords[0][1], coords[0][0], zoom=16)
@@ -389,6 +408,14 @@ class VentanaAltaParcela(tk.Toplevel):
         tipo, esp = self.cb_tipo.get(), self.cb_sub.get()
         if not nombre or not prop or not tipo:
             return messagebox.showwarning("Datos", "Nombre, propietario y tipo son obligatorios.", parent=self)
+        # En ALTA (no en edicion), el nombre no puede chocar con una parcela que ya
+        # existe: guardar la pisaria en silencio -mismo nombre = misma clave-, y con
+        # ella su historico, su cuaderno y sus validaciones.
+        if not self.editar and DB.existe(nombre):
+            return messagebox.showwarning(
+                "Nombre repetido",
+                f"Ya existe una parcela llamada «{nombre.replace('_', ' ')}».\n\n"
+                "Elige otro nombre, o abre esa parcela y edítala.", parent=self)
         if tipo != "BARBECHO" and not esp:
             return messagebox.showwarning("Datos", "Selecciona la especie.", parent=self)
         if len(self.coords) < 3:

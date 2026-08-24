@@ -42,11 +42,27 @@ except Exception:
 _EE = gee_cliente.hay_ee()
 
 
+def _fases_para(ctx):
+    """Las fases que ofrecer en el desplegable, a partir del cultivo del contexto.
+
+    `ctx['cultivo']` es "TIPO/SUBTIPO/ESPECIE". Se leen las fases de la especie;
+    si no se reconoce, lista vacia y el usuario teclea la fase libremente."""
+    partes = (ctx.get("cultivo") or "").split("/")
+    tipo = partes[0] if partes else ""
+    especie = partes[-1] if len(partes) >= 3 else ""
+    try:
+        import fenologia_especies as FEN
+        return FEN.fases_posibles(tipo, especie)
+    except Exception:
+        return []
+
+
 class DialogoCorreccion(tk.Toplevel):
     """Pide el estado real y una nota para corregir un diagnostico (aprendizaje)."""
     def __init__(self, master, ficha, ctx):
         super().__init__(master)
         self.ficha = ficha
+        self._ctx = ctx
         self.title("Corregir diagnostico")
         self.configure(bg=TEMA["surface"])
         self.resizable(False, False)
@@ -65,6 +81,16 @@ class DialogoCorreccion(tk.Toplevel):
         self.cb = ttk.Combobox(self, state="readonly", values=ESTADOS_VALIDABLES, width=18)
         self.cb.set(ctx.get("estado", "OK"))
         self.cb.pack(anchor="w", padx=16, pady=(2, 0))
+
+        # --- FASE: se puede corregir a mano (la fenologia por calendario se
+        #     equivoca en anos frios/calidos). Editable: elige de la lista o teclea.
+        tk.Label(self, text="¿Y la fase? (corrigela si el calendario se equivoca)",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(10, 0))
+        self.cb_fase = ttk.Combobox(self, state="normal", width=30,
+                                    values=_fases_para(ctx))
+        self.cb_fase.set(ctx.get("fase", "") or "")
+        self.cb_fase.pack(anchor="w", padx=16, pady=(2, 0))
         # --- AMBITO de la correccion: solo esta finca o todo el cultivo ---
         tk.Label(self, text="¿A que debe aplicarse esta correccion?", bg=TEMA["surface"],
                  fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(12, 0))
@@ -90,8 +116,13 @@ class DialogoCorreccion(tk.Toplevel):
     def _guardar(self):
         estado_real = self.cb.get()
         nota = self.txt.get("1.0", tk.END).strip()
+        # fase corregida: solo si el usuario la ha cambiado respecto a la del sistema
+        fase_tecleada = self.cb_fase.get().strip()
+        fase_sistema = (self._ctx.get("fase") or "").strip()
+        fase_real = fase_tecleada if fase_tecleada and fase_tecleada != fase_sistema else None
         self.ficha._validar("incorrecto", estado_real=estado_real, nota=nota,
-                            solo_parcela=(self.ambito.get() == "parcela"))
+                            solo_parcela=(self.ambito.get() == "parcela"),
+                            fase_real=fase_real)
         self.destroy()
 
 class DialogoValidacionIndices(tk.Toplevel):
@@ -405,3 +436,70 @@ class DialogoEfectoProducto(tk.Toplevel):
                             f"Guardado: el efecto se medira en {fecha}." if fecha else
                             "Guardado: dia del informe automatico.", parent=self)
         self.destroy()
+
+
+class DialogoBorrarCampana(tk.Toplevel):
+    """Borra TODO lo de una campana de una parcela, con DOBLE confirmacion.
+
+    El borrado es irreversible, asi que no basta un «¿seguro?» que se pulsa sin
+    leer: hay que (1) marcar la casilla de que se entiende, y solo entonces (2) se
+    habilita el boton de borrar. Dos actos deliberados en vez de uno reflejo.
+    """
+    def __init__(self, master, nombre, campana, al_terminar=None):
+        super().__init__(master)
+        self.nombre, self.campana, self.al_terminar = nombre, campana, al_terminar
+        self.title("Borrar campana")
+        self.configure(bg=TEMA["surface"])
+        self.resizable(False, False)
+        self.transient(master.winfo_toplevel())
+        self.lift()
+        self.after(60, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
+        self.grab_set()
+
+        n_pas = len(DB.pasadas(nombre, campana))
+        n_ev = len(DB.eventos_de(nombre, campana)) if hasattr(DB, "eventos_de") else 0
+
+        tk.Label(self, text=f"Borrar la campana {campana}", bg=TEMA["surface"],
+                 fg=TEMA["danger_fg"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(self, text=f"Parcela: {nombre.replace('_', ' ')}", bg=TEMA["surface"],
+                 fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w", padx=16)
+        det = (f"Se borrara TODO lo de esta campana:\n"
+               f"   • {n_pas} pasada(s) de satelite y sus mapas\n"
+               f"   • {n_ev} evento(s) del cuaderno de campo\n"
+               f"   • el cultivo asignado y las validaciones de este ano\n\n"
+               f"La parcela y sus OTRAS campanas NO se tocan.\n"
+               f"Esto es IRREVERSIBLE: no hay deshacer.")
+        tk.Label(self, text=det, bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["body"],
+                 justify="left").pack(anchor="w", padx=16, pady=(10, 8))
+
+        self.var_ok = tk.IntVar(value=0)
+        tk.Checkbutton(self, text="Sí, entiendo que se borrara para siempre",
+                       variable=self.var_ok, command=self._toggle,
+                       bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["body"],
+                       activebackground=TEMA["surface"], selectcolor=TEMA["surface"],
+                       bd=0).pack(anchor="w", padx=16)
+
+        bar = tk.Frame(self, bg=TEMA["surface"])
+        bar.pack(fill="x", padx=16, pady=14)
+        ttk.Button(bar, text="Cancelar", style="Ghost.TButton",
+                   command=self.destroy).pack(side="right")
+        self.btn = ttk.Button(bar, text="Borrar definitivamente", style="Accent.TButton",
+                              command=self._borrar, state="disabled")
+        self.btn.pack(side="right", padx=(0, 8))
+
+    def _toggle(self):
+        # el boton solo se habilita con la casilla marcada: la segunda validacion
+        self.btn.config(state="normal" if self.var_ok.get() else "disabled")
+
+    def _borrar(self):
+        if not self.var_ok.get():
+            return
+        n = DB.eliminar_campana(self.nombre, self.campana)
+        self.destroy()
+        messagebox.showinfo("Campana borrada",
+                            f"Borrada la campana {self.campana} de "
+                            f"{self.nombre.replace('_', ' ')} ({n} pasada(s)).",
+                            parent=self.master)
+        if callable(self.al_terminar):
+            self.al_terminar()

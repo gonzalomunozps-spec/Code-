@@ -60,7 +60,8 @@ from ui_widgets import LienzoMapa, CampoFecha, PopupCalendario
 from ui_ficha import (FichaParcela, VentanaRadar, VentanaComparaMapas,
                       PanelMapaComparado, tooltip_pasada)
 from ui_dialogos import (DialogoCorreccion, DialogoValidacionIndices,
-                         DialogoSincronizarCampanas, DialogoEfectoProducto)
+                         DialogoSincronizarCampanas, DialogoEfectoProducto,
+                         DialogoBorrarCampana)
 from ui_alta import VentanaAltaParcela, DialogoRelevoCampana, BUFFER_POR_DEFECTO
 from ui_credenciales import PanelCredenciales
 
@@ -98,7 +99,7 @@ __all__ = [
     "VentanaAltaParcela", "DialogoRelevoCampana", "VentanaRadar",
     "VentanaComparaMapas", "PanelMapaComparado", "LienzoMapa", "CampoFecha",
     "PopupCalendario", "DialogoCorreccion", "DialogoValidacionIndices",
-    "DialogoSincronizarCampanas", "DialogoEfectoProducto",
+    "DialogoSincronizarCampanas", "DialogoEfectoProducto", "DialogoBorrarCampana",
     "main",
     "aplicar_tema", "activar_dpi", "poner_icono", "esc", "geom",
     "TEMA", "TEMAS", "MODO", "FUENTES", "PALETA_DATOS", "RANURA_SERIE",

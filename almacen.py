@@ -55,7 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 7
+ESQUEMA_VERSION = 8
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -179,6 +179,7 @@ def _crear_tablas():
             estado_sistema TEXT,       -- diagnostico automatico (OK/Vigilar/Revisar/Segado)
             veredicto TEXT,            -- 'correcto' | 'incorrecto'
             estado_real TEXT,          -- lo que el usuario dice que era (si incorrecto)
+            fase_real TEXT,            -- fase corregida a mano (si el usuario la cambia)
             nota TEXT,                 -- observacion libre del agricultor
             ts TEXT,                   -- momento de la validacion
             PRIMARY KEY(nombre, campana, fecha));
@@ -331,10 +332,21 @@ def _migracion_7(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_clima_punto ON clima(punto, fecha)")
 
 
+def _migracion_8(c):
+    """`fase_real` en validaciones: la fase corregida a mano por el usuario.
+
+    Igual que `estado_real` guarda el estado que el agricultor dice que era, esto
+    guarda la FASE que dice que era, cuando la fenologia por calendario se
+    equivoca (un ano frio retrasa el cultivo respecto a los dias de siembra). Se
+    aplica al MOSTRAR, con la misma logica que el estado; no reescribe el motor."""
+    if "fase_real" not in [r[1] for r in c.execute("PRAGMA table_info(validaciones)")]:
+        c.execute("ALTER TABLE validaciones ADD COLUMN fase_real TEXT")
+
+
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
 _MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4,
-                5: _migracion_5, 6: _migracion_6, 7: _migracion_7}
+                5: _migracion_5, 6: _migracion_6, 7: _migracion_7, 8: _migracion_8}
 
 
 def _migrar_esquema():
@@ -564,6 +576,28 @@ def eliminar_parcela(nombre):
             fn(nombre)
         except Exception:
             log.warning("aviso de borrado fallido en %r", fn, exc_info=True)
+
+
+def eliminar_campana(nombre, campana):
+    """Borra TODO lo de UNA campana de una parcela: pasadas, radar, rejillas,
+    cultivo asignado, eventos y validaciones de ese ano.
+
+    La PARCELA sigue existiendo (nombre, geometria, propietario) y sus OTRAS
+    campanas no se tocan. No entra la tabla `clima`, que va por punto de rejilla
+    y la comparten varias parcelas. Devuelve cuantas pasadas de satelite habia,
+    para poder confirmar el borrado con un numero real.
+
+    Es una accion destructiva e irreversible; el aviso de doble confirmacion vive
+    en la interfaz (`DialogoBorrarCampana`)."""
+    c = _c()
+    with _LOCK:
+        n = c.execute("SELECT COUNT(*) FROM pasadas WHERE nombre=? AND campana=?",
+                      (nombre, campana)).fetchone()[0]
+        for t in ("pasadas", "pasadas_radar", "pixeles", "cultivos", "eventos",
+                  "validaciones", "validaciones_indice"):
+            c.execute(f"DELETE FROM {t} WHERE nombre=? AND campana=?", (nombre, campana))
+        c.commit()
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -1010,19 +1044,23 @@ def pasadas_validadas(nombre, campana):
 # se reinyectan como ejemplos al pedir la interpretacion a ChatGPT, para que
 # acierte mejor en pasadas futuras del mismo tipo de cultivo.
 def guardar_validacion(nombre, campana, fecha, fase, cultivo,
-                       estado_sistema, veredicto, estado_real=None, nota=""):
-    """Guarda (o actualiza) la validacion del diagnostico de una pasada."""
+                       estado_sistema, veredicto, estado_real=None, nota="",
+                       fase_real=None):
+    """Guarda (o actualiza) la validacion del diagnostico de una pasada.
+
+    `fase_real` es la fase corregida a mano (None si el usuario no la toca)."""
     c = _c()
     with _LOCK:
         c.execute(
             "INSERT INTO validaciones(nombre,campana,fecha,fase,cultivo,estado_sistema,"
-            "veredicto,estado_real,nota,ts) VALUES(?,?,?,?,?,?,?,?,?,?) "
+            "veredicto,estado_real,fase_real,nota,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(nombre,campana,fecha) DO UPDATE SET "
             "fase=excluded.fase, cultivo=excluded.cultivo, estado_sistema=excluded.estado_sistema, "
-            "veredicto=excluded.veredicto, estado_real=excluded.estado_real, nota=excluded.nota, "
-            "ts=excluded.ts",
+            "veredicto=excluded.veredicto, estado_real=excluded.estado_real, "
+            "fase_real=excluded.fase_real, nota=excluded.nota, ts=excluded.ts",
             (nombre, campana, fecha, fase or "", cultivo or "", estado_sistema or "",
-             veredicto or "", estado_real, nota or "", datetime.now().strftime("%Y-%m-%d %H:%M")))
+             veredicto or "", estado_real, fase_real, nota or "",
+             datetime.now().strftime("%Y-%m-%d %H:%M")))
         c.commit()
 
 

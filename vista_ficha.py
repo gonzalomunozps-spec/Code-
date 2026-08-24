@@ -75,6 +75,7 @@ def preparar_interpretacion(nombre, campana, regs, idx):
         diag["estado"] = aj["corregido"]
 
     # validacion propia de esta pasada: lo que TU dijiste manda sobre lo mostrado
+    fase_sistema = diag.get("fase")        # la del motor: se guarda para aprender
     val_actual = DB.validacion_de(nombre, campana, actual.get("fecha"))
     nota_usuario = None
     if val_actual:
@@ -84,11 +85,19 @@ def preparar_interpretacion(nombre, campana, regs, idx):
                             f"(el sistema decia '{estado_bruto}'). El programa lo recuerda.")
         elif val_actual.get("veredicto") == "correcto":
             nota_usuario = f"Confirmado por ti como '{estado_bruto}'."
+        # FASE corregida a mano: manda sobre la mostrada, igual que el estado. La
+        # fase del sistema se conserva en val_ctx para que el aprendizaje sea coherente.
+        fase_real = (val_actual.get("fase_real") or "").strip()
+        if fase_real and fase_real != (fase_sistema or ""):
+            diag["fase"] = fase_real
+            nota_usuario = (nota_usuario or "") + (
+                f"  Fase corregida por ti a «{fase_real}» "
+                f"(el calendario decia «{fase_sistema or '?'}»).")
         obs_txt = (val_actual.get("nota") or "").strip()
         if obs_txt:
             nota_usuario = (nota_usuario or "") + f"  Tu observacion: “{obs_txt}”."
 
-    val_ctx = {"fecha": actual.get("fecha"), "fase": diag.get("fase"),
+    val_ctx = {"fecha": actual.get("fecha"), "fase": fase_sistema,
                "estado": estado_bruto, "cultivo": cultivo_id}
     idx_ctx = None
     if _CALIB is not None:

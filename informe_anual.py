@@ -252,6 +252,52 @@ def _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos):
     }
 
 
+def texto_progresion_estado(recorrido, alertas_vigentes):
+    """Narra COMO evoluciono el estado a lo largo de la campana, en prosa.
+
+    Sustituye a la lista de estado pasada-a-pasada en el PDF: el balance cuenta la
+    PROGRESION -de que estado partio, cuanto tiempo estuvo bien, cuando y en que
+    fase saltaron los avisos, como cerro-. El detalle dia a dia se deja para el
+    Excel, que es donde se consulta un valor concreto. Devuelve HTML de reportlab
+    (con &nbsp; y entidades ya escapadas para las tildes de las fases NO, esas van
+    aparte)."""
+    if not recorrido:
+        return ""
+    n = len(recorrido)
+    cuenta = {"OK": 0, "Vigilar": 0, "Revisar": 0, "Segado": 0}
+    for r in recorrido:
+        cuenta[r.get("estado")] = cuenta.get(r.get("estado"), 0) + 1
+    ini, fin = recorrido[0], recorrido[-1]
+    verde = cuenta.get("OK", 0) + cuenta.get("Segado", 0)
+    pct_verde = round(100 * verde / n) if n else 0
+
+    frases = [f"A lo largo de {n} pasada(s), la parcela estuvo en un estado sin "
+              f"incidencias el {pct_verde}% del seguimiento."]
+    frases.append(f"Arranco la campana en «{ini.get('estado','-')}» "
+                  f"(fase de {ini.get('fase','-')}) y la cerro en "
+                  f"«{fin.get('estado','-')}» (fase de {fin.get('fase','-')}).")
+
+    # los avisos, agrupados por fase, contados (no listados uno a uno)
+    avisos = [r for r in recorrido if r.get("estado") in ("Revisar", "Vigilar")
+              and not r.get("esperado")]
+    if not avisos:
+        frases.append("No hubo ningun aviso fuera de lo que la fenologia explica: "
+                      "evolucion coherente de principio a fin.")
+    else:
+        por_fase = {}
+        for r in avisos:
+            por_fase[r.get("fase", "-")] = por_fase.get(r.get("fase", "-"), 0) + 1
+        detalle = ", ".join(f"{c} en {f}" for f, c in por_fase.items())
+        frases.append(f"Se registraron {len(avisos)} aviso(s) durante el ano ({detalle}).")
+        if alertas_vigentes:
+            frases.append(f"De ellos, {len(alertas_vigentes)} seguian vigentes al cierre; "
+                          f"el resto se reencuadro en la fenologia en pasadas posteriores.")
+        else:
+            frases.append("Todos se reencuadraron en la fenologia en pasadas posteriores: "
+                          "ninguno quedo vigente al cierre.")
+    return " ".join(frases)
+
+
 def _preparar(serie, radar, eventos, ruta_salida, ext, nombre, campana):
     """Validacion y normalizacion comun de entradas para todos los formatos."""
     serie = sorted([r for r in (serie or []) if r.get("fecha")], key=lambda r: r["fecha"])
@@ -511,13 +557,12 @@ def _construir_pdf(ruta, ctx):
             story.append(P(f"&bull;&nbsp; {esc(_fnat(e.get('fecha')))}: {esc(e.get('producto', '') or e.get('objetivo', ''))} "
                            f"&mdash; {esc(ef.get('verdicto', ''))}."))
 
-    # ---- alertas del ano ----
-    if alertas:
-        story.append(H("Avisos registrados durante la campa&ntilde;a"))
-        for fecha, estado, fase, resuelto in alertas:
-            marca = (" <font color='#2f855a'>(reencuadrado por la fenolog&iacute;a en pasadas posteriores)</font>"
-                     if resuelto else " <font color='#dd6b20'>(vigente al cierre)</font>")
-            story.append(P(f"&bull;&nbsp; {esc(_fnat(fecha))}: <b>{esc(estado)}</b> en fase de {esc(fase)}.{marca}"))
+    # ---- progresion del estado (narrativa, NO lista dia a dia) ----
+    # El detalle pasada-a-pasada se deja para el Excel; aqui se cuenta el arco.
+    prog = texto_progresion_estado(ctx["recorrido"], alertas_vigentes)
+    if prog:
+        story.append(H("Progresi&oacute;n del estado durante la campa&ntilde;a"))
+        story.append(P(esc(prog)))
 
     # ---- radar ----
     if radar_info and radar_info.get("disponible"):
@@ -870,23 +915,34 @@ def _construir_excel(ruta, ctx):
         r += 1
 
     # ---- Hoja 2: Datos por pasada ----
+    # El estado y la fase pasada-a-pasada -la "lista de estado diario"- viven AQUI,
+    # no en el PDF: el PDF cuenta la progresion y el Excel guarda el detalle para
+    # consultar un dia concreto. El recorrido ya lo trae el ctx (`recorrido`).
+    estado_por_fecha = {r["fecha"]: (r.get("estado", "-"), r.get("fase", "-"))
+                        for r in recorrido}
     ws = wb.create_sheet("Índices por pasada")
-    cols = ["Fecha"] + [INDICES_ET[k] for k in INDICES] + ["Cobertura %", "NDVI_std"]
+    cols = ["Fecha", "Estado", "Fase"] + [INDICES_ET[k] for k in INDICES] + ["Cobertura %", "NDVI_std"]
     encabeza(ws, cols)
     for i, reg in enumerate(serie, 2):
         ws.cell(row=i, column=1, value=reg["fecha"])
-        for j, k in enumerate(INDICES, 2):
+        est, fase = estado_por_fecha.get(reg["fecha"], ("-", "-"))
+        ws.cell(row=i, column=2, value=est)
+        ws.cell(row=i, column=3, value=fase)
+        for j, k in enumerate(INDICES, 4):
             ws.cell(row=i, column=j, value=reg.get(k))
         cob = reg.get("cobertura_valida")
-        ws.cell(row=i, column=9, value=round(cob * 100, 1) if cob is not None else None)
-        ws.cell(row=i, column=10, value=reg.get("ndvi_std"))
-    anchos(ws, 12, len(cols)); ws.column_dimensions["A"].width = 12
+        ws.cell(row=i, column=len(INDICES) + 4, value=round(cob * 100, 1) if cob is not None else None)
+        ws.cell(row=i, column=len(INDICES) + 5, value=reg.get("ndvi_std"))
+    anchos(ws, 12, len(cols))
+    ws.column_dimensions["A"].width = 12
+    ws.column_dimensions["B"].width = 10; ws.column_dimensions["C"].width = 22
     ws.freeze_panes = "A2"
     # grafica: NDVI, LAI, NDMI por pasada
     ch = LineChart(); ch.title = "Evolución de índices por pasada"; ch.height = 9; ch.width = 22
     ch.y_axis.title = "valor índice"; ch.x_axis.title = "fecha"
     fechas_ref = Reference(ws, min_col=1, min_row=2, max_row=len(serie) + 1)
-    for k, colidx in (("ndvi", 2), ("lai", 6), ("ndmi", 8)):
+    # +2 columnas por Estado y Fase, que ahora van antes de los indices
+    for k, colidx in (("ndvi", 4), ("lai", 8), ("ndmi", 10)):
         data = Reference(ws, min_col=colidx, min_row=1, max_row=len(serie) + 1)
         ch.add_data(data, titles_from_data=True)
     ch.set_categories(fechas_ref)

@@ -780,3 +780,25 @@ ESPECIES = {
     "LENOSO": list(LENOSO_ESPECIES.keys()),
     "BARBECHO": [],
 }
+
+
+def fases_posibles(tipo, especie):
+    """Los nombres de fase que puede recorrer un cultivo, en orden.
+
+    Sirve para OFRECER al usuario una lista al corregir la fase a mano; es lectura
+    pura de las tablas, no participa en ningun diagnostico. Lista vacia si no se
+    reconoce el cultivo (entonces el usuario la escribe libremente)."""
+    if tipo == "EXTENSIVO":
+        info = EXTENSIVO_ESPECIES.get(especie)
+        return [f[2] for f in info["fases"]] if info else []
+    if tipo == "LENOSO":
+        tabla = FASES_LENOSO.get(especie)
+        if not tabla:
+            return []
+        vistas, orden = set(), []      # unicas, conservando el orden de los meses
+        for m in range(1, 13):
+            f = tabla.get(m)
+            if f and f not in vistas:
+                vistas.add(f); orden.append(f)
+        return orden
+    return []

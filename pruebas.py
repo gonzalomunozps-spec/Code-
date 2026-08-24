@@ -1928,6 +1928,15 @@ def pruebas_informe_anual():
     # el helper de superficie es puro y no depende del PDF
     check("informe anual: superficie_ha coherente (>0)",
           lambda: IA._superficie_ha(ficha["coordenadas"]), lambda r: r and r > 0)
+    # PROGRESION del estado: narrativa, no lista dia a dia (puro, sin reportlab)
+    rec = [{"fecha": "2026-01-01", "estado": "OK", "fase": "ahijado", "esperado": False},
+           {"fecha": "2026-02-01", "estado": "Revisar", "fase": "encanado", "esperado": False},
+           {"fecha": "2026-03-01", "estado": "OK", "fase": "espigado", "esperado": False}]
+    check("informe: la progresion cuenta el arco, no lista cada dia",
+          lambda: IA.texto_progresion_estado(rec, []),
+          lambda t: "pasada" in t and "aviso" in t and "2026-02-01" not in t)
+    check("informe: sin recorrido, la progresion es cadena vacia",
+          lambda: IA.texto_progresion_estado([], []), lambda t: t == "")
     # EXCEL: solo si openpyxl esta presente (si no, se omite, no es fallo)
     if getattr(IA, "EXCEL_DISPONIBLE", False):
         xls = os.path.join(d, "idx.xlsx")
@@ -3107,6 +3116,7 @@ def pruebas_vista_ficha():
     probar aqui, en la bateria rapida."""
     import almacen as DB
     from vista_ficha import preparar_interpretacion as PREP
+    import fenologia_especies as FEN
 
     d = tempfile.mkdtemp()
     DB.conectar(os.path.join(d, "vf.db"))
@@ -3161,6 +3171,24 @@ def pruebas_vista_ficha():
     r_conf = PREP("P_VF", CAMP, serie, 1)
     check("vista: confirmar una pasada se anota en el encabezado",
           lambda: r_conf["encabezado"], lambda t: "Confirmado por ti" in t)
+
+    # --- correccion manual de la FASE (paridad con el estado) ---
+    r_f = PREP("P_VF", CAMP, serie, len(serie) - 1)
+    fase_sis = r_f["fase"]
+    otra_fase = next(f for f in FEN.fases_posibles("EXTENSIVO", "TRIGO") if f != fase_sis)
+    DB.guardar_validacion("P_VF", CAMP, "2026-04-01", fase_sis, r_f["cultivo_id"],
+                          r_f["estado_bruto"], "incorrecto", estado_real=r_f["estado_bruto"],
+                          fase_real=otra_fase)
+    r_f2 = PREP("P_VF", CAMP, serie, len(serie) - 1)
+    check("vista: una fase corregida a mano se muestra en su lugar",
+          lambda: (r_f2["fase"], fase_sis), lambda x: x == (otra_fase, fase_sis))
+    check("vista: pero val_ctx guarda la fase del SISTEMA (aprender coherente)",
+          lambda: r_f2["val_ctx"]["fase"], lambda f: f == fase_sis)
+    check("vista: y el encabezado avisa de la correccion de fase",
+          lambda: r_f2["encabezado"], lambda t: "Fase corregida por ti" in t)
+    check("fenologia: fases_posibles lista las fases del cultivo en orden",
+          lambda: FEN.fases_posibles("EXTENSIVO", "TRIGO"),
+          lambda l: l and l[0] == "nascencia" and "espigado / floracion" in l)
 
     # --- barbecho: no aplica vigor ---
     DB.guardar_ficha("P_BAR", {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 5,

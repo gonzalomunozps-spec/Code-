@@ -766,6 +766,48 @@ def escenario_dialogos(P, DB):
         return v
     abrir("alta con marco negativo", _alta_marco_negativo)
 
+    def _alta_nombre_repetido():
+        """Dar de alta con el nombre de una parcela que YA existe no la pisa."""
+        import almacen as _DB
+        antes = len(_DB.nombres())
+        existente = sorted(_DB.nombres())[0].replace("_", " ")
+        v = P.VentanaAltaParcela(panel)
+        root.update()
+        v.e_nombre.delete(0, "end"); v.e_nombre.insert(0, existente)
+        v.e_prop.delete(0, "end"); v.e_prop.insert(0, "otro")
+        v.cb_tipo.set("BARBECHO")
+        v.coords = [[-4.10, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.10, 41.66]]
+        v._guardar()      # showwarning esta stubbeado: _guardar sale sin guardar
+        _check(len(_DB.nombres()) == antes,
+               f"un nombre repetido creo una parcela nueva ({antes} -> {len(_DB.nombres())})")
+        return v
+    abrir("alta con nombre repetido no pisa la existente", _alta_nombre_repetido)
+
+    def _dibujo_manda():
+        """El dibujo a mano tiene prioridad: un clic sobre un recinto de SIGPAC
+        empieza uno nuevo en vez de anadir vertices al ajeno."""
+        v = P.VentanaAltaParcela(panel)
+        root.update()
+        v.coords = [[-4.10, 41.65], [-4.09, 41.65], [-4.09, 41.66]]
+        v._origen_coords = "sigpac"
+        v._clic((41.70, -4.05))       # (lat, lon) como lo entrega el mapa
+        _check(v._origen_coords == "dibujo", "un clic no marca el recinto como dibujado")
+        _check(len(v.coords) == 1, f"el clic no empezo un recinto nuevo: {len(v.coords)} vertices")
+        return v
+    abrir("el dibujo del mapa tiene prioridad sobre SIGPAC", _dibujo_manda)
+
+    def _borrar_campana_doble():
+        """El borrado de campana exige DOS actos: marcar la casilla y pulsar."""
+        d = P.DialogoBorrarCampana(root, NOM, CAMP)
+        root.update()
+        _check(str(d.btn["state"]) == "disabled",
+               "el boton de borrar arranca habilitado (deberia pedir la casilla)")
+        d.var_ok.set(1); d._toggle(); root.update()
+        _check(str(d.btn["state"]) == "normal",
+               "marcar la casilla no habilita el borrado")
+        return d
+    abrir("borrar campana pide doble confirmacion", _borrar_campana_doble)
+
     abrir("alta de parcela", lambda: P.VentanaAltaParcela(panel),
           lambda v: [b.invoke() for t, b in _botones(v) if "guardar" not in t.lower()]
           + [v._guardar()])

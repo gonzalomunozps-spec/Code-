@@ -3,6 +3,25 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.1.0] — 2026-08
+
+### Añadido
+- **No se permiten dos parcelas con el mismo nombre**: el alta avisa en vez de
+  pisar en silencio la parcela existente (y con ella su histórico).
+- **El recinto dibujado a mano tiene prioridad sobre SIGPAC**: dibujar sobre un
+  recinto de SIGPAC empieza uno nuevo, y traer SIGPAC sobre un dibujo pide permiso.
+- **Corrección manual de la fase** al validar: si el calendario se equivoca (año
+  frío/cálido), se corrige la fase a mano; se muestra en su lugar y el aprendizaje
+  sigue usando la fase del sistema, con la misma lógica que la corrección de estado.
+- **Borrar una campaña entera** de una parcela, con doble confirmación (casilla +
+  botón) para evitar borrados accidentales. No toca la parcela ni sus otras campañas.
+
+### Cambiado
+- **Informe de balance (PDF)**: sustituye la lista de avisos por una **narrativa
+  de la progresión del estado** (de qué estado partió, cuándo y en qué fase saltaron
+  los avisos, cómo cerró). El detalle pasada a pasada —estado y fase— pasa al
+  **Excel**, en la hoja «Índices por pasada».
+
 ## [1.0.0] — 2026-08
 
 Primera versión con forma de producto: instalable, documentada y con arranque
