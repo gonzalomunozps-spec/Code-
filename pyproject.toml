@@ -1,0 +1,58 @@
+# Empaquetado del proyecto. Layout PLANO a proposito: los modulos viven en la raiz
+# (no dentro de un paquete) porque las pruebas y la aplicacion se importan entre si
+# por nombre directo. Por eso se listan en `py-modules` en vez de `packages`.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gestor-parcelas"
+description = "Gestion y monitoreo de parcelas agricolas con imagenes Sentinel-2 (optico) y Sentinel-1 (radar) via Google Earth Engine."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dynamic = ["version"]
+keywords = ["agricultura", "teledeteccion", "sentinel", "ndvi",
+            "earth-engine", "agricultura-de-precision"]
+
+# tkinter NO va aqui: no se instala con pip. Viene con Python en Windows/macOS; en
+# Linux es el paquete del sistema python3-tk (ver README).
+dependencies = [
+    "earthengine-api",   # imagenes Sentinel-2/1 y clima ERA5-Land
+    "tkintermapview",    # mapa interactivo para dibujar/buscar parcelas
+    "pillow",            # imagenes (mapa de indices)
+    "matplotlib",        # graficas de evolucion y leyendas de color
+    "requests",          # peticiones HTTP (SIGPAC, descarga de tiles)
+]
+
+[project.optional-dependencies]
+# Cada grupo enciende una funcion OPCIONAL. Sin el grupo, esa funcion desaparece y
+# el resto sigue igual (ver §6 de ARQUITECTURA.md).
+ia = ["openai"]                        # interpretacion con ChatGPT (si no, por reglas)
+informes = ["reportlab", "openpyxl"]   # informe_anual: PDF y Excel
+rutas = ["platformdirs"]               # ubica los datos en la carpeta estandar del SO
+todo = ["openai", "reportlab", "openpyxl", "platformdirs"]
+
+[project.scripts]
+gestor-parcelas = "panel_gestion_parcelas:main"
+
+[tool.setuptools]
+py-modules = [
+    "almacen", "bitacora", "calibracion_umbrales", "campanas", "clima_era5",
+    "contraste_indices", "credenciales", "cultivo", "demo_sistema", "fechas",
+    "fenologia_especies", "gee_cliente", "geo", "herbicida_contexto",
+    "informe_anual", "interpretacion_fenologica", "mapas_cache",
+    "panel_gestion_parcelas", "registro_parcela", "rejilla", "rutas",
+    "sentinel1", "sigpac", "sincronizacion", "version",
+    "ui_alta", "ui_credenciales", "ui_dialogos", "ui_ficha", "ui_tema", "ui_widgets",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "version.__version__" }
+
+# Nota sobre el icono: `icono.png`/`icono.ico` son ficheros de datos junto a los
+# modulos. La forma recomendada de arrancar es desde el codigo
+# (`python panel_gestion_parcelas.py`), y ahi se encuentran. En una instalacion
+# con `pip install .` no viajan al site-packages y la ventana sale con el icono
+# por defecto de Tk: es la degradacion que `poner_icono` ya contempla, no un
+# fallo. El resto de la aplicacion funciona igual instalada.

@@ -1,0 +1,14 @@
+# Ficheros que acompañan al código en el sdist (pip sdist / tar.gz).
+include README.md
+include LICENSE
+include CHANGELOG.md
+include COMO_ARRANCAR.md
+include ARQUITECTURA.md
+include requirements.txt
+include icono.png
+include icono.ico
+recursive-include docs *.png
+
+# Las pruebas no se distribuyen en el paquete instalable.
+exclude pruebas.py
+exclude pruebas_interfaz.py

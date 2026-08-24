@@ -99,6 +99,7 @@ __all__ = [
     "VentanaComparaMapas", "PanelMapaComparado", "LienzoMapa", "CampoFecha",
     "PopupCalendario", "DialogoCorreccion", "DialogoValidacionIndices",
     "DialogoSincronizarCampanas", "DialogoEfectoProducto",
+    "main",
     "aplicar_tema", "activar_dpi", "poner_icono", "esc", "geom",
     "TEMA", "TEMAS", "MODO", "FUENTES", "PALETA_DATOS", "RANURA_SERIE",
     "color_serie", "tarjeta", "centrar_sobre", "marco_scroll", "enlazar_rueda",
@@ -658,21 +659,36 @@ class PanelGestionParcelas(ttk.Frame):
 
 
 # =====================================================================
-# DEMO
+# ARRANQUE
 # =====================================================================
-if __name__ == "__main__":
+def main(argv=None):
+    """Monta la ventana principal y entra en el bucle de eventos.
+
+    Es tambien el punto de entrada del comando `gestor-parcelas` (ver
+    pyproject.toml). Acepta `--version` y `--help` para no obligar a abrir la
+    ventana solo por saber que version es. Devuelve el codigo de salida."""
+    import argparse
+    from version import __version__
+
+    parser = argparse.ArgumentParser(
+        prog="gestor-parcelas",
+        description="Gestion y monitoreo de parcelas agricolas con Sentinel-2/1.")
+    parser.add_argument("--version", action="version",
+                        version=f"gestor-parcelas {__version__}")
+    parser.parse_args(argv)
+
     # ANTES de tk.Tk(): una vez creada la ventana, Windows ya ha decidido como la
     # escala y declararse consciente del DPI no sirve de nada.
     activar_dpi()
 
     DB.conectar()                    # abre SQLite y migra los JSON antiguos si existen
-    _cfg = CRED.cargar()
-    CRED.aplicar_entorno(_cfg)
+    cfg = CRED.cargar()
+    CRED.aplicar_entorno(cfg)
 
     root = tk.Tk()
     root.withdraw()                  # se monta a escondidas y se ensena ya hecha
-    root.title("Gestion de Parcelas - Copernicus")
-    aplicar_tema(root, modo=_cfg.get("tema"))     # "claro" u "oscuro"; None = claro
+    root.title(f"Gestion de Parcelas - Copernicus  ·  v{__version__}")
+    aplicar_tema(root, modo=cfg.get("tema"))      # "claro" u "oscuro"; None = claro
     poner_icono(root)
     root.geometry(geom(1440, 900))
     # Por debajo de esto las filas de la ficha -que tienen altura fija- dejan de
@@ -694,10 +710,16 @@ if __name__ == "__main__":
     # la repite por su cuenta y ensena el resultado en su insignia.
     if _EE:
         def _aviso_gee():
-            _est, _msg = CRED.probar_gee(_cfg.get("gee_project"), _cfg.get("gee_key_file"),
-                                         _cfg.get("gee_service_account"))
-            if _est != "ok":
-                print(f"Aviso GEE: {_msg}")
+            est, msg = CRED.probar_gee(cfg.get("gee_project"), cfg.get("gee_key_file"),
+                                       cfg.get("gee_service_account"))
+            if est != "ok":
+                print(f"Aviso GEE: {msg}")
         threading.Thread(target=_aviso_gee, daemon=True).start()
 
     root.mainloop()
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

@@ -18,3 +18,9 @@ cache_mapas/
 
 # registro de incidencias
 parcelas.log
+
+# artefactos de empaquetado (pip install . / build)
+build/
+dist/
+*.egg-info/
+.eggs/
