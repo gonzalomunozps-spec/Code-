@@ -188,6 +188,17 @@ def _derribar(root):
                 pass
     except Exception:
         pass
+    # Soltar el grab ANTES de destruir. El arnes crea un Tk() por escenario; si un
+    # dialogo con grab_set() se destruye sin soltarlo, algunos builds de Tk dejan
+    # el grab colgado y el grab_set() del siguiente escenario falla con
+    # «another application has grab». En un uso normal no pasa: hay un solo
+    # interprete y mainloop suelta el grab al cerrar la ventana.
+    try:
+        actual = root.grab_current()
+        if actual is not None:
+            actual.grab_release()
+    except Exception:
+        pass
     try:
         root.destroy()
     except Exception:
