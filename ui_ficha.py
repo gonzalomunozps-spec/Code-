@@ -44,10 +44,10 @@ from gee_cliente import (INDICES, INDICES_ORDEN, RADAR_VIS,
                          sincronizar_parcela)
 from mapas_cache import ruta_cache_mapa, ruta_cache_radar
 from interpretacion_fenologica import (evaluar_parcela, texto_interpretacion,
-                                       ajuste_por_validaciones,
-                                       observaciones_del_agricultor, ambito_parcela)
+                                       ambito_parcela)
 from campanas import campanas_de_parcela, etiqueta_campana, PRIMERA_CAMPANA_S2
 from cultivo import spec_de
+from vista_ficha import preparar_interpretacion
 from bitacora import log
 import sincronizacion
 from sincronizacion import ULTIMO_SYNC
@@ -1077,117 +1077,50 @@ class FichaParcela:
     def _pintar_interp(self, regs):
         self.txt.delete("1.0", tk.END)
         if not regs:
-            self.txt.insert(tk.END, "Sin datos. Pulsa 'Sincronizar Copernicus'.")
+            self.txt.insert(tk.END, "Sin datos. Pulsa \'Sincronizar Copernicus\'.")
             return
-        # Se interpreta la pasada ELEGIDA (por defecto la ultima). Para juzgar un dia
-        # anterior hay que darle al motor la serie HASTA ese dia: si se le pasara
-        # entera, las variaciones se calcularian contra pasadas del futuro.
+        # La pasada elegida sale del desplegable (Tk); a partir de ahi, DECIDIR que
+        # mostrar es puro y vive en `vista_ficha.preparar_interpretacion`, probado
+        # sin pantalla. Aqui solo se pinta.
         idx = self._indice_pasada(regs)
-        regs = regs[:idx + 1]
-        actual = regs[-1]
         self._refrescar_selector_pasadas(
             sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", "")), idx)
-        _ficha = DB.ficha(self.nombre) or {}
-        cult = (_ficha.get("cultivos_por_campana", {}) or {}).get(self.campana, {})
-        tipo, sub = cult.get("tipo", "BARBECHO"), cult.get("subtipo", "")
-        spec = spec_de(cult)
-        # el analisis de zonas se puede apagar por parcela (casilla de arriba)
-        hetero_on = _ficha.get("heterogeneidad", True)
-        if hasattr(self, "var_hetero") and self.var_hetero.get() != bool(hetero_on):
-            self.var_hetero.set(bool(hetero_on))
 
-        # eventos del cuaderno cercanos a esa pasada (para el diagnostico)
-        eventos_cerca = REG.eventos_cercanos(self.nombre, self.campana,
-                                             actual.get("fecha", ""), ventana_dias=20)
+        r = preparar_interpretacion(self.nombre, self.campana, regs, idx)
 
-        # diagnostico fenologico (rapido, local): fase, estado, cubierta y eventos.
-        # `parcela` solo sirve para aplicar los umbrales que tu hayas calibrado.
-        diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec,
-                               parcela=self.nombre, heterogeneidad_activa=hetero_on)
-        estado_bruto = diag["estado"]          # el que produce el motor (base del aprendizaje)
-        cultivo_id = f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")
+        # la casilla de zonas refleja lo que hay guardado para la parcela
+        if hasattr(self, "var_hetero") and self.var_hetero.get() != bool(r["hetero_on"]):
+            self.var_hetero.set(bool(r["hetero_on"]))
 
-        historial = DB.validaciones_recientes(limite=300)
-        # --- APRENDIZAJE de campanas anteriores (ajuste del estado por historial) ---
-        # lo aprendido en ESTA parcela manda; si no hay, se usa lo del cultivo
-        aj = ajuste_por_validaciones(cultivo_id, diag.get("fase"), estado_bruto, historial,
-                                     parcela=self.nombre)
-        if aj.get("corregido"):
-            diag["estado"] = aj["corregido"]   # la prediccion se afina con el historial
+        self._estado_actual = r["estado"]
+        self._val_ctx = r["val_ctx"]           # contexto para corregir el diagnostico
+        if r["idx_ctx"] is not None:           # contexto de validacion POR INDICE
+            self._idx_ctx = r["idx_ctx"]
 
-        # --- VALIDACION PROPIA DE ESTA PASADA: lo que TU dijiste manda sobre lo mostrado ---
-        # Aprende al momento: si corregiste esta pasada, se muestra tu estado; si la
-        # confirmaste, se marca; y tu observacion escrita se refleja siempre.
-        val_actual = DB.validacion_de(self.nombre, self.campana, actual.get("fecha"))
-        nota_usuario = None
-        if val_actual:
-            if val_actual.get("veredicto") == "incorrecto" and val_actual.get("estado_real"):
-                diag["estado"] = val_actual["estado_real"]
-                nota_usuario = (f"Corregido por ti a '{val_actual['estado_real']}' "
-                                f"(el sistema decia '{estado_bruto}'). El programa lo recuerda.")
-            elif val_actual.get("veredicto") == "correcto":
-                nota_usuario = f"Confirmado por ti como '{estado_bruto}'."
-            obs_txt = (val_actual.get("nota") or "").strip()
-            if obs_txt:
-                nota_usuario = (nota_usuario or "") + f"  Tu observacion: “{obs_txt}”."
-
-        self._estado_actual = diag["estado"]
-        # contexto que se guarda al validar (se guarda el estado BRUTO, para aprender coherente)
-        self._val_ctx = {"fecha": actual.get("fecha"), "fase": diag.get("fase"),
-                         "estado": estado_bruto, "cultivo": cultivo_id}
-        # contexto del dialogo de validacion POR INDICE: que midio el satelite ese
-        # dia y que dice el sistema de cada indice con los umbrales de esa fase
-        if _CALIB is not None:
-            self._idx_ctx = {
-                "fecha": actual.get("fecha"), "fase": diag.get("fase"),
-                "especie": (spec or {}).get("especie", ""),
-                "lecturas": _CALIB.lectura_de_pasada(actual, diag.get("umbrales") or {},
-                                                     INDICES_ORDEN),
-                "umbrales": diag.get("umbrales") or {}}
-
-        # ---- ENCABEZADO compartido por el render inmediato y el de la IA ----
-        cab = f"[{diag['estado']}]  Fase: {diag['fase']}"
-        c = diag.get("cubierta")
-        if c and c["señales"] >= 2:
-            cab += f"  ·  Cubierta: {c['hipotesis_preliminar']} ({c['señales']}/4)"
-        lineas = [cab]
-        # estadistica espacial de la pasada (ya venia del satelite; aqui se muestra)
-        txt_est = CI.texto_estadisticas(actual, diag.get("heterogeneidad"))
-        if txt_est:
-            lineas.append("📊 " + txt_est)
-        if aj.get("nota"):
-            lineas.append("🧠 " + aj["nota"])
-        if nota_usuario:
-            lineas.append("🧠 " + nota_usuario)
-        # lo que la PERSONA dijo antes en este cultivo/fase (se muestra haya o no ChatGPT)
-        obs_prev = [o for o in observaciones_del_agricultor(cultivo_id, diag.get("fase"), historial,
-                                                            parcela=self.nombre)
-                    if o.get("fecha") != actual.get("fecha")]
-        if obs_prev:
-            lineas.append("🗣️ Segun tus validaciones anteriores:")
-            for o in obs_prev:
-                lineas.append(f"   • [{o.get('estado', '?')}] {o['nota']}")
-        encabezado = "\n".join(lineas) + "\n\n"
-
+        encabezado = r["encabezado"]
         self.txt.insert(tk.END, encabezado)
         self._refrescar_validacion()
 
-        if tipo == "BARBECHO":
-            self.txt.insert(tk.END, diag["motivo"])
+        if r["es_barbecho"]:
+            self.txt.insert(tk.END, r["motivo"])
             return
-        # validaciones pasadas del agricultor -> aprendizaje para la IA (incluye tus notas)
-        aprendizaje = DB.validaciones_recientes(limite=8, cultivo=cultivo_id)
-        if actual.get("interpretacion"):          # cacheado (se invalida al corregir)
-            self.txt.insert(tk.END, actual["interpretacion"])
+        # validaciones pasadas del agricultor -> aprendizaje para la IA (con tus notas)
+        aprendizaje = DB.validaciones_recientes(limite=8, cultivo=r["cultivo_id"])
+        if r["interpretacion_cache"]:          # cacheado (se invalida al corregir)
+            self.txt.insert(tk.END, r["interpretacion_cache"])
             return
         self.txt.insert(tk.END, "Generando interpretacion...")
 
+        tipo, sub, spec = r["tipo"], r["sub"], r["spec"]
+        regs_hasta, actual = r["regs"], r["actual"]
+        eventos_cerca, hetero_on = r["eventos_cerca"], r["hetero_on"]
+
         def worker():
-            # Los MISMOS argumentos con que se evaluo la cabecera (linea de
-            # arriba): `texto_interpretacion` vuelve a evaluar por dentro, y con
-            # otros argumentos el semaforo y el texto que hay debajo salen de dos
+            # Los MISMOS argumentos con que se resolvio la cabecera:
+            # `texto_interpretacion` vuelve a evaluar por dentro, y con otros
+            # argumentos el semaforo y el texto de abajo saldrian de dos
             # diagnosticos distintos -y el texto ademas se guarda en la base-.
-            texto, _d = texto_interpretacion(tipo, sub, regs, actual.get("fecha"),
+            texto, _d = texto_interpretacion(tipo, sub, regs_hasta, actual.get("fecha"),
                                              eventos_cerca=eventos_cerca, spec=spec,
                                              aprendizaje=aprendizaje,
                                              parcela=self.nombre,

@@ -3098,6 +3098,78 @@ def pruebas_repaso():
           lambda r: r[1] is True)
 
 
+def pruebas_vista_ficha():
+    """La logica de interpretacion de la ficha, AHORA sin pantalla (vista_ficha).
+
+    Era lo unico que solo se tocaba con `pruebas_interfaz` -y donde se colo el
+    fallo de que la cabecera y el texto mostraban diagnosticos distintos-. Al
+    sacarla de `_pintar_interp` a `vista_ficha.preparar_interpretacion` se puede
+    probar aqui, en la bateria rapida."""
+    import almacen as DB
+    from vista_ficha import preparar_interpretacion as PREP
+
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "vf.db"))
+    CAMP = "2025-2026"
+    cult = {"tipo": "EXTENSIVO", "subtipo": "COSECHA_GRANO", "especie": "TRIGO",
+            "fecha_siembra": "2025-11-15"}
+    DB.guardar_ficha("P_VF", {"propietario": "x", "coordenadas": [[0, 0]],
+                              "superficie_ha": 10, "cultivos_por_campana": {CAMP: cult}})
+    serie = [{"fecha": "2026-03-01", "ndvi": 0.62, "cobertura_valida": 0.97},
+             {"fecha": "2026-03-15", "ndvi": 0.66, "cobertura_valida": 0.97},
+             {"fecha": "2026-04-01", "ndvi": 0.05, "cobertura_valida": 0.97}]  # ultima anomala
+    DB.anadir_pasadas("P_VF", CAMP, serie)
+
+    check("vista: sin pasadas devuelve vacio",
+          lambda: PREP("P_VF", CAMP, [], 0), lambda r: r.get("vacio") is True)
+
+    r_ult = PREP("P_VF", CAMP, serie, len(serie) - 1)
+    check("vista: interpreta la pasada elegida y monta encabezado",
+          lambda: (r_ult["actual"]["fecha"], r_ult["encabezado"][:1]),
+          lambda x: x == ("2026-04-01", "["))
+    check("vista: el estado es uno de los validos",
+          lambda: r_ult["estado"],
+          lambda e: e in ("OK", "Vigilar", "Revisar", "Segado", "Sin dato"))
+
+    # --- la regla clave: juzgar un dia anterior NO mira el futuro ---
+    r0 = PREP("P_VF", CAMP, serie, 0)
+    check("vista: al elegir la 1a pasada, la serie se recorta a ESE dia",
+          lambda: (r0["actual"]["fecha"], len(r0["regs"])),
+          lambda x: x == ("2026-03-01", 1))
+    check("vista: y la pasada anomala del futuro no arrastra ese diagnostico",
+          lambda: (PREP("P_VF", CAMP, serie, 1)["actual"]["fecha"], len(PREP("P_VF", CAMP, serie, 1)["regs"])),
+          lambda x: x == ("2026-03-15", 2))
+
+    # --- tu validacion propia manda sobre lo mostrado, pero val_ctx guarda el BRUTO ---
+    bruto = r_ult["estado_bruto"]          # "Revisar" para la pasada anomala
+    # el usuario DISCREPA: dice que esta bien. estado_real != bruto a proposito,
+    # para que la prueba distinga de verdad lo mostrado de lo guardado.
+    DB.guardar_validacion("P_VF", CAMP, "2026-04-01", r_ult["fase"], r_ult["cultivo_id"],
+                          bruto, "incorrecto", estado_real="OK", nota="lo vi en campo")
+    r_corr = PREP("P_VF", CAMP, serie, len(serie) - 1)
+    check("vista: una correccion tuya se muestra como estado (OK sobre el Revisar del motor)",
+          lambda: (r_corr["estado"], bruto), lambda x: x == ("OK", "Revisar"))
+    check("vista: pero val_ctx guarda el estado BRUTO (para aprender coherente)",
+          lambda: r_corr["val_ctx"]["estado"], lambda e: e == bruto == "Revisar")
+    check("vista: y el encabezado lo dice y refleja tu observacion",
+          lambda: r_corr["encabezado"],
+          lambda t: "Corregido por ti" in t and "lo vi en campo" in t)
+
+    # --- confirmar deja su marca ---
+    DB.guardar_validacion("P_VF", CAMP, "2026-03-15", r0["fase"], r0["cultivo_id"],
+                          "OK", "correcto")
+    r_conf = PREP("P_VF", CAMP, serie, 1)
+    check("vista: confirmar una pasada se anota en el encabezado",
+          lambda: r_conf["encabezado"], lambda t: "Confirmado por ti" in t)
+
+    # --- barbecho: no aplica vigor ---
+    DB.guardar_ficha("P_BAR", {"propietario": "x", "coordenadas": [[0, 0]], "superficie_ha": 5,
+                               "cultivos_por_campana": {CAMP: {"tipo": "BARBECHO"}}})
+    rb = PREP("P_BAR", CAMP, [{"fecha": "2026-03-01", "ndvi": 0.2, "cobertura_valida": 0.9}], 0)
+    check("vista: barbecho se marca como tal y trae su motivo",
+          lambda: (rb["es_barbecho"], bool(rb["motivo"])), lambda x: x == (True, True))
+
+
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
@@ -3105,7 +3177,8 @@ def main():
               pruebas_sigpac, pruebas_radar, pruebas_panel_helpers,
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
-              pruebas_escala_indices, pruebas_clima, pruebas_repaso):
+              pruebas_escala_indices, pruebas_clima, pruebas_repaso,
+              pruebas_vista_ficha):
         try:
             f()
         except Exception as e:
