@@ -31,7 +31,8 @@ dependencies = [
 ia = ["openai"]                        # interpretacion con ChatGPT (si no, por reglas)
 informes = ["reportlab", "openpyxl"]   # informe_anual: PDF y Excel
 rutas = ["platformdirs"]               # ubica los datos en la carpeta estandar del SO
-todo = ["openai", "reportlab", "openpyxl", "platformdirs"]
+seguridad = ["keyring"]                # cifra la clave de OpenAI en el llavero del SO
+todo = ["openai", "reportlab", "openpyxl", "platformdirs", "keyring"]
 
 [project.scripts]
 gestor-parcelas = "panel_gestion_parcelas:main"

@@ -1379,6 +1379,52 @@ def pruebas_credenciales():
     check("credenciales: recordar=False no escribe la clave",
           lambda: "sk-no-guardar" in open(C.ARCHIVO_CRED, encoding="utf-8").read()
                   or "openai_api_key_b64" in open(C.ARCHIVO_CRED, encoding="utf-8").read(), lambda r: r is False)
+
+    # --- CIFRADO EN EL LLAVERO DEL SO (keyring), con respaldo base64 ---
+    class _LlaveroFalso:
+        def __init__(self, falla=False):
+            self.d, self.falla = {}, falla
+        def set_password(self, s, u, k):
+            if self.falla:
+                raise RuntimeError("sin backend")
+            self.d[(s, u)] = k
+        def get_password(self, s, u):
+            if self.falla:
+                raise RuntimeError("sin backend")
+            return self.d.get((s, u))
+        def delete_password(self, s, u):
+            self.d.pop((s, u), None)
+    _kr_orig = C._KEYRING
+    d2 = tempfile.mkdtemp(); C.ARCHIVO_CRED = os.path.join(d2, "cfg.json")
+    # 1) con llavero usable: la clave se cifra ahi y NO queda en el fichero
+    llavero = _LlaveroFalso(); C._KEYRING = llavero
+    C.guardar({"openai_api_key": "sk-llavero-1", "gee_project": "pk"}, recordar_openai=True)
+    txt = open(C.ARCHIVO_CRED, encoding="utf-8").read()
+    check("credenciales: con llavero, la clave NO va al fichero (ni en claro ni base64)",
+          lambda: ("sk-llavero-1" in txt) or ("openai_api_key_b64" in txt), lambda r: r is False)
+    check("credenciales: con llavero, queda la marca y la clave esta cifrada en el llavero",
+          lambda: ('"openai_en_keyring": true' in txt)
+                  and llavero.get_password(C.SERVICIO_KEYRING, C.USUARIO_KEYRING) == "sk-llavero-1",
+          lambda r: r is True)
+    check("credenciales: con llavero, cargar recupera la clave cifrada",
+          lambda: C.cargar().get("openai_api_key"), lambda r: r == "sk-llavero-1")
+    check("credenciales: modo de almacen = keyring (cifrado real)",
+          lambda: C.modo_almacen_clave(C.cargar()), lambda r: r == "keyring")
+    # 2) olvidar: se retira del llavero
+    C.guardar({"openai_api_key": "sk-llavero-1"}, recordar_openai=False)
+    check("credenciales: olvidar retira la clave del llavero",
+          lambda: llavero.get_password(C.SERVICIO_KEYRING, C.USUARIO_KEYRING), lambda r: r is None)
+    # 3) sin backend usable: cae al respaldo base64 (y lo marca como debil)
+    d3 = tempfile.mkdtemp(); C.ARCHIVO_CRED = os.path.join(d3, "cfg.json")
+    C._KEYRING = _LlaveroFalso(falla=True)
+    C.guardar({"openai_api_key": "sk-respaldo-9"}, recordar_openai=True)
+    check("credenciales: sin llavero usable, respaldo base64 (no texto plano)",
+          lambda: "sk-respaldo-9" in open(C.ARCHIVO_CRED, encoding="utf-8").read(), lambda r: r is False)
+    check("credenciales: sin llavero, cargar recupera del respaldo y avisa (base64)",
+          lambda: (C.cargar().get("openai_api_key"), C.modo_almacen_clave(C.cargar())),
+          lambda r: r == ("sk-respaldo-9", "base64"))
+    C._KEYRING = _kr_orig
+
     os.environ["OPENAI_API_KEY"] = "sk-entorno"
     C.aplicar_entorno({"openai_api_key": "sk-guardada"})
     check("credenciales: la variable de entorno tiene prioridad",

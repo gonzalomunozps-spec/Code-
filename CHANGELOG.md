@@ -3,6 +3,20 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.4.0] — 2026-08
+
+### Seguridad
+- **La clave de OpenAI se cifra de verdad** cuando el equipo tiene un almacén de
+  secretos del sistema (Llavero de macOS, Credential Locker de Windows, Secret
+  Service en Linux), vía el paquete opcional `keyring`. En el fichero de
+  configuración solo queda una marca; la clave ya no está ahí.
+  - Si no hay llavero usable, **respaldo** a la ofuscación base64 de siempre, ahora
+    marcada como débil para poder avisar en la interfaz.
+  - La variable de entorno `OPENAI_API_KEY` sigue teniendo prioridad y no toca disco.
+  - Al «olvidar» la clave se retira también del llavero.
+  - La pestaña de Credenciales dice en qué modo quedó guardada (cifrada / ofuscada /
+    no guardada). `keyring` es opcional: sin él, todo funciona como antes.
+
 ## [1.3.0] — 2026-08
 
 ### Añadido

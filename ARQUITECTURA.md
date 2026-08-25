@@ -69,7 +69,7 @@ Son la base testeable. Ninguno importa a otro.
 | `almacen.py` | **Único** punto de acceso a SQLite: parcelas, pasadas, radar, eventos, validaciones. WAL + `RLock`; conexión compartida con *double-checked locking*. Migra los JSON antiguos una sola vez. |
 | `bitacora.py` | Registro de incidencias a `parcelas.log`. Nunca escribe en consola; si no puede escribir, degrada a `NullHandler`. |
 | `rutas.py` | **Dónde viven los datos**: `GESTOR_PARCELAS_DIR` → `platformdirs` (opcional) → `~/.gestor_parcelas`. También purga los PNG viejos de la caché. |
-| `credenciales.py` | Config y clave de OpenAI (ofuscada, fichero 0600, escritura atómica). |
+| `credenciales.py` | Config y clave de OpenAI. La clave se **cifra en el llavero del SO** (`keyring`, opcional) cuando se puede; si no, respaldo **ofuscado** (base64) en fichero 0600, escritura atómica. La variable `OPENAI_API_KEY` tiene prioridad y no toca disco. |
 
 ### Capa 2 — Dominio
 | Módulo | Responsabilidad |

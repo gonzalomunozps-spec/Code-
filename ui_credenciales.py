@@ -104,7 +104,8 @@ class PanelCredenciales(ttk.Frame):
                        activebackground=TEMA["surface"], selectcolor=TEMA["surface"], bd=0).pack(side="left", padx=10)
         # recordar o no la clave en disco
         self.var_recordar = tk.IntVar(value=1 if self.cfg.get("openai_api_key") else 0)
-        tk.Checkbutton(o, text="Recordar la clave en este equipo (ofuscada; si no, usa la variable OPENAI_API_KEY)",
+        tk.Checkbutton(o, text="Recordar la clave en este equipo (cifrada en el llavero del sistema si se "
+                                "puede; si no, ofuscada). Si no, usa la variable OPENAI_API_KEY.",
                        variable=self.var_recordar, bg=TEMA["surface"], fg=TEMA["text_muted"],
                        font=FUENTES["small"], activebackground=TEMA["surface"],
                        selectcolor=TEMA["surface"], bd=0).pack(anchor="w", pady=(8, 0))
@@ -127,9 +128,11 @@ class PanelCredenciales(ttk.Frame):
 
         barra = tk.Frame(cuerpo, bg=TEMA["page"])
         barra.pack(fill="x", pady=(4, 0))
-        tk.Label(barra, text="La clave de OpenAI se guarda ofuscada (base64), no en texto plano. "
-                             "La variable de entorno OPENAI_API_KEY tiene prioridad.",
-                 bg=TEMA["page"], fg=TEMA["text_muted"], font=FUENTES["small"]).pack(side="left")
+        self.lbl_seguridad = tk.Label(
+            barra, text="La clave de OpenAI se cifra en el llavero del sistema cuando se puede; "
+                        "si no, se ofusca (base64). Nunca en texto plano. OPENAI_API_KEY tiene prioridad.",
+            bg=TEMA["page"], fg=TEMA["text_muted"], font=FUENTES["small"], justify="left")
+        self.lbl_seguridad.pack(side="left")
         ttk.Button(barra, text="  Guardar y probar todo  ", style="Accent.TButton",
                    command=self.guardar).pack(side="right")
 
@@ -229,6 +232,15 @@ class PanelCredenciales(ttk.Frame):
         except Exception as e:
             return messagebox.showerror("Credenciales", f"No se pudieron guardar: {e}")
         self.cfg = cfg
+        # decir en que quedo guardada la clave (leyendo el fichero, que trae las marcas)
+        if getattr(self, "lbl_seguridad", None) is not None:
+            modo = CRED.modo_almacen_clave(CRED.cargar())
+            texto = {"keyring": "Clave guardada CIFRADA en el llavero del sistema. "
+                                 "OPENAI_API_KEY tiene prioridad.",
+                     "base64": "Este equipo no tiene llavero seguro: la clave quedó OFUSCADA "
+                               "(base64), no cifrada. Para no dejarla en disco, usa OPENAI_API_KEY.",
+                     "ninguno": "La clave no se guarda en disco; se usa OPENAI_API_KEY o la sesión."}
+            self.lbl_seguridad.config(text=texto.get(modo, self.lbl_seguridad.cget("text")))
         CRED.aplicar_entorno(cfg, forzar=True)   # aplica la clave recien tecleada
         self.probar_todo()
         if callable(self.al_cambiar):
