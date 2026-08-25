@@ -436,6 +436,13 @@ class VentanaAltaParcela(tk.Toplevel):
         ops = self._opciones_fases()
         self.cb_int_desde["values"] = ops
         self.cb_int_hasta["values"] = ops
+        # sugerir el metodo (Tbase) propio del cultivo, para que la referencia de
+        # bibliografia cuadre con los hitos de GDD de esa especie. Solo si el usuario
+        # aun no ha elegido uno: no se le pisa su decision.
+        if not self.cb_int_metodo.get():
+            sug = _GDD.METODO_SUGERIDO.get(self.cb_sub.get())
+            if sug:
+                self.cb_int_metodo.set(_GDD.etiqueta_metodo(sug))
 
     def _anadir_integral(self):
         et = self.cb_int_metodo.get().strip()
