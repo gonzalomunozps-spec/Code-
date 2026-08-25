@@ -1,0 +1,44 @@
+name: Pruebas
+
+# Corre las dos suites en cada push y en cada pull request, para que ningun
+# cambio que rompa algo llegue a verde sin avisar. No toca ningun diagnostico:
+# es andamiaje que protege el trabajo (incluida la removibilidad de los modulos
+# opcionales, que aqui se ejerce sola porque ee/tkintermapview NO se instalan).
+on: [push, pull_request]
+
+# si se empuja varias veces seguidas a la misma rama, cancela la tanda anterior
+concurrency:
+  group: pruebas-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pruebas:
+    # Ubuntu 24.04 trae Python 3.12 como python3 del sistema, que es con el que
+    # se validan las pruebas. tkinter NO se instala con pip: viene de python3-tk
+    # para ESE interprete, y el venv lo hereda con --system-site-packages.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias del sistema (tkinter + pantalla virtual)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb
+
+      - name: Entorno con las dependencias que las pruebas ejercen de verdad
+        run: |
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/pip install --upgrade pip
+          # Solo lo que las suites tocan: earthengine-api y tkintermapview van
+          # protegidos por try/except, asi que NO se instalan y su ausencia
+          # comprueba de paso que el programa degrada bien sin ellos.
+          .venv/bin/pip install matplotlib pillow requests openpyxl reportlab
+
+      - name: Version del programa
+        run: .venv/bin/python -m panel_gestion_parcelas --version
+
+      - name: Pruebas sin pantalla
+        run: xvfb-run -a .venv/bin/python pruebas.py
+
+      - name: Pruebas de interfaz
+        run: xvfb-run -a .venv/bin/python pruebas_interfaz.py

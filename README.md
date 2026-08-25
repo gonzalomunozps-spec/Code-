@@ -1,5 +1,7 @@
 # Gestor de Parcelas · Copernicus
 
+[![Pruebas](https://github.com/gonzalomunozps-spec/Code-/actions/workflows/pruebas.yml/badge.svg)](https://github.com/gonzalomunozps-spec/Code-/actions/workflows/pruebas.yml)
+
 Aplicación de escritorio para **monitorizar parcelas agrícolas con imágenes de
 satélite**. Para cada parcela descarga imágenes **Sentinel-2** (óptico) y
 **Sentinel-1** (radar) a través de Google Earth Engine, calcula índices de
@@ -110,11 +112,17 @@ con copiar esa carpeta.** Se puede cambiar con `GESTOR_PARCELAS_DIR`.
 ## Pruebas
 
 ```bash
-python pruebas.py            # 608 pruebas, sin pantalla ni red
+python pruebas.py            # 652 pruebas, sin pantalla ni red
 python pruebas_interfaz.py   # monta la aplicación real y la recorre
 ```
 
 En un servidor sin pantalla: `xvfb-run -a python pruebas_interfaz.py`.
+
+Las dos suites corren **solas en cada push y cada pull request** (GitHub Actions,
+`.github/workflows/pruebas.yml`): un cambio que rompa algo no llega a verde sin
+avisar. El runner instala solo lo que las pruebas ejercen de verdad —sin
+`earthengine-api` ni `tkintermapview`—, con lo que de paso comprueba que el
+programa degrada bien sin sus módulos opcionales.
 
 ---
 
