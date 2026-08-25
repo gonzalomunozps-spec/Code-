@@ -19,6 +19,8 @@ Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
     un valor bajo pese al riego sigue avisando, acompañado del contexto.
   - No cambia ningún umbral del NDMI ni del NDVI: solo aporta contexto y, como
     mucho, evita que el NDMI bajo escale el semáforo cuando la sequía ya lo explica.
+  - En la ficha, la tarjeta de clima muestra una línea con ese balance rodante y su
+    severidad (normal / seco / muy seco), para verlo también cuando el NDMI no está bajo.
 
 ## [1.2.0] — 2026-08
 

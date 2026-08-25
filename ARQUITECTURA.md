@@ -522,10 +522,11 @@ resto sigue igual**; no hay interruptor que tocar.
   en el cultivo (`integrales_termicas`) se queda en la base, por si se repone.
 - `balance_hidrico.py` → desaparece el contexto de sequía comarcal: un NDMI por
   debajo de lo esperado vuelve a escalar la alerta sin mirar si la comarca está en
-  déficit. No hay dato que se pierda (el clima se queda en su tabla).
+  déficit, y se va la línea de balance de la tarjeta de clima. No hay dato que se
+  pierda (el clima se queda en su tabla).
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 651, sin `balance_hidrico` 642,
+Comprobado borrando cada fichero: completo 652, sin `balance_hidrico` 642,
 sin `grados_dia` 633, y antes sin `informe_anual` 584, sin `herbicida_contexto`
 593, sin `calibracion_umbrales` 566, sin `clima_era5` 564 — todos en verde
 (y la interfaz también, sin `clima_era5`, `grados_dia` y `balance_hidrico`).

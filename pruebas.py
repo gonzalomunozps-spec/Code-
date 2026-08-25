@@ -3290,6 +3290,9 @@ def pruebas_balance_hidrico():
           lambda r: r is None)
     check("balance: el contexto marca sequia cuando el deficit pasa el umbral",
           lambda: B.contexto(seco, "2026-04-01"), lambda c: c["sequia"] and c["severidad"] == "muy seco")
+    check("balance: el texto para la ficha trae el deficit, los dias y la severidad",
+          lambda: B.texto_contexto(B.contexto(seco, "2026-04-01")),
+          lambda t: "mm" in t and "días" in t and "muy seco" in t)
 
     # --- integracion con el clima real + gancho en el diagnostico ---
     d = tempfile.mkdtemp()

@@ -72,6 +72,10 @@ try:
     import grados_dia as _GDD
 except Exception:
     _GDD = None
+try:
+    import balance_hidrico as _BH
+except Exception:
+    _BH = None
 
 _EE = gee_cliente.hay_ee()
 
@@ -644,6 +648,15 @@ class FichaParcela:
                                   font=FUENTES["small"], justify="left", anchor="w",
                                   wraplength=1180)
         self.lbl_clima.pack(fill="x", padx=12, pady=(0, 4))
+        # CONTEXTO HIDRICO (balance rodante lluvia-ET0): una linea, solo si el modulo
+        # opcional balance_hidrico esta. Es lectura; el mismo dato es el que en el
+        # diagnostico decide si un NDMI bajo se explica por la sequia comarcal.
+        self.lbl_balance = None
+        if _BH is not None:
+            self.lbl_balance = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                        font=FUENTES["small"], justify="left", anchor="w",
+                                        wraplength=1180)
+            self.lbl_balance.pack(fill="x", padx=12, pady=(0, 4))
         cols = [c[0] for c in _CLIMA.COLUMNAS]
         self.tv_clima = ttk.Treeview(card, columns=cols, show="headings", height=6)
         for clave, titulo, ancho, _dec in _CLIMA.COLUMNAS:
@@ -708,7 +721,24 @@ class FichaParcela:
                 text="Sin datos de clima para esta campana. Pulsa «Descargar clima» "
                      "(hace falta Earth Engine). El dato es de comarca, no de parcela: "
                      "el pixel de ERA5-Land son 11 km de lado.")
+        self._pintar_balance(dias)
         self._pintar_gdd(dias)
+
+    def _pintar_balance(self, dias):
+        """Una linea con el balance hidrico rodante de la comarca (lluvia-ET0) y su
+        severidad. Reutiliza los dias ya cargados; no vuelve a la base. Solo si el
+        modulo balance_hidrico esta y hay dias."""
+        if _BH is None or not getattr(self, "lbl_balance", None) or not self.lbl_balance.winfo_exists():
+            return
+        fecha = dias[-1]["fecha"] if dias else None
+        ctx = _BH.contexto(dias, fecha) if fecha else None
+        if not ctx:
+            self.lbl_balance.pack_forget()
+            return
+        self.lbl_balance.pack(fill="x", padx=12, pady=(0, 4))
+        aviso = ("  El déficit prolongado explica un NDMI bajo sin que sea, por sí solo, "
+                 "un problema de esta parcela." if ctx["sequia"] else "")
+        self.lbl_balance.config(text=_BH.texto_contexto(ctx) + aviso)
 
     def _pintar_gdd(self, dias):
         """Recalcula y ensena los grados-dia. Solo actua si el modulo esta, la
