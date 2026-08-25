@@ -10,8 +10,11 @@ Si borras este fichero, el programa sigue funcionando: desaparece la tarjeta de
 clima de la ficha y no hay que tocar nada mas. La tabla `clima` se queda en la
 base con lo ya descargado, por si lo vuelves a poner.
 
-DE MOMENTO SOLO ENSENA DATOS. No mueve ningun diagnostico, ni un umbral, ni una
-fase. Eso se decide despues, mirando los numeros.
+ESTE MODULO SOLO ENSENA DATOS: descarga el clima y lo pinta, no mueve ningun
+diagnostico por si mismo. Quien SI usa estos numeros para el diagnostico es otro
+modulo opcional aparte -`balance_hidrico` (contexto de sequia) y `grados_dia`
+(fase por integral termica)-, para que ese salto se pueda quitar sin tocar la
+descarga. Aqui la regla sigue siendo: bajar el dato y mostrarlo.
 
 ======================================================================
 LO QUE HAY QUE SABER ANTES DE FIARSE DE ESTOS DATOS

@@ -3,6 +3,23 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.3.0] — 2026-08
+
+### Añadido
+- **Contexto de sequía comarcal** (balance hídrico), en un módulo **opcional y
+  extraíble** (`balance_hidrico.py`): si el archivo no está, el diagnóstico se
+  comporta igual que antes.
+  - Con la lluvia y la ET0 que ya descarga `clima_era5`, calcula el balance
+    rodante (lluvia − ET0) de las últimas semanas de la comarca.
+  - Si **toda la comarca está en déficit hídrico real**, un NDMI por debajo de lo
+    esperado en **secano** se lee como coherente con la sequía general y **deja de
+    subir por sí solo el nivel de alerta** (menos falsas alarmas donde el déficit
+    es lo normal). El diagnóstico explica el porqué, con el balance de la comarca.
+  - En **regadío no se suprime**: el riego debería haber sostenido el NDMI, así que
+    un valor bajo pese al riego sigue avisando, acompañado del contexto.
+  - No cambia ningún umbral del NDMI ni del NDVI: solo aporta contexto y, como
+    mucho, evita que el NDMI bajo escale el semáforo cuando la sequía ya lo explica.
+
 ## [1.2.0] — 2026-08
 
 ### Añadido

@@ -40,7 +40,7 @@ CAPA 1  DATOS                 almacen.py ──► bitacora.py ──► rutas.p
            │
 CAPA 0  HOJAS PURAS    fechas  geo  campanas  cultivo  sigpac
                        contraste_indices  fenologia_especies  herbicida_contexto*
-                       grados_dia*
+                       grados_dia*  balance_hidrico*
 ```
 `*` = módulo **opcional y extraíble** (ver §6).
 
@@ -61,6 +61,7 @@ Son la base testeable. Ninguno importa a otro.
 | `herbicida_contexto.py` | Interpretación del herbicida con LAI constante. **Opcional.** |
 | `calibracion_umbrales.py` | Ajusta los umbrales de los índices con las validaciones del usuario, por ámbito (parcela / municipio / provincia / global). No toca la bibliografía. **Opcional.** |
 | `grados_dia.py` | Integrales térmicas (grados-día): métodos por cultivo, acumulación desde el clima diario, hitos de GDD por fase y `fase_override` (si el usuario define integrales, la fase del extensivo la marca el GDD y no el calendario). El núcleo es puro; el clima lo pide de forma perezosa a `clima_era5`/`almacen` dentro de las funciones. **Opcional.** |
+| `balance_hidrico.py` | Contexto de sequía comarcal: balance rodante lluvia − ET0 sobre una ventana y `explicacion_deficit`, que decide si un NDMI bajo se explica por la sequía general (en secano no escala la alerta por sí solo; en regadío sí). No toca umbrales; solo aporta contexto al diagnóstico. Núcleo puro; el clima, perezoso a `clima_era5`/`almacen`. **Opcional.** |
 
 ### Capa 1 — Datos
 | Módulo | Responsabilidad |
@@ -519,12 +520,15 @@ resto sigue igual**; no hay interruptor que tocar.
   grados-día de la ficha; la fase del extensivo vuelve a decidirla el calendario
   (que es lo que hace también si no se ha definido ninguna integral). Lo guardado
   en el cultivo (`integrales_termicas`) se queda en la base, por si se repone.
+- `balance_hidrico.py` → desaparece el contexto de sequía comarcal: un NDMI por
+  debajo de lo esperado vuelve a escalar la alerta sin mirar si la comarca está en
+  déficit. No hay dato que se pierda (el clima se queda en su tabla).
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 642, sin `grados_dia` 633,
-y antes sin `informe_anual` 584, sin `herbicida_contexto` 593,
-sin `calibracion_umbrales` 566, sin `clima_era5` 564 — todos en verde
-(y la interfaz también, sin `clima_era5` y sin `grados_dia`).
+Comprobado borrando cada fichero: completo 651, sin `balance_hidrico` 642,
+sin `grados_dia` 633, y antes sin `informe_anual` 584, sin `herbicida_contexto`
+593, sin `calibracion_umbrales` 566, sin `clima_era5` 564 — todos en verde
+(y la interfaz también, sin `clima_era5`, `grados_dia` y `balance_hidrico`).
 
 ---
 

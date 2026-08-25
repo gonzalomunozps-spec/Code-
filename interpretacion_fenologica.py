@@ -517,6 +517,23 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                    + (" en secano" if umbrales.get("regimen") == "SECANO" else
                       " (riego deficitario controlado)") + ", no se toma como aviso.]")
         ndmi_min = None
+    # CONTEXTO DE SEQUIA COMARCAL (opcional, gated, extraible): si TODA la comarca
+    # lleva semanas de deficit hidrico real, un NDMI bajo en secano es coherente con
+    # la sequia y no debe -por si solo- subir la alerta (audit 2). En regadio no se
+    # suprime. Se reutiliza el mismo escape que `deficit_buscado`: poner ndmi_min a
+    # None salta el escalado. Sin `balance_hidrico.py` no se importa nada y el NDMI
+    # bajo escala EXACTAMENTE igual que hoy.
+    nota_hidrica = None
+    if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not esperado:
+        try:
+            import balance_hidrico as _BH
+            exp = _BH.explicacion_deficit(parcela, fecha, umbrales.get("regimen"))
+            if exp:
+                suprimir, nota_hidrica = exp
+                if suprimir:
+                    ndmi_min = None
+        except Exception:
+            pass
     if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not esperado:
         # el listón calibrado por el usuario, si lo hay, manda sobre el de la tabla
         como = (f"negativo ({ndmi:+.3f})" if ndmi_min == 0.0 else
@@ -532,6 +549,11 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         if umbrales.get("critica"):
             motivo += (" Es ademas la fase en la que la falta de agua mas se lleva "
                        "por delante el rendimiento.")
+    # el contexto de sequia comarcal se anade siempre que exista: si suprimio el
+    # escalado, EXPLICA por que el NDMI bajo no ha subido la alerta; si no lo
+    # suprimio (regadio), acompana al aviso con el balance de la comarca.
+    if nota_hidrica:
+        motivo += " " + nota_hidrica
 
     # --- EVENTOS DEL CUADERNO DE CAMPO ---
     # Una siega/cosecha/herbicida REGISTRADO por el usuario explica una caida brusca

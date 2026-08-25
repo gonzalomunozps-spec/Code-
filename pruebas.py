@@ -3264,6 +3264,67 @@ def pruebas_grados_dia():
           lambda r: r and r["gdd_acumulado"] and r["integrales"][0]["referencia_gdd"] == 1000)
 
 
+def pruebas_balance_hidrico():
+    """Balance hidrico / contexto de sequia comarcal. Modulo OPCIONAL: si se borra,
+    el grupo se omite y el NDMI bajo escala como siempre."""
+    try:
+        import balance_hidrico as B
+    except Exception:
+        return
+    import almacen as DB
+    from interpretacion_fenologica import evaluar_parcela
+    from cultivo import spec_de
+
+    # --- nucleo puro ---
+    seco = [{"fecha": f"2026-03-{d:02d}", "lluvia": 0.0, "et0": 6.0} for d in range(3, 32)] \
+        + [{"fecha": "2026-04-01", "lluvia": 0.0, "et0": 6.0}]
+    humedo = [{"fecha": f"2026-03-{d:02d}", "lluvia": 5.0, "et0": 2.0} for d in range(3, 32)] \
+        + [{"fecha": "2026-04-01", "lluvia": 5.0, "et0": 2.0}]
+    check("balance: lluvia menos ET0 en la ventana da un deficit negativo",
+          lambda: B.balance_ventana(seco, "2026-04-01")["deficit_mm"], lambda r: r < -150)
+    check("balance: con lluvia de sobra el balance es positivo (normal)",
+          lambda: B.severidad(B.balance_ventana(humedo, "2026-04-01")["deficit_mm"]),
+          lambda r: r == "normal")
+    check("balance: sin dias con lluvia Y ET0 no hay balance (None)",
+          lambda: B.balance_ventana([{"fecha": "2026-04-01", "t_max": 20}], "2026-04-01"),
+          lambda r: r is None)
+    check("balance: el contexto marca sequia cuando el deficit pasa el umbral",
+          lambda: B.contexto(seco, "2026-04-01"), lambda c: c["sequia"] and c["severidad"] == "muy seco")
+
+    # --- integracion con el clima real + gancho en el diagnostico ---
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "bh.db"))
+    import clima_era5 as C
+    coords_s = [[-4.1, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.1, 41.66]]
+    coords_h = [[-3.1, 42.65], [-3.09, 42.65], [-3.09, 42.66], [-3.1, 42.66]]
+    DB.guardar_ficha("SECA", {"propietario": "x", "coordenadas": coords_s, "superficie_ha": 10})
+    DB.guardar_ficha("HUME", {"propietario": "x", "coordenadas": coords_h, "superficie_ha": 10})
+    DB.anadir_clima(C.punto_de(coords_s), seco)
+    DB.anadir_clima(C.punto_de(coords_h), humedo)
+    check("balance: en secano la sequia comarcal explica el NDMI bajo (suprime el escalado)",
+          lambda: B.explicacion_deficit("SECA", "2026-04-01", "SECANO"),
+          lambda r: r and r[0] is True and "comarca" in r[1])
+    check("balance: en regadio NO se suprime (el riego deberia haber sostenido el NDMI)",
+          lambda: B.explicacion_deficit("SECA", "2026-04-01", "REGADIO"),
+          lambda r: r and r[0] is False)
+    check("balance: sin sequia (comarca humeda) no hay explicacion -> escala como siempre",
+          lambda: B.explicacion_deficit("HUME", "2026-04-01", "SECANO"), lambda r: r is None)
+
+    # de punta a punta: mismo NDMI bajo, distinto contexto de comarca
+    cult = {"tipo": "EXTENSIVO", "subtipo": "COSECHA_GRANO", "especie": "TRIGO",
+            "fecha_siembra": "2026-01-01"}
+    serie = [{"fecha": "2026-04-01", "ndvi": 0.62, "cobertura_valida": 0.97,
+              "msavi": 0.5, "lai": 3.0, "evi": 0.4, "ndmi": -0.05}]
+    r_seca = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, fecha_iso="2026-04-01",
+                             spec=spec_de(cult), parcela="SECA")
+    r_hume = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, fecha_iso="2026-04-01",
+                             spec=spec_de(cult), parcela="HUME")
+    check("balance: en comarca seca el NDMI bajo NO sube la alerta y se explica el porque",
+          lambda: r_seca, lambda r: "Contexto hídrico" in r["motivo"] and r["estado"] == "OK")
+    check("balance: en comarca humeda el mismo NDMI bajo SI escala (comportamiento de siempre)",
+          lambda: r_hume, lambda r: "Contexto hídrico" not in r["motivo"] and r["estado"] == "Vigilar")
+
+
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
@@ -3272,7 +3333,7 @@ def main():
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
               pruebas_escala_indices, pruebas_clima, pruebas_repaso,
-              pruebas_vista_ficha, pruebas_grados_dia):
+              pruebas_vista_ficha, pruebas_grados_dia, pruebas_balance_hidrico):
         try:
             f()
         except Exception as e:
