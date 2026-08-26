@@ -1321,26 +1321,42 @@ class FichaParcela:
         regs_hasta, actual = r["regs"], r["actual"]
         eventos_cerca, hetero_on = r["eventos_cerca"], r["hetero_on"]
         arbolado = r.get("arbolado", False)
+        motivo_reglas = r.get("motivo", "")     # RED DE SEGURIDAD: el diagnóstico por reglas
 
         def worker():
             # Los MISMOS argumentos con que se resolvio la cabecera:
             # `texto_interpretacion` vuelve a evaluar por dentro, y con otros
             # argumentos el semaforo y el texto de abajo saldrian de dos
             # diagnosticos distintos -y el texto ademas se guarda en la base-.
-            texto, _d = texto_interpretacion(tipo, sub, regs_hasta, actual.get("fecha"),
-                                             eventos_cerca=eventos_cerca, spec=spec,
-                                             aprendizaje=aprendizaje,
-                                             parcela=self.nombre,
-                                             heterogeneidad_activa=hetero_on,
-                                             arbolado=arbolado)
-            DB.set_interpretacion(self.nombre, self.campana, actual.get("fecha"), texto)
+            exito = False
+            try:
+                texto, _d = texto_interpretacion(tipo, sub, regs_hasta, actual.get("fecha"),
+                                                 eventos_cerca=eventos_cerca, spec=spec,
+                                                 aprendizaje=aprendizaje,
+                                                 parcela=self.nombre,
+                                                 heterogeneidad_activa=hetero_on,
+                                                 arbolado=arbolado)
+                exito = True
+            except Exception:
+                # NUNCA dejar al usuario colgado en "Generando…": si la generación
+                # falla (red, IA, dato raro), se muestra el diagnóstico por reglas
+                # que ya se calculó. No se cachea, para reintentar la próxima vez.
+                log.warning("no se pudo generar la interpretacion; se muestra el diagnostico "
+                            "por reglas", exc_info=True)
+                texto = motivo_reglas or ("No se pudo generar la interpretación en este momento; "
+                                          "vuelve a abrir la parcela para reintentarlo.")
+            if exito:
+                DB.set_interpretacion(self.nombre, self.campana, actual.get("fecha"), texto)
 
             def pintar():
                 if not self.txt.winfo_exists():   # el usuario ya navego a otra vista
                     return
                 self.txt.delete("1.0", tk.END)
                 self.txt.insert(tk.END, encabezado + texto)
-            self.master.after(0, pintar)
+            try:
+                self.master.after(0, pintar)
+            except Exception:
+                pass          # la ventana ya no existe: nada que pintar
         threading.Thread(target=worker, daemon=True).start()
 
     # ---- validacion del diagnostico ----
