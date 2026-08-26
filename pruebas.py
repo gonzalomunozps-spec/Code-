@@ -2002,6 +2002,21 @@ def pruebas_informe_anual():
                                             serie, ruta_salida=out),
                    os.path.getsize(out))[1],
           lambda r: r > 1000)
+    # SELECCION de secciones: un informe recortado se genera y pesa menos que el completo
+    out_min = os.path.join(d, "inf_min.pdf")
+    check("informe: se pueden elegir secciones (recortado pesa menos que el completo)",
+          lambda: (IA.generar_informe_anual("Prueba_Parcela", "2025-2026", ficha, cultivo,
+                                            serie, ruta_salida=out_min, secciones=["progresion"]),
+                   os.path.getsize(out_min) < os.path.getsize(out) and os.path.getsize(out_min) > 500)[1],
+          lambda r: r is True)
+    check("informe: secciones=[] deja solo el esqueleto pero sigue siendo un PDF valido",
+          lambda: (IA.generar_informe_anual("Prueba_Parcela", "2025-2026", ficha, cultivo,
+                                            serie, ruta_salida=os.path.join(d, "inf0.pdf"), secciones=[]),
+                   os.path.getsize(os.path.join(d, "inf0.pdf")))[1],
+          lambda r: r > 500)
+    check("informe: el catalogo de secciones esta disponible para la interfaz",
+          lambda: [k for k, _e in IA.SECCIONES_BALANCE],
+          lambda r: "radar" in r and "cuaderno" in r and "grafica" in r)
     # informe TECNICO (PDF): mismo motor, mas detalle
     tec = os.path.join(d, "tec.pdf")
     check("informe tecnico: genera un PDF no vacio",

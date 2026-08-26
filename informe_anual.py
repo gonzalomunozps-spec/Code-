@@ -62,6 +62,21 @@ DISPONIBLE = _RL
 MOTIVO_NO_DISPONIBLE = ("" if _RL else
                         "Falta la libreria 'reportlab'. Instalala con:  pip install reportlab")
 
+# Secciones OPCIONALES del informe de balance, que el usuario puede elegir incluir
+# o no (clave interna, etiqueta para la interfaz). El encabezado, el resumen y la
+# valoracion final NO se listan: son el esqueleto y van siempre. `secciones=None`
+# en el generador = todas incluidas (comportamiento de siempre).
+SECCIONES_BALANCE = [
+    ("grafica",     "Gráfica de la campaña"),
+    ("fenologia",   "Recorrido fenológico"),
+    ("hitos",       "Hitos de la campaña"),
+    ("hidrico",     "Estado hídrico (NDMI)"),
+    ("uniformidad", "Uniformidad de la parcela"),
+    ("cuaderno",    "Intervenciones del cuaderno"),
+    ("progresion",  "Progresión del estado"),
+    ("radar",       "Corroboración con radar"),
+]
+
 # --- openpyxl: solo para la exportacion a Excel (tolerante) ---
 try:
     from openpyxl import Workbook
@@ -314,14 +329,18 @@ def _preparar(serie, radar, eventos, ruta_salida, ext, nombre, campana):
 # API PUBLICA
 # =====================================================================
 def generar_informe_anual(nombre, campana, ficha, cultivo, serie,
-                          radar=None, eventos=None, ruta_salida=None):
-    """Informe de BALANCE (PDF, divulgativo). Devuelve la ruta. Lanza RuntimeError."""
+                          radar=None, eventos=None, ruta_salida=None, secciones=None):
+    """Informe de BALANCE (PDF, divulgativo). Devuelve la ruta. Lanza RuntimeError.
+
+    `secciones`: iterable con las claves de SECCIONES_BALANCE que se quieren incluir
+    (None = todas, como siempre). El encabezado, el resumen y la valoracion final
+    van siempre."""
     if not _RL:
         raise RuntimeError(MOTIVO_NO_DISPONIBLE)
     serie, radar, eventos, ruta_salida = _preparar(serie, radar, eventos, ruta_salida,
                                                    "pdf", nombre, campana)
     ctx = _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos)
-    _construir_pdf(ruta_salida, ctx)
+    _construir_pdf(ruta_salida, ctx, secciones)
     return ruta_salida
 
 
@@ -354,7 +373,11 @@ def generar_excel(nombre, campana, ficha, cultivo, serie,
 # =====================================================================
 # Construccion del PDF
 # =====================================================================
-def _construir_pdf(ruta, ctx):
+def _construir_pdf(ruta, ctx, secciones=None):
+    # que secciones opcionales entran (None = todas, comportamiento de siempre)
+    _sec = None if secciones is None else set(secciones)
+    def inc(clave):
+        return _sec is None or clave in _sec
     HEADER = colors.HexColor("#1e3a2b"); PRIMARY = colors.HexColor("#2f855a")
     PRIMARY_DK = colors.HexColor("#276749"); INK = colors.HexColor("#1a202c")
     INK2 = colors.HexColor("#4a5568"); INK3 = colors.HexColor("#718096")
@@ -492,13 +515,14 @@ def _construir_pdf(ruta, ctx):
     story.append(Spacer(1, 4))
 
     # ---- grafica ----
-    story.append(H("La campa&ntilde;a de un vistazo"))
-    story.append(grafica())
-    story.append(Paragraph("Cada punto es una pasada de sat&eacute;lite. El LAI se muestra dividido por 5 para "
-                           "compartir escala. En la aplicaci&oacute;n la gr&aacute;fica es interactiva, con tooltip.", SMALL))
+    if inc("grafica"):
+        story.append(H("La campa&ntilde;a de un vistazo"))
+        story.append(grafica())
+        story.append(Paragraph("Cada punto es una pasada de sat&eacute;lite. El LAI se muestra dividido por 5 para "
+                               "compartir escala. En la aplicaci&oacute;n la gr&aacute;fica es interactiva, con tooltip.", SMALL))
 
     # ---- recorrido fenologico ----
-    if fases_orden:
+    if inc("fenologia") and fases_orden:
         story.append(H("Recorrido fenol&oacute;gico"))
         fil = [[Paragraph("Fase", WCELL), Paragraph("Desde", WCELL),
                 Paragraph("NDVI", WCELL), Paragraph("LAI", WCELL)]]
@@ -523,7 +547,7 @@ def _construir_pdf(ruta, ctx):
     if min_ndmi: hitos.append(("Momento de menos agua (NDMI)", f"{min_ndmi['ndmi']:+.2f}", _fnat(min_ndmi["fecha"])))
     if fin.get("ndvi") is not None:
         hitos.append(("Cierre de campa&ntilde;a (NDVI)", f"{fin['ndvi']:.2f}", _fnat(fin["fecha"])))
-    if hitos:
+    if inc("hitos") and hitos:
         story.append(H("Hitos de la campa&ntilde;a"))
         hh = [[Paragraph(f"<b>{a}</b>", CELL),
                Paragraph(b, ParagraphStyle("v", parent=CELL, fontName="Helvetica-Bold", textColor=PRIMARY_DK)),
@@ -534,7 +558,7 @@ def _construir_pdf(ruta, ctx):
         story.append(th)
 
     # ---- estado hidrico ----
-    if min_ndmi and pico_ndvi:
+    if inc("hidrico") and min_ndmi and pico_ndvi:
         story.append(H("Estado h&iacute;drico durante el a&ntilde;o"))
         story.append(P(f"El &iacute;ndice de humedad (NDMI) acompa&ntilde;&oacute; al desarrollo del cultivo y toc&oacute; su valor "
                        f"m&aacute;s bajo ({min_ndmi['ndmi']:+.2f}) el {_fnat(min_ndmi['fecha'])}. La firma temprana de un "
@@ -542,16 +566,17 @@ def _construir_pdf(ruta, ctx):
                        f"vigila pasada a pasada para poder avisar a tiempo."))
 
     # ---- uniformidad ----
-    story.append(H("Uniformidad de la parcela"))
-    if hetero and hetero.get("disponible"):
-        story.append(P(f"Uniformidad: <b>{esc(hetero.get('uniformidad', '-'))}</b>. {esc(hetero.get('lectura', ''))}"))
-    else:
-        story.append(P("En las pasadas de esta campa&ntilde;a no se dispuso de estad&iacute;stica espacial interna, por lo "
-                       "que el balance se hace sobre los valores medios. Cuando esa estad&iacute;stica est&aacute; disponible, "
-                       "el sistema vigila si alg&uacute;n rodal se separa del conjunto (posible foco)."))
+    if inc("uniformidad"):
+        story.append(H("Uniformidad de la parcela"))
+        if hetero and hetero.get("disponible"):
+            story.append(P(f"Uniformidad: <b>{esc(hetero.get('uniformidad', '-'))}</b>. {esc(hetero.get('lectura', ''))}"))
+        else:
+            story.append(P("En las pasadas de esta campa&ntilde;a no se dispuso de estad&iacute;stica espacial interna, por lo "
+                           "que el balance se hace sobre los valores medios. Cuando esa estad&iacute;stica est&aacute; disponible, "
+                           "el sistema vigila si alg&uacute;n rodal se separa del conjunto (posible foco)."))
 
     # ---- intervenciones ----
-    if efectos:
+    if inc("cuaderno") and efectos:
         story.append(H("Intervenciones del cuaderno de campo"))
         for e, ef in efectos:
             story.append(P(f"&bull;&nbsp; {esc(_fnat(e.get('fecha')))}: {esc(e.get('producto', '') or e.get('objetivo', ''))} "
@@ -560,12 +585,12 @@ def _construir_pdf(ruta, ctx):
     # ---- progresion del estado (narrativa, NO lista dia a dia) ----
     # El detalle pasada-a-pasada se deja para el Excel; aqui se cuenta el arco.
     prog = texto_progresion_estado(ctx["recorrido"], alertas_vigentes)
-    if prog:
+    if inc("progresion") and prog:
         story.append(H("Progresi&oacute;n del estado durante la campa&ntilde;a"))
         story.append(P(esc(prog)))
 
     # ---- radar ----
-    if radar_info and radar_info.get("disponible"):
+    if inc("radar") and radar_info and radar_info.get("disponible"):
         story.append(H("Corroboraci&oacute;n con radar (Sentinel-1)"))
         story.append(P(esc(radar_info.get("texto", ""))))
 

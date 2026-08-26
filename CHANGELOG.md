@@ -3,6 +3,25 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.6.0] — 2026-08
+
+### Añadido
+- **Heterogeneidad espacial** (módulo **opcional** `heterogeneidad_espacial.py`):
+  usa la rejilla de píxeles georreferenciada para lo que la heterogeneidad clásica
+  no ve.
+  - Distingue un **foco compacto** (hongo/plaga/rodal) de ruido disperso, da el
+    **tamaño** de la mancha mayor (píxeles y ha) y si **persiste** entre pasadas.
+  - **Encinas / dehesa**: detecta los píxeles de **arbolado permanente** por su
+    firma temporal (verdes todo el año, amplitud baja) y los **excluye** del juicio
+    del cultivo herbáceo. Se activa con la casilla *«Arbolado disperso»* de la ficha
+    (nuevo flag por parcela, esquema de base v9).
+- **Cuadro de heterogeneidad (zonas)** en la ficha, debajo de la gráfica de
+  evolución de índices: junta la lectura clásica (media/dispersión) y el análisis
+  espacial por píxel.
+- **Informe de balance a la carta**: al generarlo se elige qué secciones incluir
+  (gráfica, recorrido fenológico, hitos, estado hídrico, uniformidad, cuaderno,
+  progresión, radar); radar y cuaderno solo se ofrecen si hay datos.
+
 ## [1.5.0] — 2026-08
 
 ### Añadido

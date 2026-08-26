@@ -1766,6 +1766,44 @@ class FichaParcela:
         finally:
             m.grab_release()
 
+    def _elegir_secciones_balance(self, radar, eventos):
+        """Modal para elegir que secciones incluye el informe de BALANCE.
+
+        Devuelve la lista de claves elegidas, o None si se cancela. Radar y cuaderno
+        solo se ofrecen marcados si de verdad hay datos ("los datos que se tienen")."""
+        cat = getattr(_INFORME, "SECCIONES_BALANCE", None)
+        if not cat:
+            return []          # sin catalogo: el informe sale completo
+        dlg = tk.Toplevel(self.master)
+        dlg.title("Informe de balance · qué incluir")
+        dlg.configure(bg=TEMA["page"])
+        dlg.transient(self.master)
+        dlg.grab_set()
+        tk.Label(dlg, text="Elige qué secciones incluir en el informe:", bg=TEMA["page"],
+                 fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 8))
+        hay = {"radar": bool(radar), "cuaderno": bool(eventos)}
+        cont = tk.Frame(dlg, bg=TEMA["page"])
+        cont.pack(fill="x", padx=16)
+        vars_ = {}
+        for clave, etiqueta in cat:
+            disponible = hay.get(clave, True)
+            v = tk.BooleanVar(value=disponible)
+            vars_[clave] = v
+            ttk.Checkbutton(cont, variable=v,
+                            text=etiqueta + ("" if disponible else "  (sin datos)")).pack(anchor="w", pady=1)
+        res = {"claves": None}
+        barra = tk.Frame(dlg, bg=TEMA["page"])
+        barra.pack(fill="x", padx=16, pady=14)
+
+        def _generar():
+            res["claves"] = [k for k, v in vars_.items() if v.get()]
+            dlg.destroy()
+        ttk.Button(barra, text="Generar", style="Accent.TButton", command=_generar).pack(side="right")
+        ttk.Button(barra, text="Cancelar", command=dlg.destroy).pack(side="right", padx=(0, 8))
+        centrar_sobre(dlg, self.master)
+        dlg.wait_window()
+        return res["claves"]
+
     def _exportar(self, formato):
         """Genera balance/tecnico (PDF) o Excel. Delegado al modulo opcional informe_anual."""
         if _INFORME is None:
@@ -1790,6 +1828,13 @@ class FichaParcela:
         radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
         eventos = REG.eventos_de(self.nombre, self.campana)
 
+        # el informe de balance deja ELEGIR que secciones incluir; el resto va completo
+        secciones = None
+        if formato == "balance":
+            secciones = self._elegir_secciones_balance(radar, eventos)
+            if secciones is None:      # cancelado
+                return
+
         cfg = {"balance": ("Informe de balance", _INFORME.generar_informe_anual, ".pdf", "PDF", "pdf"),
                "tecnico": ("Informe tecnico", _INFORME.generar_informe_tecnico, ".pdf", "PDF", "pdf"),
                "excel":   ("Hoja de calculo", _INFORME.generar_excel, ".xlsx", "Excel", "xlsx")}
@@ -1804,8 +1849,9 @@ class FichaParcela:
 
         def worker():
             try:
+                kw = {"secciones": secciones} if formato == "balance" else {}
                 ruta = generar(self.nombre, self.campana, ficha, cultivo, serie,
-                               radar=radar, eventos=eventos, ruta_salida=destino)
+                               radar=radar, eventos=eventos, ruta_salida=destino, **kw)
             except Exception as e:
                 self.master.after(0, lambda err=e: messagebox.showerror(
                     titulo, f"No se pudo generar:\n\n{err}", parent=self.master))

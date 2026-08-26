@@ -40,7 +40,7 @@ CAPA 1  DATOS                 almacen.py ──► bitacora.py ──► rutas.p
            │
 CAPA 0  HOJAS PURAS    fechas  geo  campanas  cultivo  sigpac
                        contraste_indices  fenologia_especies  herbicida_contexto*
-                       grados_dia*  balance_hidrico*
+                       grados_dia*  balance_hidrico*  heterogeneidad_espacial*
 ```
 `*` = módulo **opcional y extraíble** (ver §6).
 
@@ -62,6 +62,7 @@ Son la base testeable. Ninguno importa a otro.
 | `calibracion_umbrales.py` | Ajusta los umbrales de los índices con las validaciones del usuario, por ámbito (parcela / municipio / provincia / global). No toca la bibliografía. **Opcional.** |
 | `grados_dia.py` | Integrales térmicas (grados-día): métodos por cultivo, acumulación desde el clima diario, hitos de GDD por fase y `fase_override` (si el usuario define integrales, la fase del extensivo la marca el GDD y no el calendario). El núcleo es puro; el clima lo pide de forma perezosa a `clima_era5`/`almacen` dentro de las funciones. **Opcional.** |
 | `balance_hidrico.py` | Contexto de sequía comarcal: balance rodante lluvia − ET0 sobre una ventana y `explicacion_deficit`, que decide si un NDMI bajo se explica por la sequía general (en secano no escala la alerta por sí solo; en regadío sí). No toca umbrales; solo aporta contexto al diagnóstico. Núcleo puro; el clima, perezoso a `clima_era5`/`almacen`. **Opcional.** |
+| `heterogeneidad_espacial.py` | Análisis por píxel de la rejilla georreferenciada: agrupamiento de píxeles bajos y componentes conexas (foco compacto vs ruido), tamaño de la mancha, persistencia entre fechas, y **máscara de arbolado permanente** (encinas/dehesa) por firma temporal, para excluirlo del juicio del herbáceo. Núcleo puro; `analizar_parcela` lee las rejillas de `almacen`. **Opcional.** |
 
 ### Capa 1 — Datos
 | Módulo | Responsabilidad |
@@ -524,12 +525,16 @@ resto sigue igual**; no hay interruptor que tocar.
   debajo de lo esperado vuelve a escalar la alerta sin mirar si la comarca está en
   déficit, y se va la línea de balance de la tarjeta de clima. No hay dato que se
   pierda (el clima se queda en su tabla).
+- `heterogeneidad_espacial.py` → desaparecen el análisis por píxel (foco/persistencia)
+  y la casilla de arbolado; el cuadro de zonas cae a la lectura clásica. El flag
+  `arbolado` guardado se queda en la base, por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 663, sin `herbicida_contexto` 661,
-sin `grados_dia` 654, sin `balance_hidrico` 653, sin `informe_anual` 650,
-sin `calibracion_umbrales` 634, sin `clima_era5` 624 — todos en verde (y la
-interfaz también, sin `clima_era5`, `grados_dia` y `balance_hidrico`).
+Comprobado borrando cada fichero: completo 682, sin `herbicida_contexto` 680,
+sin `grados_dia` 673, sin `balance_hidrico` 672, sin `heterogeneidad_espacial` 672,
+sin `informe_anual` 666, sin `calibracion_umbrales` 653, sin `clima_era5` 643 —
+todos en verde (y la interfaz también, sin `clima_era5`, `grados_dia`,
+`balance_hidrico` y `heterogeneidad_espacial`).
 
 ---
 
