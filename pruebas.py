@@ -42,6 +42,21 @@ def check(nombre, fn, ok=None):
 def pruebas_motor():
     from interpretacion_fenologica import (evaluar_parcela, delta, detectar_cubierta,
                                            fase_fenologica, texto_interpretacion)
+    from interpretacion_fenologica import _detectar_segado, _calcular_deltas
+
+    # helpers puros extraidos de evaluar_parcela: se prueban directos, no solo por integracion
+    check("motor/helper: segado si el NDVI se desploma en abril (siega en verde)",
+          lambda: _detectar_segado(True, 0.25, -0.30, {"ndvi": 0.60}, "2026-04-20"),
+          lambda r: r == (True, 4))
+    check("motor/helper: NO segado con la misma caida fuera de abril-mayo",
+          lambda: _detectar_segado(True, 0.25, -0.30, {"ndvi": 0.60}, "2026-08-20"),
+          lambda r: r[0] is False)
+    check("motor/helper: un NDVI previo NEGATIVO no cuenta como caida por proporcion",
+          lambda: _detectar_segado(True, -0.07, None, {"ndvi": -0.10}, "2026-05-10"),
+          lambda r: r[0] is False)
+    check("motor/helper: deltas solo para los indices presentes en la pasada",
+          lambda: sorted(_calcular_deltas({"ndvi": 0.6, "ndmi": 0.1}, {"ndvi": 0.5}).keys()),
+          lambda r: r == ["NDMI", "NDVI"])
 
     lenoso = [
         {"fecha": "2026-01-10", "ndvi": 0.55, "msavi": 0.42, "lai": 1.8, "ndmi": 0.10,

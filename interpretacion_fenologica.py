@@ -240,6 +240,97 @@ def detectar_cubierta(tipo, subtipo, serie, fecha_iso):
 ESTADOS_VALIDABLES = ["OK", "Vigilar", "Revisar", "Segado", "N.A."]
 
 
+def _resolver_fase(tipo, subtipo, spec, fecha, act, parcela):
+    """Resuelve (fase, lo, hi, caida_ok, fase_esp, siega_verde) de la pasada.
+
+    Por especie si hay spec (con posible override por grados-dia en extensivos); si
+    no, por el calendario de meses. Excepcion: el forraje SEGADO EN VERDE no usa la
+    fenologia del cereal de grano, porque el cultivo se corta varias veces.
+    Extraido de `evaluar_parcela` SIN cambiar el comportamiento."""
+    siega_verde = (tipo == "EXTENSIVO" and subtipo == "SIEGA_VERDE")
+    fase_esp = None
+    fase = lo = hi = caida_ok = None
+    if spec and spec.get("especie") and not siega_verde:
+        try:
+            from fenologia_especies import fase_por_especie
+            # El decil peor de la pasada es la CALLE: en lenosos sirve para medir el
+            # suelo de esta finca en vez de suponerlo. En extensivos se ignora.
+            fase_esp = fase_por_especie(tipo, spec.get("especie"), fecha,
+                                        fecha_siembra=spec.get("fecha_siembra"),
+                                        marco_calle=spec.get("marco_calle"),
+                                        marco_pie=spec.get("marco_pie"),
+                                        regimen=spec.get("regimen"),
+                                        p10_ndvi=act.get("ndvi_p10"),
+                                        p10_msavi=act.get("msavi_p10"),
+                                        diametro_copa=spec.get("diametro_copa"))
+            fase = fase_esp["fase"]
+            lo, hi, caida_ok = fase_esp["lo"], fase_esp["hi"], fase_esp["caida"]
+        except Exception:
+            fase_esp = None
+    # OVERRIDE por GRADOS-DIA (opcional, gated, extraible): con integral definida y
+    # clima, en un EXTENSIVO la fase la manda el GDD, no el calendario. Sin el modulo
+    # o sin datos, no hace nada y se sigue con el calendario.
+    if fase_esp is not None and spec and spec.get("integrales_termicas"):
+        try:
+            import grados_dia as _GDD
+            fo = _GDD.fase_override(tipo, spec.get("especie"), spec, fecha, parcela)
+            if fo:
+                fase_esp = fo
+                fase, lo, hi, caida_ok = fo["fase"], fo["lo"], fo["hi"], fo["caida"]
+        except Exception:
+            log.debug("no se pudo aplicar el override por grados-dia", exc_info=True)
+    if fase_esp is None:
+        fase, lo, hi, caida_ok = fase_fenologica(tipo, subtipo, fecha)
+    return fase, lo, hi, caida_ok, fase_esp, siega_verde
+
+
+def _umbrales_calibrados(fase_esp, lo, hi, spec, fase, parcela):
+    """(umbrales, lo, hi) de la fase, ya ajustados con las validaciones del usuario
+    si hay modulo de calibracion y parcela. Sin modulo o sin parcela, quedan los de
+    la tabla. Extraido de `evaluar_parcela` sin cambiar el comportamiento."""
+    umbrales = FEN.umbrales_de_fase(fase_esp)
+    if _CAL is not None and parcela:
+        umbrales = _CAL.ajustar_umbrales(dict(umbrales, lo=lo, hi=hi),
+                                         (spec or {}).get("especie"), fase, parcela)
+        lo, hi = umbrales.get("lo", lo), umbrales.get("hi", hi)
+    return umbrales, lo, hi
+
+
+def _calcular_deltas(act, prev):
+    """Variacion de cada indice respecto a la pasada anterior. Puro: dos claves
+    explicitas por indice (una trae dato, la otra None) para no mirar banderas."""
+    deltas = {}
+    for K in ("NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"):
+        k = K.lower()
+        if act.get(k) is not None:
+            txt, d_pts, d_pct = delta(K, act.get(k), (prev or {}).get(k))
+            deltas[K] = {"valor": act[k], "texto": txt,
+                         "delta_pts": d_pts, "delta_pct": d_pct}
+    return deltas
+
+
+def _detectar_segado(siega_verde, ndvi, d_ndvi, prev, fecha):
+    """(segado, mes_act) para forraje segado en verde: una caida drastica del NDVI
+    en plena primavera (abril-mayo) es un CORTE de forraje, no un problema sanitario;
+    el rebrote vuelve a subir los indices. Extraido sin cambiar el comportamiento.
+
+    `prev_ndvi > 0` no es un test de verdad: con 0.0 la regla de la proporcion se
+    saltaba entera, y con un NDVI previo NEGATIVO se invertia."""
+    segado, mes_act = False, None
+    if siega_verde and ndvi is not None:
+        try:
+            mes_act = datetime.strptime(fecha, "%Y-%m-%d").month
+        except (TypeError, ValueError):
+            mes_act = None
+        prev_ndvi = prev.get("ndvi") if prev else None
+        caida_drastica = ((d_ndvi is not None and d_ndvi < -0.15) or
+                          (prev_ndvi is not None and prev_ndvi > 0
+                           and ndvi < 0.60 * prev_ndvi))
+        if mes_act in (4, 5) and caida_drastica:
+            segado = True
+    return segado, mes_act
+
+
 def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
                     parcela=None, heterogeneidad_activa=True):
     """
@@ -276,71 +367,17 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     prev = serie[-2] if len(serie) > 1 else None
     fecha = fecha_iso or act.get("fecha")
 
-    # --- FENOLOGIA: por especie si hay spec; si no, calendario por meses ---
-    # Excepcion: en extensivos SEGADOS EN VERDE (forraje) NO se usa la fenologia
-    # del cereal de grano (espigado/llenado/senescencia): el cultivo se corta
-    # varias veces, asi que se usa el calendario de SIEGA_VERDE, donde las caidas
-    # son NORMALES. De lo contrario, un corte saldria como caida anomala.
-    siega_verde = (tipo == "EXTENSIVO" and subtipo == "SIEGA_VERDE")
-    fase_esp = None
-    if spec and spec.get("especie") and not siega_verde:
-        try:
-            from fenologia_especies import fase_por_especie
-            # El decil peor de la pasada es la CALLE: en lenosos sirve para medir
-            # el suelo de esta finca en vez de suponerlo al convertir los umbrales
-            # de copa a escala de parcela. En extensivos se ignora.
-            fase_esp = fase_por_especie(tipo, spec.get("especie"), fecha,
-                                        fecha_siembra=spec.get("fecha_siembra"),
-                                        marco_calle=spec.get("marco_calle"),
-                                        marco_pie=spec.get("marco_pie"),
-                                        regimen=spec.get("regimen"),
-                                        p10_ndvi=act.get("ndvi_p10"),
-                                        p10_msavi=act.get("msavi_p10"),
-                                        diametro_copa=spec.get("diametro_copa"))
-            fase = fase_esp["fase"]
-            lo, hi, caida_ok = fase_esp["lo"], fase_esp["hi"], fase_esp["caida"]
-        except Exception:
-            fase_esp = None
-    # OVERRIDE por GRADOS-DIA (opcional, gated y extraible): si la parcela tiene
-    # integrales termicas definidas y hay clima, en un EXTENSIVO la fase la manda
-    # el GDD, no el calendario -reusando el rango de indice de esa misma fase-. Si
-    # `grados_dia.py` se borra, o no hay integrales/clima/tabla GDD, esto no hace
-    # nada y se sigue con el calendario. El usuario lo pide a proposito (§ audit 1).
-    if fase_esp is not None and spec and spec.get("integrales_termicas"):
-        try:
-            import grados_dia as _GDD
-            fo = _GDD.fase_override(tipo, spec.get("especie"), spec, fecha, parcela)
-            if fo:
-                fase_esp = fo
-                fase, lo, hi, caida_ok = fo["fase"], fo["lo"], fo["hi"], fo["caida"]
-        except Exception:
-            # el override por GDD es opcional: si falla, se sigue con el calendario.
-            # Se deja rastro en debug para poder diagnosticar un fallo del gancho sin
-            # molestar al usuario ni cambiar el comportamiento.
-            log.debug("no se pudo aplicar el override por grados-dia", exc_info=True)
-    if fase_esp is None:
-        fase, lo, hi, caida_ok = fase_fenologica(tipo, subtipo, fecha)
+    # --- FENOLOGIA: por especie (con posible override por GDD) o calendario ---
+    # La siega en verde y el override termico se resuelven dentro del helper.
+    fase, lo, hi, caida_ok, fase_esp, siega_verde = _resolver_fase(
+        tipo, subtipo, spec, fecha, act, parcela)
 
     # --- UMBRALES DE LA FASE, ya calibrados con lo que haya validado el usuario ---
     # Se hace UNA vez y aqui arriba, para que el NDVI se juzgue con el mismo liston
-    # que luego se explica. Sin el modulo opcional, o sin parcela, quedan los de la
-    # tabla y todo se comporta como siempre.
-    umbrales = FEN.umbrales_de_fase(fase_esp)
-    if _CAL is not None and parcela:
-        umbrales = _CAL.ajustar_umbrales(dict(umbrales, lo=lo, hi=hi),
-                                         (spec or {}).get("especie"), fase, parcela)
-        lo, hi = umbrales.get("lo", lo), umbrales.get("hi", hi)
+    # que luego se explica.
+    umbrales, lo, hi = _umbrales_calibrados(fase_esp, lo, hi, spec, fase, parcela)
 
-    # deltas de todos los indices
-    deltas = {}
-    for K in ("NDVI", "EVI", "SAVI", "GNDVI", "LAI", "MSAVI", "NDMI"):
-        k = K.lower()
-        if act.get(k) is not None:
-            txt, d_pts, d_pct = delta(K, act.get(k), (prev or {}).get(k))
-            # dos claves explicitas: una trae dato y la otra None (nunca hay que
-            # mirar una bandera para saber si 'delta' eran puntos o porcentaje)
-            deltas[K] = {"valor": act[k], "texto": txt,
-                         "delta_pts": d_pts, "delta_pct": d_pct}
+    deltas = _calcular_deltas(act, prev)
 
     ndvi = act.get("ndvi")
     ndmi = act.get("ndmi")
@@ -382,26 +419,9 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                     d_ndvi = act["msavi"] - prev["msavi"]
 
     # --- SIEGA EN VERDE: una caida drastica del NDVI en primavera = SEGADO ---
-    # En forraje segado en verde, cuando en abril-mayo (plena primavera) los indices
-    # se desploman de golpe, no es un problema sanitario: el cultivo se ha CORTADO.
-    # Se marca como "Segado" para que quede claro y no salte como anomalia; el rebrote
-    # volvera a subir los indices.
-    segado = False
-    if siega_verde and ndvi is not None:
-        try:
-            mes_act = datetime.strptime(fecha, "%Y-%m-%d").month
-        except (TypeError, ValueError):
-            mes_act = None
-        prev_ndvi = prev.get("ndvi") if prev else None
-        # `prev_ndvi > 0`, no un test de verdad: con 0.0 (falsy) la regla de la
-        # proporcion se saltaba entera, y con un NDVI previo NEGATIVO -agua, sombra-
-        # se invertia: el 60 % de -0,10 es -0,06, asi que RECUPERARSE hasta -0,07
-        # contaba como «caida drastica».
-        caida_drastica = ((d_ndvi is not None and d_ndvi < -0.15) or
-                          (prev_ndvi is not None and prev_ndvi > 0
-                           and ndvi < 0.60 * prev_ndvi))
-        if mes_act in (4, 5) and caida_drastica:
-            segado = True
+    # En forraje segado en verde, un desplome en abril-mayo no es un problema: el
+    # cultivo se ha CORTADO. Se marca "Segado" para que no salte como anomalia.
+    segado, mes_act = _detectar_segado(siega_verde, ndvi, d_ndvi, prev, fecha)
 
     # --- juicio unico ---
     esperado = False

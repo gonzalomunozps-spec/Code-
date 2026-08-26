@@ -526,9 +526,9 @@ resto sigue igual**; no hay interruptor que tocar.
   pierda (el clima se queda en su tabla).
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 659, sin `herbicida_contexto` 657,
-sin `grados_dia` 650, sin `balance_hidrico` 649, sin `informe_anual` 646,
-sin `calibracion_umbrales` 630, sin `clima_era5` 620 — todos en verde (y la
+Comprobado borrando cada fichero: completo 663, sin `herbicida_contexto` 661,
+sin `grados_dia` 654, sin `balance_hidrico` 653, sin `informe_anual` 650,
+sin `calibracion_umbrales` 634, sin `clima_era5` 624 — todos en verde (y la
 interfaz también, sin `clima_era5`, `grados_dia` y `balance_hidrico`).
 
 ---
