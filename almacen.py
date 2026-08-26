@@ -838,17 +838,17 @@ def eventos_de(parcela, campana):
 
 
 def rendimientos(nombre):
-    """Historico de cosecha de una parcela, campana a campana.
+    """Historico de PRODUCCION de una parcela, campana a campana.
 
-    Devuelve la lista de eventos COSECHA de TODAS las campanas (no solo la
-    activa) que llevan algun dato de rendimiento, ordenados por campana y
-    fecha. Es un volcado literal de lo que se anoto en el cuaderno: aqui no se
-    calcula, ni se promedia, ni se corrige nada. Kg/ha sale de la bascula, no
-    de una estimacion del programa.
+    Devuelve la lista de eventos de COSECHA (grano) y de SIEGA (forraje) de TODAS
+    las campanas -no solo la activa- que llevan algun dato de rendimiento,
+    ordenados por campana y fecha. Es un volcado literal de lo que se anoto en el
+    cuaderno: aqui no se calcula, ni se promedia, ni se corrige nada. Kg/ha sale de
+    la bascula, no de una estimacion del programa.
 
-    Cada elemento: {campana, fecha, rendimiento_kg_ha, humedad_grano_pct,
+    Cada elemento: {campana, fecha, tipo, rendimiento_kg_ha, humedad_grano_pct,
     superficie_cosechada_ha, fuente_dato}. Las claves que no se anotaron
-    sencillamente no estan."""
+    sencillamente no estan; `tipo` es COSECHA o SIEGA."""
     c = _c()
     with _LOCK:
         filas = list(c.execute(
@@ -857,14 +857,15 @@ def rendimientos(nombre):
     out = []
     for r in filas:
         d = json.loads(r["datos"]) if r["datos"] else {}
-        if d.get("tipo") != "COSECHA":
+        if d.get("tipo") not in ("COSECHA", "SIEGA"):
             continue
         reg = {"campana": r["campana"], "fecha": r["fecha"]}
         for k in ("rendimiento_kg_ha", "humedad_grano_pct",
                   "superficie_cosechada_ha", "fuente_dato"):
             if d.get(k) not in (None, ""):
                 reg[k] = d[k]
-        if len(reg) > 2:            # solo si trae algun dato de cosecha
+        if len(reg) > 2:            # solo si trae algun dato de produccion
+            reg["tipo"] = d.get("tipo")     # se anade tras el filtro de "tiene dato"
             out.append(reg)
     return out
 

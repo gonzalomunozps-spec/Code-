@@ -3,6 +3,17 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.5.0] — 2026-08
+
+### Añadido
+- **Producción de siega**, no solo de cosecha: un evento **SIEGA** (forraje) ahora
+  guarda su rendimiento (kg/ha), superficie y origen del dato, igual que la cosecha
+  de grano, y **puede repetirse varias veces por campaña** (cada corte). La humedad
+  de grano no se pide en la siega, porque ahí no existe ese dato.
+  - El **histórico de rendimientos** incluye cosechas y siegas, cada línea marcada
+    con su tipo («Cosecha» / «Siega»). `almacen.rendimientos` devuelve además el
+    campo `tipo`.
+
 ## [1.4.0] — 2026-08
 
 ### Seguridad

@@ -546,12 +546,27 @@ def pruebas_cuaderno():
         REG.registrar_evento("OTRA", "2025-2026", {"fecha": "2026-07-01", "tipo": "COSECHA",
                                                    "rendimiento_kg_ha": 9999.0})
         return DB.rendimientos("R")
-    check("almacen.rendimientos: historico de varias campanas, solo cosechas con dato",
+    check("almacen.rendimientos: historico de varias campanas, solo produccion con dato",
           _historico_rend,
           lambda r: [x["campana"] for x in r] == ["2023-2024", "2025-2026"] and
                     r[0]["rendimiento_kg_ha"] == 3800.0 and r[0]["fuente_dato"] == "albaran" and
                     r[1] == {"campana": "2025-2026", "fecha": "2026-07-01",
-                             "rendimiento_kg_ha": 4500.0})
+                             "rendimiento_kg_ha": 4500.0, "tipo": "COSECHA"})
+    # la SIEGA (forraje) tambien guarda produccion y entra en el historico con su tipo
+    def _siega_rend():
+        REG.registrar_evento("FORRAJE", "2025-2026", {"fecha": "2026-04-20", "tipo": "SIEGA",
+                                                      "rendimiento_kg_ha": 2800.0, "fuente_dato": "bascula"})
+        REG.registrar_evento("FORRAJE", "2025-2026", {"fecha": "2026-06-10", "tipo": "SIEGA",
+                                                      "rendimiento_kg_ha": 2100.0})
+        return DB.rendimientos("FORRAJE")
+    check("almacen.rendimientos: la siega guarda produccion (varios cortes) con tipo SIEGA",
+          _siega_rend,
+          lambda r: len(r) == 2 and all(x["tipo"] == "SIEGA" for x in r)
+                    and r[0]["rendimiento_kg_ha"] == 2800.0)
+    check("cosecha: la linea del historico distingue siega de cosecha",
+          lambda: REG.linea_rendimiento({"campana": "2025-2026", "tipo": "SIEGA",
+                                         "rendimiento_kg_ha": 2800.0}),
+          lambda r: r == "2025-2026  ·  Siega  ·  2.800 kg/ha")
     check("almacen.rendimientos: parcela sin cosechas -> []",
           lambda: DB.rendimientos("SIN_COSECHA"), lambda r: r == [])
 

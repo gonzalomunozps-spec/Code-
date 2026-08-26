@@ -1432,8 +1432,8 @@ class FichaParcela:
 
         # Historico de cosecha: lo unico medido en bascula, no interpretado.
         # Se listan TODAS las campanas, no solo la que se esta viendo.
-        tk.Label(card, text="Rendimientos registrados  ·  se anotan con un evento COSECHA, "
-                           "que admite fechas de campanas anteriores",
+        tk.Label(card, text="Rendimientos registrados  ·  se anotan con un evento COSECHA (grano) "
+                           "o SIEGA (forraje), que admite fechas de campanas anteriores",
                  bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).pack(anchor="w", padx=12)
         # Lista ACOTADA (ALTO_RENDIMIENTOS filas) con su propia barra: el historico
@@ -1463,11 +1463,14 @@ class FichaParcela:
 
     def _toggle_campos_evento(self):
         tipo = self.ev_tipo.get()
+        es_produccion = tipo in ("COSECHA", "SIEGA")   # ambos anotan kg/ha de bascula
         (self.frame_prod.grid if tipo == "PRODUCTO" else self.frame_prod.grid_remove)()
-        (self.frame_cosecha.grid if tipo == "COSECHA" else self.frame_cosecha.grid_remove)()
-        if tipo == "COSECHA":
-            (self.frame_humedad.grid if self._admite_humedad(self._campana_evento(
-                self.ev_fecha.get_iso())) else self.frame_humedad.grid_remove)()
+        (self.frame_cosecha.grid if es_produccion else self.frame_cosecha.grid_remove)()
+        # la humedad de grano solo tiene sentido en la cosecha de grano, no en la siega
+        if tipo == "COSECHA" and self._admite_humedad(self._campana_evento(self.ev_fecha.get_iso())):
+            self.frame_humedad.grid()
+        else:
+            self.frame_humedad.grid_remove()
 
     def _admite_humedad(self, campana):
         """Si toca pedir la humedad del grano para una cosecha de esa campana. Las
@@ -1494,10 +1497,13 @@ class FichaParcela:
                     return messagebox.showwarning("Dia informe", "Dia del informe: dd-mm-aaaa "
                                                   "(o dejalo vacio para el automatico).")
                 ev["fecha_informe"] = informe
-        elif ev["tipo"] == "COSECHA":
-            admite = self._admite_humedad(campana)
-            # si el cultivo no es grano, se avisa en vez de tirar el dato en silencio
-            if not admite and self.ev_humedad.get().strip():
+        elif ev["tipo"] in ("COSECHA", "SIEGA"):
+            es_cosecha = ev["tipo"] == "COSECHA"
+            titulo = "Cosecha" if es_cosecha else "Siega"
+            # la humedad de grano solo se anota en la cosecha de grano de extensivo;
+            # la siega (forraje) guarda kg/ha y superficie, pero no humedad de grano
+            admite = es_cosecha and self._admite_humedad(campana)
+            if es_cosecha and not admite and self.ev_humedad.get().strip():
                 self._toggle_campos_evento()
                 return messagebox.showwarning(
                     "Cosecha", "Este cultivo no es grano de extensivo: ahi no se anota "
@@ -1507,7 +1513,7 @@ class FichaParcela:
                     self.ev_rend.get(), self.ev_humedad.get(), self.ev_sup.get(),
                     self.ev_fuente.get(), admite_humedad=admite))
             except ValueError as e:
-                return messagebox.showwarning("Cosecha", f"Revisa el campo {e}: "
+                return messagebox.showwarning(titulo, f"Revisa el campo {e}: "
                                               "escribe un numero (o dejalo vacio).")
         REG.registrar_evento(self.nombre, campana, ev)
         self.ev_notas.delete(0, tk.END)

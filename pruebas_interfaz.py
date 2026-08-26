@@ -417,6 +417,28 @@ def escenario_cuaderno(P, DB):
             raise AssertionError("un rendimiento no numerico no debe guardarse")
     _paso("cosecha con texto no numerico", _invalida)
 
+    def _siega():
+        # la siega (forraje) tambien guarda produccion, pero SIN humedad de grano
+        f.ev_tipo.set("SIEGA")
+        f.ev_tipo.event_generate("<<ComboboxSelected>>")
+        root.update()
+        f.ev_fecha.set_iso("2026-05-10")
+        f._toggle_campos_evento()
+        root.update()
+        if f.frame_humedad.winfo_ismapped():
+            raise AssertionError("en la siega no debe pedirse humedad de grano")
+        if not f.frame_cosecha.winfo_ismapped():
+            raise AssertionError("la siega debe mostrar los campos de produccion")
+        f.ev_rend.delete(0, tk.END); f.ev_rend.insert(0, "2800")
+        f.ev_fuente.set("bascula")
+        n = len(DB.rendimientos(NOM))
+        f._add_evento()
+        root.update()
+        rr = DB.rendimientos(NOM)
+        if len(rr) != n + 1 or not any(x.get("tipo") == "SIEGA" for x in rr):
+            raise AssertionError("la produccion de siega no se guardo con tipo SIEGA")
+    _paso("siega: guarda produccion sin pedir humedad de grano", _siega)
+
     _paso("la lista de rendimientos se rellena",
           lambda: (_ for _ in ()).throw(AssertionError("lista vacia"))
           if f.lst_rend.size() == 0 else None)

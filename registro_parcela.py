@@ -54,6 +54,12 @@ FUENTES_DATO = ["memoria", "albaran", "bascula", "parte de cosecha"]
 CAMPOS_COSECHA = ("rendimiento_kg_ha", "humedad_grano_pct",
                   "superficie_cosechada_ha", "fuente_dato")
 
+# Eventos que ADEMAS de anotarse guardan una PRODUCCION de bascula (kg/ha): la
+# cosecha de grano y la siega de forraje -que ademas se repite varias veces por
+# campana-. Los dos alimentan el historico de rendimientos; la humedad de grano
+# solo aplica a la cosecha de grano (ver `admite_humedad_grano`).
+EVENTOS_PRODUCCION = ("COSECHA", "SIEGA")
+
 
 def admite_humedad_grano(cultivo):
     """True solo si el cultivo es grano de extensivo, que es donde la humedad del
@@ -108,6 +114,9 @@ def linea_rendimiento(r):
     Volcado literal de lo anotado: no se convierte a humedad comercial, no se
     normaliza por superficie y no se compara con nada."""
     partes = [r.get("campana", "")]
+    # cosecha o siega: se dice cual, ahora que ambas guardan produccion
+    if r.get("tipo") in EVENTOS_PRODUCCION:
+        partes.append("Siega" if r["tipo"] == "SIEGA" else "Cosecha")
     if r.get("rendimiento_kg_ha") is not None:
         partes.append(f"{_num_es(r['rendimiento_kg_ha'])} kg/ha")
     if r.get("humedad_grano_pct") is not None:
