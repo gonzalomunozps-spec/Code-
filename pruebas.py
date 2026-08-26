@@ -3536,6 +3536,52 @@ def pruebas_heterogeneidad_espacial():
           lambda r: r == (0.325, False))
 
 
+def pruebas_instalador():
+    """Instalador/desinstalador (scripts aparte, multiplataforma). Módulo opcional:
+    si se borra, el grupo se omite y el programa se usa igual sin instalar."""
+    try:
+        import instalador as INS
+    except Exception:
+        return
+    import pathlib
+
+    check("instalador: detecta windows/linux/darwin (SO inyectable)",
+          lambda: (INS.sistema("Windows"), INS.sistema("Linux-6"), INS.sistema("Darwin")),
+          lambda r: r == ("windows", "linux", "darwin"))
+    check("instalador: icono .ico en Windows y .png en el resto",
+          lambda: (INS.icono("Windows").endswith(".ico"), INS.icono("Linux").endswith(".png")),
+          lambda r: r == (True, True))
+    check("instalador: el .desktop lanza el panel y trae el icono",
+          lambda: INS.contenido_desktop("/usr/bin/python3", "/x/icono.png"),
+          lambda t: "[Desktop Entry]" in t and "panel_gestion_parcelas.py" in t
+                    and "Icon=/x/icono.png" in t and "Type=Application" in t)
+    check("instalador: el comando de Windows crea un .lnk (destino, argumentos, guardar)",
+          lambda: INS.powershell_crear_lnk("C:/x/g.lnk", "C:/py/pythonw.exe", "C:/x/icono.ico"),
+          lambda t: "CreateShortcut" in t and "TargetPath" in t and ".Save()" in t)
+    check("instalador: prefiere pythonw del venv en Windows",
+          lambda: str(INS.python_lanzador(None, so="Windows", actual="C:/Py/python.exe")),
+          lambda r: r.endswith("python.exe"))
+
+    # registro + crear/quitar acceso directo REAL en Linux, en un HOME temporal
+    dreg = tempfile.mkdtemp()
+    orig = INS.REGISTRO
+    INS.REGISTRO = pathlib.Path(dreg) / ".instalacion.json"
+    try:
+        INS.guardar_registro({"accesos": ["/a", "/b"], "venv": None})
+        check("instalador: el registro se guarda y se relee",
+              lambda: INS.leer_registro().get("accesos"), lambda r: r == ["/a", "/b"])
+        home = tempfile.mkdtemp()
+        creados = INS.crear_acceso_directo("/usr/bin/python3", so="Linux", home=home)
+        check("instalador: crea el .desktop en el escritorio y en el menú",
+              lambda: (len(creados), all(os.path.exists(c) for c in creados)),
+              lambda r: r == (2, True))
+        n = INS.quitar_accesos({"accesos": creados})
+        check("instalador: desinstalar quita los accesos creados",
+              lambda: (n, any(os.path.exists(c) for c in creados)), lambda r: r == (2, False))
+    finally:
+        INS.REGISTRO = orig
+
+
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
@@ -3545,7 +3591,7 @@ def main():
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
               pruebas_escala_indices, pruebas_clima, pruebas_repaso,
               pruebas_vista_ficha, pruebas_grados_dia, pruebas_balance_hidrico,
-              pruebas_heterogeneidad_espacial):
+              pruebas_heterogeneidad_espacial, pruebas_instalador):
         try:
             f()
         except Exception as e:

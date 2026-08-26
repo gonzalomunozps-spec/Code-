@@ -39,12 +39,13 @@ gestor-parcelas = "panel_gestion_parcelas:main"
 
 [tool.setuptools]
 py-modules = [
-    "almacen", "bitacora", "calibracion_umbrales", "campanas", "clima_era5",
-    "contraste_indices", "credenciales", "cultivo", "demo_sistema", "fechas",
-    "fenologia_especies", "gee_cliente", "geo", "herbicida_contexto",
-    "informe_anual", "interpretacion_fenologica", "mapas_cache",
-    "panel_gestion_parcelas", "registro_parcela", "rejilla", "rutas",
-    "sentinel1", "sigpac", "sincronizacion", "version",
+    "almacen", "balance_hidrico", "bitacora", "calibracion_umbrales", "campanas",
+    "clima_era5", "contraste_indices", "credenciales", "cultivo", "demo_sistema",
+    "fechas", "fenologia_especies", "gee_cliente", "geo", "grados_dia",
+    "herbicida_contexto", "heterogeneidad_espacial", "informe_anual",
+    "interpretacion_fenologica", "mapas_cache", "panel_gestion_parcelas",
+    "registro_parcela", "rejilla", "rutas", "sentinel1", "sigpac",
+    "sincronizacion", "version", "vista_ficha",
     "ui_alta", "ui_credenciales", "ui_dialogos", "ui_ficha", "ui_tema", "ui_widgets",
 ]
 

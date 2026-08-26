@@ -3,6 +3,24 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.8.0] — 2026-08
+
+### Añadido
+- **Instalador y desinstalador automáticos** (multiplataforma: Windows, Linux, macOS),
+  como scripts aparte que no tocan el programa:
+  - `python instalar.py` prepara un entorno aislado con las dependencias y crea un
+    **acceso directo en el escritorio** (y en el menú, en Linux). Con `--sin-venv`
+    usa el Python actual.
+  - `python desinstalar.py` lo quita todo (acceso directo y entorno). **Nunca borra
+    los datos** (`parcelas.db`): dice dónde están para que decidas tú.
+  - El programa **se sigue pudiendo usar sin instalar**: `python iniciar.py` (o
+    `python panel_gestion_parcelas.py`).
+
+### Corregido
+- **`pip install .` empaqueta ahora todos los módulos**: faltaban `grados_dia`,
+  `balance_hidrico`, `heterogeneidad_espacial` y `vista_ficha` en la lista, así que
+  una instalación por paquete se quedaba sin esas funciones. Añadidos.
+
 ## [1.7.0] — 2026-08
 
 ### Cambiado

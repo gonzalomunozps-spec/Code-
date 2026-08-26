@@ -24,3 +24,7 @@ build/
 dist/
 *.egg-info/
 .eggs/
+
+# instalador (artefactos locales)
+.instalacion.json
+.venv/

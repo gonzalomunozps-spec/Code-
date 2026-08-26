@@ -530,11 +530,17 @@ resto sigue igual**; no hay interruptor que tocar.
   `arbolado` guardado se queda en la base, por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 685, sin `herbicida_contexto` 683,
-sin `grados_dia` 676, sin `balance_hidrico` 675, sin `heterogeneidad_espacial` 672,
-sin `informe_anual` 669, sin `calibracion_umbrales` 656, sin `clima_era5` 646 —
+Comprobado borrando cada fichero: completo 693, sin `herbicida_contexto` 691,
+sin `grados_dia` 684, sin `balance_hidrico` 683, sin `heterogeneidad_espacial` 680,
+sin `informe_anual` 677, sin `calibracion_umbrales` 664, sin `clima_era5` 654 —
 todos en verde (y la interfaz también, sin `clima_era5`, `grados_dia`,
 `balance_hidrico` y `heterogeneidad_espacial`).
+
+**Instalación (aparte del programa):** `instalar.py` / `desinstalar.py` (lógica en
+`instalador.py`) crean/quitan un entorno con las dependencias y un acceso directo,
+multiplataforma; **nunca tocan los datos**. `iniciar.py` arranca sin instalar. Son
+tooling: borrarlos no afecta a la aplicación, que se usa igual con
+`python panel_gestion_parcelas.py`.
 
 ---
 

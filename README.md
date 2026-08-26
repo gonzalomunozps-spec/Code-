@@ -61,12 +61,29 @@ pip install .            # solo lo imprescindible
 pip install ".[todo]"    # con ChatGPT, informes PDF/Excel y carpeta estándar
 ```
 
+### Instalación automática (con acceso directo en el escritorio)
+
+Si prefieres no tocar la línea de comandos más de lo justo, hay un instalador que
+prepara un entorno con las dependencias y **crea un acceso directo en el escritorio**
+(Windows, Linux y macOS):
+
+```bash
+python instalar.py              # entorno + dependencias + acceso directo
+python instalar.py --sin-venv   # usa tu Python actual (si ya tienes las dependencias)
+python desinstalar.py           # lo quita todo (el acceso y el entorno)
+```
+
+**Desinstalar NUNCA borra tus datos** (`parcelas.db`): el desinstalador te dice
+dónde están para que decidas tú. Instalar es opcional: el programa se puede usar
+sin instalar (ver abajo).
+
 ---
 
 ## Arranque
 
 ```bash
-python panel_gestion_parcelas.py
+python iniciar.py                  # arranca SIN instalar nada
+python panel_gestion_parcelas.py   # lo mismo, nombre largo
 # o, si lo instalaste como paquete:
 gestor-parcelas
 ```
@@ -112,7 +129,7 @@ con copiar esa carpeta.** Se puede cambiar con `GESTOR_PARCELAS_DIR`.
 ## Pruebas
 
 ```bash
-python pruebas.py            # 685 pruebas, sin pantalla ni red
+python pruebas.py            # 693 pruebas, sin pantalla ni red
 python pruebas_interfaz.py   # monta la aplicación real y la recorre
 ```
 
