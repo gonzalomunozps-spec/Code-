@@ -324,6 +324,15 @@ def escenario_fichas(P, DB):
         f = ultima.get("f")
         if f is None:
             continue
+        # REGRESION: en ventana estrecha la tarjeta de interpretacion no debe
+        # desaparecer (antes se empujaba fuera de pantalla y "no aparecia").
+        def _interp_visible(f=f):
+            root.geometry("980x760"); root.update(); root.update_idletasks()
+            visible = f.txt.master.winfo_ismapped()
+            root.geometry("1440x900"); root.update()
+            if not visible:
+                raise AssertionError("el recuadro de interpretacion desaparece en ventana estrecha")
+        _paso(f"{nombre}: la interpretacion sigue visible en ventana estrecha", _interp_visible)
         _paso(f"{nombre}: refrescar", lambda f=f: (f.refrescar(), root.update()))
         _paso(f"{nombre}: cambiar de dia", lambda f=f: (
             f.cb_dia.current(0) if f.cb_dia["values"] else None,

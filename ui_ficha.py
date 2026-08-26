@@ -1015,8 +1015,13 @@ class FichaParcela:
                                "(hacen falta varias pasadas con rejilla de píxeles).")
 
     def _build_interp(self, parent):
-        card = tarjeta(parent, width=420)
-        card.pack(side="right", fill="both", padx=(7, 0))
+        # `expand=True`: comparte el ancho con la grafica en vez de quedarse en un
+        # ancho fijo. Sin esto, en una ventana estrecha la grafica (que si se
+        # expandia) empujaba esta tarjeta FUERA de la pantalla y la interpretacion
+        # "desaparecia". `pack_propagate(False)` mantiene la ALTURA fija (la del
+        # marco con scroll), no el ancho. `width=360` es solo el minimo de arranque.
+        card = tarjeta(parent, width=360)
+        card.pack(side="right", fill="both", expand=True, padx=(7, 0))
         card.pack_propagate(False)
         self._titulo(card, "Interpretacion automatica")
 
