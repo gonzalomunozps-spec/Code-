@@ -13,6 +13,9 @@ Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
   - El **histórico de rendimientos** incluye cosechas y siegas, cada línea marcada
     con su tipo («Cosecha» / «Siega»). `almacen.rendimientos` devuelve además el
     campo `tipo`.
+  - Como la cosecha, la **siega se archiva en la campaña de su propia fecha**, para
+    poder cargar el histórico de años anteriores —y varios cortes— sin cambiar de
+    campaña en el panel.
 
 ## [1.4.0] — 2026-08
 

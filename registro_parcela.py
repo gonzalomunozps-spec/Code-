@@ -91,11 +91,11 @@ def admite_humedad_en_campana(cultivo_campana, cultivo_vista):
 def campana_de_evento(tipo, iso, campana_vista):
     """Campana bajo la que se archiva un evento del cuaderno.
 
-    Todo se anota en la campana que se esta viendo, SALVO la COSECHA: esa cae en
-    la campana de su propia fecha, para poder cargar el historico de anos
-    anteriores sin cambiar de campana en el panel. Una fecha ilegible no rompe
-    nada: se queda en la campana vista."""
-    if tipo != "COSECHA" or not iso:
+    Todo se anota en la campana que se esta viendo, SALVO las PRODUCCIONES (COSECHA
+    y SIEGA): esas caen en la campana de su propia fecha, para poder cargar el
+    historico de anos anteriores -y varios cortes de forraje- sin cambiar de
+    campana en el panel. Una fecha ilegible no rompe nada: se queda en la vista."""
+    if tipo not in EVENTOS_PRODUCCION or not iso:
         return campana_vista
     try:
         return campana_actual(datetime.strptime(iso, "%Y-%m-%d"))

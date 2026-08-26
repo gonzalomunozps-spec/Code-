@@ -577,8 +577,11 @@ def pruebas_cuaderno():
     check("cosecha: fecha de octubre -> campana que empieza ese ano",
           lambda: REG.campana_de_evento("COSECHA", "2024-10-02", "2025-2026"),
           lambda r: r == "2024-2025")
-    check("cuaderno: el resto de eventos se quedan en la campana vista",
-          lambda: REG.campana_de_evento("SIEGA", "2024-07-05", "2025-2026"),
+    check("siega: tambien se archiva por su fecha (mayo 2024 -> campana 2023-2024)",
+          lambda: REG.campana_de_evento("SIEGA", "2024-05-10", "2025-2026"),
+          lambda r: r == "2023-2024")
+    check("cuaderno: el resto de eventos (riego, laboreo...) se quedan en la campana vista",
+          lambda: REG.campana_de_evento("RIEGO", "2024-07-05", "2025-2026"),
           lambda r: r == "2025-2026")
     check("cuaderno: fecha ilegible no cambia de campana",
           lambda: REG.campana_de_evento("COSECHA", "05/07/2024", "2025-2026"),

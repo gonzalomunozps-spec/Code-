@@ -1528,7 +1528,8 @@ class FichaParcela:
         if hasattr(self, "ev_fuente"):
             self.ev_fuente.set("")
         if campana != self.campana:
-            messagebox.showinfo("Cosecha", f"Anotada en la campana {campana}. Queda en el "
+            _q = "Siega" if ev["tipo"] == "SIEGA" else "Cosecha"
+            messagebox.showinfo(_q, f"Anotada en la campana {campana}. Queda en el "
                                 "historico de rendimientos; para ver el evento, cambia a esa "
                                 "campana.", parent=self.master)
         self._refrescar_eventos()
