@@ -55,7 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 8
+ESQUEMA_VERSION = 9
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -149,7 +149,8 @@ def _crear_tablas():
             municipio TEXT,            -- codigo SIGPAC de municipio
             sigpac TEXT,               -- JSON con los 7 codigos del recinto
             buffer_m REAL,             -- buffer interior de la rejilla; NULL = por defecto
-            heterogeneidad INTEGER);   -- 1/0: incluir el analisis de zonas en la interpretacion
+            heterogeneidad INTEGER,    -- 1/0: incluir el analisis de zonas en la interpretacion
+            arbolado INTEGER);         -- 1/0: arbolado disperso (dehesa/encinas): enmascarar
         CREATE TABLE IF NOT EXISTS cultivos(
             nombre TEXT, campana TEXT,
             datos TEXT,                -- JSON del cultivo (tipo, subtipo, especie, marco...)
@@ -332,6 +333,15 @@ def _migracion_7(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_clima_punto ON clima(punto, fecha)")
 
 
+def _migracion_9(c):
+    """`arbolado` por parcela: 1/0 si tiene arbolado disperso (dehesa, encinas de
+    lindero). NULL/0 = no; asi las parcelas que ya existen se comportan igual que
+    antes. Con 1, el analisis espacial enmascara los pixeles de arbol permanente
+    para no confundirlos con el cultivo herbaceo (modulo opcional)."""
+    if "arbolado" not in {r[1] for r in c.execute("PRAGMA table_info(parcelas)")}:
+        c.execute("ALTER TABLE parcelas ADD COLUMN arbolado INTEGER")
+
+
 def _migracion_8(c):
     """`fase_real` en validaciones: la fase corregida a mano por el usuario.
 
@@ -346,7 +356,8 @@ def _migracion_8(c):
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
 _MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4,
-                5: _migracion_5, 6: _migracion_6, 7: _migracion_7, 8: _migracion_8}
+                5: _migracion_5, 6: _migracion_6, 7: _migracion_7, 8: _migracion_8,
+                9: _migracion_9}
 
 
 def _migrar_esquema():
@@ -448,7 +459,9 @@ def _ficha_from_row(r):
             # explicito, que significa "esta parcela sin buffer, a proposito".
             "buffer_m": _col(r, "buffer_m"),
             "heterogeneidad": (True if _col(r, "heterogeneidad") is None
-                               else bool(_col(r, "heterogeneidad")))}
+                               else bool(_col(r, "heterogeneidad"))),
+            # arbolado disperso (dehesa/encinas): NULL/0 = no, por defecto
+            "arbolado": bool(_col(r, "arbolado"))}
 
 
 def parcelas_dict():
@@ -508,8 +521,8 @@ def guardar_ficha(nombre, ficha):
         set_buffer = ("buffer_m=excluded.buffer_m, " if "buffer_m" in ficha
                       else "buffer_m=COALESCE(excluded.buffer_m, parcelas.buffer_m), ")
         c.execute("INSERT INTO parcelas(nombre,propietario,coordenadas,superficie_ha,"
-                  "anio_inicio,provincia,municipio,sigpac,buffer_m,heterogeneidad) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?) "
+                  "anio_inicio,provincia,municipio,sigpac,buffer_m,heterogeneidad,arbolado) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
                   "ON CONFLICT(nombre) DO UPDATE SET "
                   "propietario=excluded.propietario, coordenadas=excluded.coordenadas, "
                   "superficie_ha=excluded.superficie_ha, anio_inicio=excluded.anio_inicio, "
@@ -517,7 +530,8 @@ def guardar_ficha(nombre, ficha):
                   "municipio=COALESCE(excluded.municipio, parcelas.municipio), "
                   "sigpac=COALESCE(excluded.sigpac, parcelas.sigpac), "
                   + set_buffer +
-                  "heterogeneidad=COALESCE(excluded.heterogeneidad, parcelas.heterogeneidad)",
+                  "heterogeneidad=COALESCE(excluded.heterogeneidad, parcelas.heterogeneidad), "
+                  "arbolado=COALESCE(excluded.arbolado, parcelas.arbolado)",
                   (nombre, ficha.get("propietario", ""),
                    json.dumps(ficha.get("coordenadas", []), ensure_ascii=False),
                    ficha.get("superficie_ha", 0.0), ficha.get("anio_inicio_monitoreo", ""),
@@ -525,7 +539,9 @@ def guardar_ficha(nombre, ficha):
                    json.dumps(sig, ensure_ascii=False) if sig else None,
                    ficha.get("buffer_m"),
                    None if ficha.get("heterogeneidad") is None
-                   else int(bool(ficha["heterogeneidad"]))))
+                   else int(bool(ficha["heterogeneidad"])),
+                   None if ficha.get("arbolado") is None
+                   else int(bool(ficha["arbolado"]))))
         for camp, cult in (ficha.get("cultivos_por_campana") or {}).items():
             c.execute("INSERT INTO cultivos(nombre,campana,datos) VALUES(?,?,?) "
                       "ON CONFLICT(nombre,campana) DO UPDATE SET datos=excluded.datos",

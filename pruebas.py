@@ -2191,6 +2191,16 @@ def pruebas_buffer_y_zonas():
                    DB.ficha("Q")["heterogeneidad"])[1], lambda r: r is False)
     check("zonas: solo afectan a su parcela",
           lambda: DB.ficha("P")["heterogeneidad"], lambda r: r is True)
+    # arbolado disperso (dehesa/encinas): por defecto NO, se guarda con la parcela
+    check("arbolado: por defecto NO (la mayoria de parcelas no son dehesa)",
+          lambda: DB.ficha("P")["arbolado"], lambda r: r is False)
+    check("arbolado: marcarlo se guarda con la parcela y se relee",
+          lambda: (DB.guardar_ficha("P", dict(DB.ficha("P"), arbolado=True)),
+                   DB.ficha("P")["arbolado"])[1], lambda r: r is True)
+    check("arbolado: un guardado que no lo menciona no lo cambia",
+          lambda: (DB.guardar_ficha("P", {"propietario": "p", "coordenadas": [[0, 0]],
+                                          "superficie_ha": 5}),
+                   DB.ficha("P")["arbolado"])[1], lambda r: r is True)
 
 
 def pruebas_rejilla_coherencia():

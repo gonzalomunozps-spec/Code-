@@ -76,6 +76,10 @@ try:
     import balance_hidrico as _BH
 except Exception:
     _BH = None
+try:
+    import heterogeneidad_espacial as _HE
+except Exception:
+    _HE = None
 
 _EE = gee_cliente.hay_ee()
 
@@ -489,6 +493,12 @@ class FichaParcela:
         inf.pack_propagate(False)
         self._build_graficas(inf)
         self._build_interp(inf)
+
+        # cuadro aparte con la interpretacion de la heterogeneidad (zonas), debajo
+        # de la grafica de evolucion de los indices
+        het = tk.Frame(cuerpo, bg=TEMA["page"])
+        het.pack(fill="x", pady=(14, 0))
+        self._build_hetero(het)
 
         # 410 px = lo que MIDE el cuaderno completo (402) mas un margen. Es fijo a
         # proposito, como el resto de filas: dentro del marco con scroll el contenido
@@ -964,6 +974,46 @@ class FichaParcela:
     def _replot(self):
         self._pintar_graficas(getattr(self, "_regs_actual", []))
 
+    def _build_hetero(self, parent):
+        """Cuadro de interpretacion de la HETEROGENEIDAD (zonas dentro de la parcela):
+        la lectura clasica (media/dispersion) y, si esta el modulo espacial, el
+        analisis por pixel (foco, tamano, persistencia, arbolado). Solo lectura."""
+        card = tarjeta(parent)
+        card.pack(fill="x")
+        self._titulo(card, "Heterogeneidad de la parcela · zonas")
+        self.lbl_hetero = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                                   font=FUENTES["small"], justify="left", anchor="w",
+                                   wraplength=1180)
+        self.lbl_hetero.pack(fill="x", padx=12, pady=(0, 12))
+
+    def _pintar_hetero(self, regs):
+        """Rellena el cuadro de zonas: lectura agregada + analisis espacial opcional."""
+        if not getattr(self, "lbl_hetero", None) or not self.lbl_hetero.winfo_exists():
+            return
+        partes = []
+        # lectura clasica de la heterogeneidad (media, dispersion, evolucion)
+        try:
+            h = CI.heterogeneidad(regs or [])
+            if h and h.get("lectura"):
+                partes.append(h["lectura"])
+            elif h and h.get("uniformidad"):
+                partes.append(f"Uniformidad de la parcela: {h['uniformidad']}.")
+        except Exception:
+            log.debug("no se pudo calcular la heterogeneidad clasica", exc_info=True)
+        # analisis ESPACIAL por pixel (opcional): foco/persistencia/arbolado
+        if _HE is not None:
+            try:
+                arb = bool(getattr(self, "var_arbolado", None) and self.var_arbolado.get())
+                res = _HE.analizar_parcela(self.nombre, self.campana, arbolado=arb)
+                t = _HE.texto(res)
+                if t:
+                    partes.append(t)
+            except Exception:
+                log.debug("no se pudo calcular la heterogeneidad espacial", exc_info=True)
+        self.lbl_hetero.config(text="  ".join(partes) if partes else
+                               "Sin datos suficientes para el análisis de zonas "
+                               "(hacen falta varias pasadas con rejilla de píxeles).")
+
     def _build_interp(self, parent):
         card = tarjeta(parent, width=420)
         card.pack(side="right", fill="both", padx=(7, 0))
@@ -994,6 +1044,14 @@ class FichaParcela:
             fila_h, text="Analizar zonas dentro de la parcela (heterogeneidad)",
             variable=self.var_hetero, command=self._cambiar_heterogeneidad)
         self.chk_hetero.pack(anchor="w")
+        # Arbolado disperso (dehesa/encinas): solo si el modulo espacial esta. Con la
+        # casilla marcada, los pixeles de arbol permanente se excluyen del analisis.
+        if _HE is not None:
+            self.var_arbolado = tk.BooleanVar(value=bool((DB.ficha(self.nombre) or {}).get("arbolado")))
+            self.chk_arbolado = ttk.Checkbutton(
+                fila_h, text="Arbolado disperso (dehesa/encinas): excluirlo del análisis de zonas",
+                variable=self.var_arbolado, command=self._cambiar_arbolado)
+            self.chk_arbolado.pack(anchor="w")
 
         self.txt = tk.Text(card, wrap="word", height=8, bd=0, relief="flat",
                            bg=TEMA["nota_bg"], fg=TEMA["text"], font=FUENTES["body"],
@@ -1030,6 +1088,13 @@ class FichaParcela:
         for r in (getattr(self, "_regs_actual", None) or []):
             r["interpretacion"] = None
         self.refrescar()
+
+    def _cambiar_arbolado(self):
+        """Guarda si la parcela tiene arbolado disperso y repinta el cuadro de zonas."""
+        ficha = DB.ficha(self.nombre) or {}
+        ficha["arbolado"] = bool(self.var_arbolado.get())
+        DB.guardar_ficha(self.nombre, ficha)
+        self._pintar_hetero(getattr(self, "_regs_actual", None) or [])
 
     # ---- seleccion de la pasada que se interpreta ----
     def _cambiar_pasada_interp(self, _=None):
@@ -1082,6 +1147,7 @@ class FichaParcela:
         self._pintar_leyenda()
         self._pintar_graficas(regs)
         self._pintar_interp(regs)
+        self._pintar_hetero(regs)
         self._pintar_clima()
         self._pintar_estadisticas(regs)
         self._pintar_mapa()
