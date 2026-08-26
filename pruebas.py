@@ -3502,6 +3502,39 @@ def pruebas_heterogeneidad_espacial():
     check("het-esp: sin marcar arbolado, las encinas NO se excluyen (siguen contando)",
           lambda: res_sin, lambda r: r["n_arbolado"] == 0)
 
+    # --- ENMASCARADO QUE LLEGA AL DIAGNOSTICO: media del cultivo sin encinas ---
+    import almacen as DB
+    import rejilla as RJ
+    from interpretacion_fenologica import evaluar_parcela
+    from cultivo import spec_de
+    dd = tempfile.mkdtemp(); DB.conectar(os.path.join(dd, "he.db"))
+    coords = [[-4.1, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.1, 41.66]]
+    DB.guardar_ficha("DEHESA", {"propietario": "x", "coordenadas": coords,
+                                "superficie_ha": 10, "arbolado": True})
+    geo = {"crs": "EPSG:32630", "escala": 10.0, "i0": 100, "j0": 200, "filas": 6, "columnas": 6}
+    fechas = ["2026-01-15", "2026-02-15", "2026-03-15", "2026-04-15", "2026-05-15", "2026-06-01"]
+    for f, base in zip(fechas, [0.30, 0.45, 0.60, 0.65, 0.50, 0.30]):
+        vals = [base] * 36
+        for i in (0, 7, 14):        # encinas siempre verdes y planas
+            vals[i] = 0.60
+        DB.guardar_rejilla("DEHESA", "2025-2026", f, RJ.codificar(vals, [True] * 36, geo))
+    # media bruta del 2026-06-01 = (33*0.30 + 3*0.60)/36 = 0.325; la del cultivo = 0.30
+    check("het-esp: la media LIMPIA del cultivo excluye las encinas (0.30, no 0.325 bruta)",
+          lambda: HE.ndvi_cultivo_limpio("DEHESA", "2026-06-01"), lambda r: r == 0.30)
+    serie = [{"fecha": "2026-06-01", "ndvi": 0.325, "cobertura_valida": 0.97,
+              "msavi": 0.3, "lai": 1.5, "evi": 0.25, "ndmi": 0.15}]
+    cult = {"especie": "TRIGO", "fecha_siembra": "2025-11-01"}
+    con = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, fecha_iso="2026-06-01",
+                          spec=spec_de(cult), parcela="DEHESA", arbolado=True)
+    sin = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, fecha_iso="2026-06-01",
+                          spec=spec_de(cult), parcela="DEHESA", arbolado=False)
+    check("het-esp: CON flag, el diagnostico juzga con la media del cultivo (encinas fuera)",
+          lambda: (con["ndvi_juicio"], "Arbolado disperso" in con["motivo"]),
+          lambda r: r == (0.30, True))
+    check("het-esp: SIN flag, el diagnostico usa la media bruta (comportamiento de siempre)",
+          lambda: (sin["ndvi_juicio"], "Arbolado disperso" in sin["motivo"]),
+          lambda r: r == (0.325, False))
+
 
 # =====================================================================
 def main():

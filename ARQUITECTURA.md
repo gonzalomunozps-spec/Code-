@@ -530,9 +530,9 @@ resto sigue igual**; no hay interruptor que tocar.
   `arbolado` guardado se queda en la base, por si se repone.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 682, sin `herbicida_contexto` 680,
-sin `grados_dia` 673, sin `balance_hidrico` 672, sin `heterogeneidad_espacial` 672,
-sin `informe_anual` 666, sin `calibracion_umbrales` 653, sin `clima_era5` 643 —
+Comprobado borrando cada fichero: completo 685, sin `herbicida_contexto` 683,
+sin `grados_dia` 676, sin `balance_hidrico` 675, sin `heterogeneidad_espacial` 672,
+sin `informe_anual` 669, sin `calibracion_umbrales` 656, sin `clima_era5` 646 —
 todos en verde (y la interfaz también, sin `clima_era5`, `grados_dia`,
 `balance_hidrico` y `heterogeneidad_espacial`).
 

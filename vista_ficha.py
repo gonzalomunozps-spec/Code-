@@ -57,13 +57,15 @@ def preparar_interpretacion(nombre, campana, regs, idx):
     tipo, sub = cult.get("tipo", "BARBECHO"), cult.get("subtipo", "")
     spec = spec_de(cult)
     hetero_on = ficha.get("heterogeneidad", True)
+    arbolado = bool(ficha.get("arbolado"))
 
     eventos_cerca = REG.eventos_cercanos(nombre, campana, actual.get("fecha", ""),
                                          ventana_dias=20)
 
-    # diagnostico fenologico. `parcela` aplica los umbrales que el usuario calibro.
+    # diagnostico fenologico. `parcela` aplica los umbrales que el usuario calibro;
+    # `arbolado` enmascara las encinas para juzgar el cultivo, no los arboles.
     diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec,
-                           parcela=nombre, heterogeneidad_activa=hetero_on)
+                           parcela=nombre, heterogeneidad_activa=hetero_on, arbolado=arbolado)
     estado_bruto = diag["estado"]          # el que produce el motor (base del aprendizaje)
     cultivo_id = f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")
 
@@ -115,6 +117,7 @@ def preparar_interpretacion(nombre, campana, regs, idx):
         "regs": regs, "actual": actual,
         "tipo": tipo, "sub": sub, "spec": spec,
         "hetero_on": hetero_on,
+        "arbolado": arbolado,
         "eventos_cerca": eventos_cerca,
         "estado": diag["estado"], "estado_bruto": estado_bruto,
         "fase": diag.get("fase"), "cultivo_id": cultivo_id, "diag": diag,

@@ -271,3 +271,41 @@ def analizar_parcela(nombre, campana, arbolado=False, k=K_BAJO):
     if len(decod) < 1:
         return None
     return analizar(decod, arbolado=arbolado, k=k)
+
+
+def ndvi_cultivo_limpio(nombre, fecha):
+    """Media de NDVI del CULTIVO en la rejilla de `fecha`: solo los pixeles VALIDOS
+    y NO arbolados. Sirve para juzgar el vigor del herbaceo sin el verdor permanente
+    de las encinas, que infla la media bruta.
+
+    None (y el motor sigue con la media de siempre) si no se puede: sin rejillas,
+    sin fechas suficientes para ver el arbolado, sin la rejilla de esa fecha, o si
+    quedan muy pocos pixeles de cultivo tras enmascarar."""
+    try:
+        import almacen as DB
+        crudas = DB.rejillas(nombre)          # todas las campanas: el arbol es plurianual
+    except Exception:
+        return None
+    buenas, _ = _REJ.comparables(crudas)
+    decod = []
+    for d in buenas:
+        try:
+            g = _REJ.decodificar(d)
+        except Exception:
+            g = None
+        if g:
+            g["fecha"] = d.get("fecha")
+            decod.append(g)
+    if len(decod) < MIN_FECHAS_ARBOL:
+        return None
+    mask = mascara_arbolado(decod)
+    if not mask or not any(mask):
+        return None                    # no se ve arbolado: no hay nada que limpiar
+    obj = next((g for g in decod if g.get("fecha") == fecha), None)
+    if obj is None:
+        return None
+    xs = [v for i, (v, ok) in enumerate(zip(obj["valores"], obj["validos"]))
+          if ok and v is not None and i < len(mask) and not mask[i]]
+    if len(xs) < MIN_PIXELES_JUICIO:
+        return None                    # quedan pocos pixeles de cultivo: no fiable
+    return round(sum(xs) / len(xs), 3)

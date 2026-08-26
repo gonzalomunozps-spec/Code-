@@ -332,7 +332,7 @@ def _detectar_segado(siega_verde, ndvi, d_ndvi, prev, fecha):
 
 
 def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
-                    parcela=None, heterogeneidad_activa=True):
+                    parcela=None, heterogeneidad_activa=True, arbolado=False):
     """
     Devuelve un dict con el diagnostico completo. Semaforo y explicacion
     coherentes entre si, con fenologia y (en lenosos) cubierta vegetal.
@@ -392,6 +392,24 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     ndvi_juicio = ndvi
     indice_juicio = "NDVI"
     separacion = None
+
+    # ENMASCARADO DE ARBOLADO (opcional, gated, extraible): en un EXTENSIVO marcado
+    # como de arbolado disperso (dehesa/encinas), la media de NDVI esta inflada por
+    # los arboles perennifolios, que estan verdes todo el ano. Se recalcula la media
+    # SOLO del cultivo (pixeles no arbolados de la rejilla de esa fecha) y se juzga
+    # con ELLA -no con la bruta-. Se toca UNICAMENTE el valor que se juzga; los
+    # deltas y el NDMI se dejan igual (el arbol es estable: apenas mueve el delta, y
+    # el NDMI no se guarda por pixel). Triple candado: hace falta el flag, el modulo
+    # y una rejilla de esa fecha; si falta alguno, se juzga con la media de siempre.
+    ndvi_limpio = None
+    if arbolado and tipo == "EXTENSIVO" and ndvi is not None and parcela:
+        try:
+            import heterogeneidad_espacial as _HE
+            nl = _HE.ndvi_cultivo_limpio(parcela, fecha)
+            if nl is not None and abs(nl - ndvi) > 0.02:
+                ndvi_limpio, ndvi_juicio = nl, nl
+        except Exception:
+            log.debug("no se pudo enmascarar el arbolado para el juicio", exc_info=True)
     if tipo == "LENOSO":
         # Reparto copa/cubierta con UNA sola lectura (ver contraste_indices). Usa
         # los percentiles de la pasada cuando los hay: el p90 es mucho mejor proxy
@@ -466,6 +484,10 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                    f"MSAVI, robusto al suelo. Vigor de copa: {contraste.get('vigor_copa', '-')}.]")
     elif tipo == "EXTENSIVO" and contraste and contraste.get("situacion"):
         motivo += f" [Contraste de indices: {contraste['situacion']}.]"
+    if ndvi_limpio is not None:
+        motivo += (f" [Arbolado disperso (dehesa/encinas): se juzga con la media del cultivo "
+                   f"{ndvi_limpio:.3f}, excluyendo los pixeles de arbol permanente; la media bruta "
+                   f"de la parcela era {ndvi:.3f}.]")
 
     # --- LEÑOSO CADUCO EN INVIERNO: el arbol esta sin hoja ---
     # En viña, almendro o pistacho en parada invernal no hay hoja: el NDVI cae a
@@ -826,7 +848,7 @@ def observaciones_del_agricultor(cultivo, fase, validaciones, limite=3, parcela=
 
 def texto_interpretacion(tipo, subtipo, serie, fecha_iso=None, modelo="gpt-4o-mini",
                          eventos_cerca=None, spec=None, aprendizaje=None,
-                         parcela=None, heterogeneidad_activa=True):
+                         parcela=None, heterogeneidad_activa=True, arbolado=False):
     """Genera el texto. Usa ChatGPT si hay OPENAI_API_KEY; si no, respaldo por reglas.
 
     `aprendizaje`: validaciones pasadas del agricultor (almacen.validaciones_recientes)
@@ -841,7 +863,7 @@ def texto_interpretacion(tipo, subtipo, serie, fecha_iso=None, modelo="gpt-4o-mi
     recibia igualmente el aviso de «foco localizado» -y se guardaba en la base-."""
     diag = evaluar_parcela(tipo, subtipo, serie, fecha_iso, eventos_cerca=eventos_cerca,
                            spec=spec, parcela=parcela,
-                           heterogeneidad_activa=heterogeneidad_activa)
+                           heterogeneidad_activa=heterogeneidad_activa, arbolado=arbolado)
 
     if diag["clave"] in ("NA", "Sin"):
         return diag["motivo"], diag

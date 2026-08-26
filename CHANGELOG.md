@@ -3,6 +3,22 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.7.0] — 2026-08
+
+### Cambiado
+- **El enmascarado de encinas llega al diagnóstico** (antes solo a la lectura): en
+  un **extensivo marcado como «arbolado disperso»**, el semáforo se calcula con la
+  **media de NDVI del cultivo** (píxeles no arbolados de la rejilla de esa fecha),
+  no con la media bruta inflada por las encinas. El diagnóstico dice cuándo lo hace
+  y con qué valor.
+  - **Triple candado**: hace falta el flag de la parcela, el módulo
+    `heterogeneidad_espacial` y una rejilla de esa fecha; si falta alguno, se juzga
+    con la media de siempre. Sin marcar, o sin el módulo, el comportamiento es
+    **idéntico** al anterior.
+  - Se toca **solo el valor que se juzga** (el NDVI del nivel): los deltas y el NDMI
+    se dejan igual (el árbol es estable, apenas mueve el delta; el NDMI no se guarda
+    por píxel).
+
 ## [1.6.0] — 2026-08
 
 ### Añadido

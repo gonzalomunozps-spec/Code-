@@ -1320,6 +1320,7 @@ class FichaParcela:
         tipo, sub, spec = r["tipo"], r["sub"], r["spec"]
         regs_hasta, actual = r["regs"], r["actual"]
         eventos_cerca, hetero_on = r["eventos_cerca"], r["hetero_on"]
+        arbolado = r.get("arbolado", False)
 
         def worker():
             # Los MISMOS argumentos con que se resolvio la cabecera:
@@ -1330,7 +1331,8 @@ class FichaParcela:
                                              eventos_cerca=eventos_cerca, spec=spec,
                                              aprendizaje=aprendizaje,
                                              parcela=self.nombre,
-                                             heterogeneidad_activa=hetero_on)
+                                             heterogeneidad_activa=hetero_on,
+                                             arbolado=arbolado)
             DB.set_interpretacion(self.nombre, self.campana, actual.get("fecha"), texto)
 
             def pintar():
