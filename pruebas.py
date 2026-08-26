@@ -3413,6 +3413,71 @@ def pruebas_balance_hidrico():
           lambda: r_hume, lambda r: "Contexto hídrico" not in r["motivo"] and r["estado"] == "Vigilar")
 
 
+def pruebas_heterogeneidad_espacial():
+    """Analisis espacial/temporal de la rejilla (agrupamiento, focos, arbolado).
+    Modulo OPCIONAL: si se borra, el grupo se omite."""
+    try:
+        import heterogeneidad_espacial as HE
+    except Exception:
+        return
+
+    def _grid(valores, filas, cols, escala=10.0):
+        return {"valores": list(valores),
+                "validos": [v is not None for v in valores],
+                "geo": {"filas": filas, "columnas": cols, "escala": escala}}
+
+    # --- mascara de arbolado: un pixel verde todo el ano es arbol; el que oscila, no
+    # 4 fechas, 2 pixeles: el 0 se queda alto y plano (arbol), el 1 sube y baja (cultivo)
+    grids_t = [_grid([0.50, 0.20], 1, 2), _grid([0.52, 0.65], 1, 2),
+               _grid([0.49, 0.30], 1, 2), _grid([0.51, 0.70], 1, 2)]
+    check("het-esp: la encina (verde todo el ano, plana) se marca como arbolado",
+          lambda: HE.mascara_arbolado(grids_t), lambda m: m == [True, False])
+    check("het-esp: sin fechas suficientes no se puede ver el arbolado",
+          lambda: HE.mascara_arbolado(grids_t[:2]), lambda m: m is None)
+
+    # --- componentes conexas y agrupamiento ---
+    check("het-esp: pixeles bajos pegados (bloque 2x2) forman UNA mancha",
+          lambda: HE.componentes_conexas({0, 1, 4, 5}, 4, 4), lambda c: len(c) == 1 and len(c[0]) == 4)
+    check("het-esp: pixeles bajos en esquinas opuestas son DOS manchas",
+          lambda: HE.componentes_conexas({0, 15}, 4, 4), lambda c: len(c) == 2)
+
+    # --- analizar: un foco compacto vs ruido disperso (rejilla 6x6, fondo sano) ---
+    def _con_patron(bajos_idx):
+        v = [0.60] * 36
+        for i in bajos_idx:
+            v[i] = 0.20
+        return _grid(v, 6, 6)
+    foco = HE.analizar([_con_patron([0, 1, 2, 6, 7, 8, 12, 13, 14])])   # bloque 3x3 compacto
+    disperso = HE.analizar([_con_patron([0, 5, 14, 21, 30, 35, 9, 18, 27])])  # repartidos
+    check("het-esp: un bloque compacto de pixeles bajos es un FOCO localizado",
+          lambda: foco, lambda r: r["patron"] == "foco localizado" and r["mancha_px"] >= 6)
+    check("het-esp: pixeles bajos repartidos NO son foco (disperso)",
+          lambda: disperso, lambda r: r["patron"] == "disperso")
+    check("het-esp: el foco reporta el tamano de la mancha en ha (9 px de 10 m = 0.09 ha)",
+          lambda: foco["mancha_ha"], lambda r: abs(r - 0.09) < 1e-6)
+
+    # --- persistencia: el mismo foco en dos fechas seguidas ---
+    dos = HE.analizar([_con_patron([0, 1, 6, 7]), _con_patron([0, 1, 6, 7])])
+    check("het-esp: un foco que se repite entre fechas se marca como persistente",
+          lambda: dos.get("persistencia"), lambda r: r == 1.0)
+
+    # --- arbolado excluido del juicio: dehesa con encinas verdes no es un foco ---
+    # El cultivo herbaceo OSCILA con la estacion; las encinas se quedan planas y altas.
+    ciclo = [0.30, 0.45, 0.60, 0.65, 0.50, 0.30]     # NDVI del pasto a lo largo del ano
+    dehesa = []
+    for f in range(6):
+        v = [ciclo[f]] * 36
+        for i in (0, 7, 14):        # encinas: siempre verdes y planas
+            v[i] = 0.60
+        dehesa.append(_grid(v, 6, 6))
+    res_deh = HE.analizar(dehesa, arbolado=True)
+    check("het-esp: en dehesa, las encinas se cuentan como arbolado y se excluyen",
+          lambda: res_deh, lambda r: r["n_arbolado"] == 3 and r["patron"] == "uniforme")
+    res_sin = HE.analizar(dehesa, arbolado=False)
+    check("het-esp: sin marcar arbolado, las encinas NO se excluyen (siguen contando)",
+          lambda: res_sin, lambda r: r["n_arbolado"] == 0)
+
+
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
@@ -3421,7 +3486,8 @@ def main():
               pruebas_informe_anual, _informe_anual_error, pruebas_geo, pruebas_bitacora, pruebas_estadisticas, pruebas_rutas, pruebas_gee_cliente, pruebas_rejilla_descarga,
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
               pruebas_escala_indices, pruebas_clima, pruebas_repaso,
-              pruebas_vista_ficha, pruebas_grados_dia, pruebas_balance_hidrico):
+              pruebas_vista_ficha, pruebas_grados_dia, pruebas_balance_hidrico,
+              pruebas_heterogeneidad_espacial):
         try:
             f()
         except Exception as e:
