@@ -3283,9 +3283,12 @@ def pruebas_grados_dia():
           lambda: G.hay_referencia_gdd("VEZA"), lambda r: r is False)
 
     # --- con clima real (base sintetica) + override en el diagnostico ---
+    try:
+        import clima_era5 as C
+    except Exception:
+        return          # sin el modulo de clima no hay integracion que probar; el nucleo ya se probo
     d = tempfile.mkdtemp()
     DB.conectar(os.path.join(d, "gdd.db"))
-    import clima_era5 as C
     coords = [[-4.1, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.1, 41.66]]
     DB.guardar_ficha("PG", {"propietario": "x", "coordenadas": coords, "superficie_ha": 10})
     punto = C.punto_de(coords)
@@ -3341,9 +3344,12 @@ def pruebas_balance_hidrico():
           lambda t: "mm" in t and "días" in t and "muy seco" in t)
 
     # --- integracion con el clima real + gancho en el diagnostico ---
+    try:
+        import clima_era5 as C
+    except Exception:
+        return          # sin el modulo de clima no hay integracion que probar; el nucleo ya se probo
     d = tempfile.mkdtemp()
     DB.conectar(os.path.join(d, "bh.db"))
-    import clima_era5 as C
     coords_s = [[-4.1, 41.65], [-4.09, 41.65], [-4.09, 41.66], [-4.1, 41.66]]
     coords_h = [[-3.1, 42.65], [-3.09, 42.65], [-3.09, 42.66], [-3.1, 42.66]]
     DB.guardar_ficha("SECA", {"propietario": "x", "coordenadas": coords_s, "superficie_ha": 10})
