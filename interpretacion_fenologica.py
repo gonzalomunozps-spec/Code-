@@ -314,7 +314,10 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                 fase_esp = fo
                 fase, lo, hi, caida_ok = fo["fase"], fo["lo"], fo["hi"], fo["caida"]
         except Exception:
-            pass
+            # el override por GDD es opcional: si falla, se sigue con el calendario.
+            # Se deja rastro en debug para poder diagnosticar un fallo del gancho sin
+            # molestar al usuario ni cambiar el comportamiento.
+            log.debug("no se pudo aplicar el override por grados-dia", exc_info=True)
     if fase_esp is None:
         fase, lo, hi, caida_ok = fase_fenologica(tipo, subtipo, fecha)
 
@@ -533,7 +536,9 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                 if suprimir:
                     ndmi_min = None
         except Exception:
-            pass
+            # el contexto de sequia es opcional: si falla, el NDMI escala como siempre.
+            # Rastro en debug para diagnosticar sin cambiar el comportamiento.
+            log.debug("no se pudo aplicar el contexto de sequia comarcal", exc_info=True)
     if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not esperado:
         # el listón calibrado por el usuario, si lo hay, manda sobre el de la tabla
         como = (f"negativo ({ndmi:+.3f})" if ndmi_min == 0.0 else
