@@ -644,7 +644,10 @@ class DialogoObservacionCampo(tk.Toplevel):
         if len(obs) <= 2:
             return messagebox.showwarning("Sin datos", "Anota al menos un dato: fase, rendimiento, "
                                           "humedad o lectura de dron.", parent=self)
-        DB.registrar_observacion(self.ficha.nombre, self.ficha.campana, obs)
+        # la observacion cae en la campana de SU fecha, no en la que se esta viendo:
+        # asi se pueden anotar datos de campanas anteriores sin cambiar de ano.
+        campana = REG.campana_de_fecha(fecha, self.ficha.campana)
+        DB.registrar_observacion(self.ficha.nombre, campana, obs)
         self.destroy()
         if callable(self.al_terminar):
             self.al_terminar()

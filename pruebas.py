@@ -3677,6 +3677,20 @@ def pruebas_observaciones_campo():
     check("obs-campo: el resumen nunca rompe y lista lo anotado",
           lambda: res["n_obs"], lambda r: r == 1)
 
+    # enrutado por fecha: una observacion de una campana anterior cae en SU ano,
+    # no en el que se esta viendo (la fecha del dialogo manda)
+    import registro_parcela as REG
+    check("obs-campo: la fecha decide la campana (un ano anterior no se ve igual)",
+          lambda: REG.campana_de_fecha("2019-05-01", "2024") != REG.campana_de_fecha("2024-05-01", "2024"),
+          lambda r: r is True)
+    camp_2019 = REG.campana_de_fecha("2019-05-01", "2024")
+    DB.registrar_observacion("Obs1", camp_2019,
+                             {"fecha": "2019-05-01", "fuente": "campo", "fase_obs": "madurez"})
+    check("obs-campo: la observacion antigua se archiva en su propia campana",
+          lambda: len(DB.observaciones_de("Obs1", camp_2019)), lambda r: r == 1)
+    check("obs-campo: y sigue visible en el resumen de la parcela (todas las campanas)",
+          lambda: VF.resumen_validacion("Obs1")["n_obs"], lambda r: r == 2)
+
     # empareja dron<->satelite cuando hay pasadas cercanas con NDVI (2 puntos: la
     # regresion necesita al menos dos para poder trazar la recta)
     DB.anadir_pasadas("Obs2", "2024", [{"fecha": "2024-06-02", "ndvi": 0.55},
@@ -3697,10 +3711,11 @@ def pruebas_observaciones_campo():
     except Exception:
         pass
 
-    # limpieza en cascada: borrar la campana se lleva las observaciones
+    # limpieza en cascada: borrar UNA campana se lleva solo SUS observaciones; las
+    # de otras campanas (la antigua de 2019) siguen intactas
     DB.eliminar_campana("Obs1", "2024")
-    check("obs-campo: borrar la campana arrastra sus observaciones",
-          lambda: len(DB.observaciones("Obs1")), lambda r: r == 0)
+    check("obs-campo: borrar la campana arrastra solo las observaciones de ese ano",
+          lambda: [o.get("campana") for o in DB.observaciones("Obs1")], lambda r: r == [camp_2019])
 
 
 # =====================================================================

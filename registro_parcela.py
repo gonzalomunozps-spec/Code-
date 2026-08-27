@@ -103,6 +103,19 @@ def campana_de_evento(tipo, iso, campana_vista):
         return campana_vista
 
 
+def campana_de_fecha(iso, campana_vista):
+    """Campana de una OBSERVACION DE CAMPO, SIEMPRE por la fecha en que se tomo el
+    dato. A diferencia de un evento del cuaderno, una observacion es intrinseca a
+    un momento: si anotas una lectura de una campana anterior, cae en su ano, no
+    en el que estas viendo. Una fecha ilegible se queda en la vista, sin romper."""
+    if not iso:
+        return campana_vista
+    try:
+        return campana_actual(datetime.strptime(iso, "%Y-%m-%d"))
+    except (TypeError, ValueError):
+        return campana_vista
+
+
 def _num_es(v, dec=0):
     """Numero en castellano: miles con punto, decimales con coma."""
     return f"{v:,.{dec}f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
