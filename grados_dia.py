@@ -141,13 +141,18 @@ def etiqueta_integral(it):
     nombre = {"tiempo_termico": "Tiempo térmico", "directo": "Directo (Reaumur)",
               "exponencial": "Exponencial", "heliotermico": "Heliotérmica"}.get(m, m)
     if m == "directo":
-        return nombre                               # base 0 implicita
-    if m == "exponencial":
-        return f"{nombre} (ref. 4,5 °C)"
-    if m == "heliotermico":
-        return f"{nombre} (Tm × horas de luz)"
-    extra = f", tope {tope:.0f} °C" if tope is not None else ""
-    return f"{nombre} (cero veg. {to:.0f} °C{extra})"
+        base = nombre                               # base 0 implicita
+    elif m == "exponencial":
+        base = f"{nombre} (ref. 4,5 °C)"
+    elif m == "heliotermico":
+        base = f"{nombre} (Tm × horas de luz)"
+    else:
+        extra = f", tope {tope:.0f} °C" if tope is not None else ""
+        base = f"{nombre} (cero veg. {to:.0f} °C{extra})"
+    val = (it or {}).get("valor_gdd")
+    if val not in (None, ""):
+        base += f"  ·  {float(val):.0f} °C·día"
+    return base
 
 
 # Compatibilidad hacia atras: codigo viejo podia llamar a estas. `etiqueta_metodo`
@@ -277,11 +282,61 @@ def hay_referencia_gdd(especie):
     return especie in GDD_FASES
 
 
-def fase_por_gdd(especie, gdd_acumulado):
+def _primera_fase(especie):
+    """El nombre de la primera fase de la especie (para anclar en 0 una tabla de
+    hitos hecha por el usuario). None si no se reconoce el cultivo."""
+    tabla = GDD_FASES.get(especie)
+    if tabla:
+        return tabla[0][1]
+    info = FEN.EXTENSIVO_ESPECIES.get(especie)
+    if info and info.get("fases"):
+        return info["fases"][0][2]
+    return None
+
+
+def hitos_de_parcela(integrales, especie):
+    """Tabla de hitos {gdd_acumulado_desde_siembra: fase} construida con los VALORES
+    que el usuario dio a sus integrales, encadenando tramos desde la siembra.
+
+    Sirve para AFINAR: si el usuario mide en SU parcela que de nascencia a espigado
+    van 950 °C·dia (y no los 1000 de tabla), esta funcion lo recoge y esos hitos
+    MANDAN sobre la bibliografia. Devuelve [] si no hay ningun tramo con valor
+    encadenable desde la siembra (entonces se usa `GDD_FASES`)."""
+    segs = [(it.get("desde"), it.get("hasta"), it.get("valor_gdd"))
+            for it in integrales or [] if it.get("valor_gdd") not in (None, "")]
+    if not segs:
+        return []
+    inicio = {"siembra", "nascencia", "emergencia"}
+    usados = [False] * len(segs)
+    tabla, acc, punto = [], 0.0, None            # punto None = todavia en la siembra
+    while True:
+        avanzo = False
+        for i, (d, h, v) in enumerate(segs):
+            if usados[i]:
+                continue
+            en_siembra = punto is None and (d or "").strip().lower() in inicio
+            if (en_siembra or d == punto) and h:
+                acc += float(v)
+                tabla.append((round(acc, 1), h))
+                punto, usados[i], avanzo = h, True, True
+                break
+        if not avanzo:
+            break
+    if not tabla:
+        return []
+    prim = _primera_fase(especie)              # ancla en 0 con la fase de arranque
+    if prim and tabla[0][0] > 0:
+        tabla = [(0.0, prim)] + tabla
+    return tabla
+
+
+def fase_por_gdd(especie, gdd_acumulado, hitos=None):
     """Nombre de fase segun el GDD acumulado desde la siembra. None si no hay tabla.
 
-    Se elige la ULTIMA fase cuyo umbral de arranque ya se ha superado."""
-    tabla = GDD_FASES.get(especie)
+    `hitos` (opcional) es una tabla propia de la parcela [(umbral, fase), ...]; si
+    se da, MANDA sobre la bibliografia. Se elige la ULTIMA fase cuyo umbral ya se
+    ha superado."""
+    tabla = hitos if hitos else GDD_FASES.get(especie)
     if not tabla or gdd_acumulado is None:
         return None
     nombre = tabla[0][1]
@@ -293,9 +348,10 @@ def fase_por_gdd(especie, gdd_acumulado):
     return nombre
 
 
-def gdd_hasta_siguiente(especie, gdd_acumulado):
-    """Cuantos grados-dia faltan para la fase siguiente (o None si es la ultima)."""
-    tabla = GDD_FASES.get(especie)
+def gdd_hasta_siguiente(especie, gdd_acumulado, hitos=None):
+    """Cuantos grados-dia faltan para la fase siguiente (o None si es la ultima).
+    Usa `hitos` propios de la parcela si se dan; si no, la bibliografia."""
+    tabla = hitos if hitos else GDD_FASES.get(especie)
     if not tabla or gdd_acumulado is None:
         return None
     for umbral, _fase in tabla:
@@ -318,14 +374,15 @@ def _fila_de_fase(especie, nombre_fase):
     return None
 
 
-def fase_desde_gdd(especie, gdd_acumulado):
+def fase_desde_gdd(especie, gdd_acumulado, hitos=None):
     """El MISMO dict que `fenologia_especies.fase_extensivo`, pero con la fase
     elegida por GDD en vez de por dias. Reusa el rango de indice y los umbrales de
     esa fase (no se inventa ninguno). None si no se puede (sin tabla o sin dato).
 
+    `hitos` (opcional): tabla propia de la parcela que manda sobre la bibliografia.
     `das` se deja como None a proposito: aqui el reloj es el GDD, no los dias; se
     devuelve `gdd` para que quien quiera lo muestre."""
-    fase = fase_por_gdd(especie, gdd_acumulado)
+    fase = fase_por_gdd(especie, gdd_acumulado, hitos)
     fila = _fila_de_fase(especie, fase) if fase else None
     if not fila:
         return None
@@ -404,19 +461,22 @@ def fase_override(tipo, especie, spec, fecha_iso, parcela):
     Es el gancho que llama el motor. Solo actua si TODO se cumple:
       - es un EXTENSIVO (en lenosos la fenologia va por mes, no por GDD),
       - la parcela tiene integrales termicas definidas (el usuario lo pidio),
-      - la especie tiene hitos de GDD (`GDD_FASES`),
+      - hay hitos de GDD: los del usuario (`valor_gdd` encadenados) o los de tabla,
       - y hay clima real para acumular.
-    Si algo falta, devuelve None y el motor sigue con el calendario."""
+    Si algo falta, devuelve None y el motor sigue con el calendario. Los hitos del
+    usuario, si existen, mandan sobre la bibliografia (afinar por parcela)."""
     if tipo != "EXTENSIVO":
         return None
-    if not (spec or {}).get("integrales_termicas"):
+    integrales = (spec or {}).get("integrales_termicas")
+    if not integrales:
         return None
-    if not hay_referencia_gdd(especie):
+    hitos = hitos_de_parcela(integrales, especie)
+    if not hitos and not hay_referencia_gdd(especie):
         return None
     ac = gdd_acumulado(especie, spec, fecha_iso, parcela)
     if ac is None:
         return None
-    return fase_desde_gdd(especie, ac["gdd"])
+    return fase_desde_gdd(especie, ac["gdd"], hitos or None)
 
 
 def resumen_parcela(tipo, especie, spec, fecha_iso, parcela):
@@ -427,17 +487,24 @@ def resumen_parcela(tipo, especie, spec, fecha_iso, parcela):
     if not integrales:
         return None
     ac = gdd_acumulado(especie, spec, fecha_iso, parcela)
-    hitos = dict((f, g) for g, f in GDD_FASES.get(especie, []))
+    biblio = dict((f, g) for g, f in GDD_FASES.get(especie, []))
+    hitos_usuario = hitos_de_parcela(integrales, especie)
     filas = []
     for it in integrales:
         met, cv, tope = params_integral(it)
         d, h = it.get("desde", "siembra"), it.get("hasta", "cosecha")
-        ref = None
-        if d in hitos and h in hitos:
-            ref = round(hitos[h] - hitos[d], 0)
+        # referencia del tramo: TU valor si lo diste; si no, el de bibliografia
+        val = it.get("valor_gdd")
+        if val not in (None, ""):
+            ref, fuente = round(float(val), 0), "tuyo"
+        elif d in biblio and h in biblio:
+            ref, fuente = round(biblio[h] - biblio[d], 0), "bibliografía"
+        else:
+            ref, fuente = None, None
         filas.append({"metodo": etiqueta_integral(it), "metodo_clave": met,
-                      "cero_vegetativo": cv, "tope": tope,
-                      "desde": d, "hasta": h, "referencia_gdd": ref})
+                      "cero_vegetativo": cv, "tope": tope, "valor_gdd": val,
+                      "desde": d, "hasta": h,
+                      "referencia_gdd": ref, "referencia_fuente": fuente})
     met_fase = params_integral(_integral_para_fase(integrales, especie))[0]
     return {
         "gdd_acumulado": ac["gdd"] if ac else None,
@@ -447,8 +514,10 @@ def resumen_parcela(tipo, especie, spec, fecha_iso, parcela):
         # los hitos de fase estan en °día de tiempo termico: con otro metodo las
         # unidades no casan y la fase por GDD es orientativa (el usuario lo eligio).
         "aviso_metodo": met_fase != "tiempo_termico",
-        "fase_gdd": fase_por_gdd(especie, ac["gdd"]) if ac else None,
-        "faltan_siguiente": gdd_hasta_siguiente(especie, ac["gdd"]) if ac else None,
-        "hay_referencia": hay_referencia_gdd(especie),
+        "hitos_propios": bool(hitos_usuario),      # ¿la fase la marcan TUS valores?
+        "fase_gdd": fase_por_gdd(especie, ac["gdd"], hitos_usuario or None) if ac else None,
+        "faltan_siguiente": (gdd_hasta_siguiente(especie, ac["gdd"], hitos_usuario or None)
+                             if ac else None),
+        "hay_referencia": hay_referencia_gdd(especie) or bool(hitos_usuario),
         "integrales": filas,
     }

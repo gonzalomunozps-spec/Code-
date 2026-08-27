@@ -15,7 +15,7 @@ Recibe el panel como ARGUMENTO (`panel.guardar_parcela`), no lo importa.
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from ui_tema import TEMA, FUENTES, geom, tarjeta, centrar_sobre, marco_scroll
+from ui_tema import TEMA, FUENTES, esc, geom, tarjeta, centrar_sobre, marco_scroll
 
 import almacen as DB
 import fenologia_especies as FEN
@@ -63,7 +63,7 @@ class VentanaAltaParcela(tk.Toplevel):
         self.editar = editar                       # nombre de la parcela a editar (o None = alta)
         self.campana_edit = campana or panel.campana
         self.title("Editar parcela" if editar else "Nueva parcela")
-        self.geometry(geom(1000, 600))
+        self.geometry(geom(1180, 660))
         self.configure(bg=TEMA["page"])
         self.coords = []
         self.poligono = None
@@ -89,7 +89,10 @@ class VentanaAltaParcela(tk.Toplevel):
         cuerpo = tk.Frame(self, bg=TEMA["page"])
         cuerpo.pack(fill="both", expand=True, padx=14, pady=14)
 
-        form_card = tarjeta(cuerpo, width=360)
+        # ancho de la columna de datos escalado por DPI: con un ancho fijo en px,
+        # en pantallas de alta densidad el formulario se quedaba estrecho y los
+        # campos (SIGPAC, integrales) se cortaban. El mapa cede ese espacio.
+        form_card = tarjeta(cuerpo, width=esc(440))
         form_card.pack(side="left", fill="y")
         form_card.pack_propagate(False)
         cont_form, form = marco_scroll(form_card, bg=TEMA["surface"], rueda_global=True)
@@ -428,6 +431,15 @@ class VentanaAltaParcela(tk.Toplevel):
                  font=FUENTES["small"]).pack(anchor="w")
         self.cb_int_hasta = ttk.Combobox(chasta, values=[])
         self.cb_int_hasta.pack(fill="x")
+        # VALOR de la integral entre esos dos estados (°C·día), opcional. Si lo das,
+        # AFINA: manda sobre la referencia de bibliografia, y si encadenas tramos
+        # desde la siembra, la fase por GDD usa TUS valores en vez de los de tabla.
+        cval = tk.Frame(fila, bg=TEMA["surface"])
+        cval.pack(side="left", padx=(6, 0))
+        tk.Label(cval, text="Valor (°C·día)", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w")
+        self.e_int_valor = ttk.Entry(cval, width=10)
+        self.e_int_valor.pack(fill="x")
 
         ttk.Button(caja, text="Añadir integral", command=self._anadir_integral).pack(
             fill="x", padx=8, pady=(6, 4))
@@ -474,19 +486,24 @@ class VentanaAltaParcela(tk.Toplevel):
         desde = (self.cb_int_desde.get() or "").strip() or "siembra"
         hasta = (self.cb_int_hasta.get() or "").strip() or "cosecha"
         it = {"metodo": clave, "desde": desde, "hasta": hasta}
-        # cero vegetativo y tope: solo tienen sentido con el tiempo termico
-        if clave == "tiempo_termico":
-            try:
+        try:
+            # cero vegetativo y tope: solo tienen sentido con el tiempo termico
+            if clave == "tiempo_termico":
                 it["cero_vegetativo"] = self._num_opc(self.e_int_cv.get(), "cero vegetativo",
                                                       por_defecto=_GDD.cero_vegetativo(self.cb_sub.get()))
                 tope = self._num_opc(self.e_int_tope.get(), "tope")
                 if tope is not None:
                     it["tope"] = tope
-            except ValueError as e:
-                return messagebox.showwarning("Integral térmica",
-                                              f"Revisa «{e}»: escribe un número (o déjalo vacío).",
-                                              parent=self)
+            # VALOR de la integral entre los dos estados (°C·día), para afinar
+            valor = self._num_opc(self.e_int_valor.get(), "valor")
+            if valor is not None:
+                it["valor_gdd"] = valor
+        except ValueError as e:
+            return messagebox.showwarning("Integral térmica",
+                                          f"Revisa «{e}»: escribe un número (o déjalo vacío).",
+                                          parent=self)
         self.integrales.append(it)
+        self.e_int_valor.delete(0, tk.END)
         self._pintar_lista_integrales()
 
     @staticmethod

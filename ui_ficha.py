@@ -803,6 +803,9 @@ class FichaParcela:
                           "marcando el calendario.)")
         elif spec.get("integrales_termicas"):
             partes.append("Con integral definida, la fase del diagnóstico la marca el GDD.")
+            if res.get("hitos_propios"):
+                partes.append("Afinado con tus valores de GDD entre estados (mandan sobre la "
+                              "tabla de bibliografía).")
             if res.get("aviso_metodo"):
                 partes.append("⚠ El método elegido no es «tiempo térmico»: sus unidades no "
                               "coinciden con los hitos de fase (en °C·día), así que la fase por "
@@ -831,12 +834,14 @@ class FichaParcela:
         it = filas[i]
         ref = it.get("referencia_gdd")
         if ref is not None:
+            fuente = it.get("referencia_fuente")
+            de_quien = ("tu valor" if fuente == "tuyo" else "referencia de bibliografía")
             txt = (f"De «{it['desde']}» a «{it['hasta']}» ({it['metodo']}): "
-                   f"referencia de bibliografía ≈ {ref:.0f} °C·día. "
+                   f"{de_quien} ≈ {ref:.0f} °C·día. "
                    "Compárala con el acumulado real para ver si el cultivo va adelantado o atrasado.")
         else:
             txt = (f"De «{it['desde']}» a «{it['hasta']}» ({it['metodo']}): "
-                   "sin referencia de bibliografía para ese tramo (los extremos deben ser "
+                   "sin referencia para ese tramo (dale un valor °C·día, o pon como extremos "
                    "fases conocidas del cultivo).")
         self.lbl_gdd_ref.config(text=txt)
 

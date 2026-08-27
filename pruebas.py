@@ -3379,6 +3379,25 @@ def pruebas_grados_dia():
     check("gdd: sin latitud no hay horas de luz (None)",
           lambda: G.horas_luz(None, "2026-06-21"), lambda r: r is None)
 
+    # --- afinar: valores de GDD del usuario entre estados, encadenados ---
+    ints_u = [{"metodo": "tiempo_termico", "desde": "siembra", "hasta": "ahijado", "valor_gdd": 200},
+              {"metodo": "tiempo_termico", "desde": "ahijado", "hasta": "encanado", "valor_gdd": 350}]
+    check("gdd: los valores del usuario encadenan hitos acumulados desde la siembra",
+          lambda: G.hitos_de_parcela(ints_u, "TRIGO"),
+          lambda r: r == [(0.0, "nascencia"), (200.0, "ahijado"), (550.0, "encanado")])
+    check("gdd: con hitos propios, la fase la marcan TUS umbrales (250 -> ahijado)",
+          lambda: G.fase_por_gdd("TRIGO", 250, G.hitos_de_parcela(ints_u, "TRIGO")),
+          lambda r: r == "ahijado")
+    check("gdd: sin cadena desde la siembra no hay hitos propios (se usa bibliografia)",
+          lambda: G.hitos_de_parcela(
+              [{"desde": "encanado", "hasta": "espigado / floracion", "valor_gdd": 400}], "TRIGO"),
+          lambda r: r == [])
+    check("gdd: una integral sin valor no aporta hitos propios",
+          lambda: G.hitos_de_parcela([{"desde": "siembra", "hasta": "ahijado"}], "TRIGO"),
+          lambda r: r == [])
+    check("gdd: la etiqueta de la integral muestra el valor si se dio",
+          lambda: G.etiqueta_integral(ints_u[0]), lambda t: "200 °C·día" in t)
+
     # --- con clima real (base sintetica) + override en el diagnostico ---
     try:
         import clima_era5 as C
@@ -3422,6 +3441,15 @@ def pruebas_grados_dia():
           lambda: G.gdd_acumulado("TRIGO", spec_de(cult_cv), "2026-04-01", "PG")["gdd"]
                   < G.gdd_acumulado("TRIGO", spec_de(cult_g), "2026-04-01", "PG")["gdd"],
           lambda r: r is True)
+    # el valor del usuario se muestra como referencia "tuya" y marca hitos propios
+    cult_val = dict(cult, integrales_termicas=[
+        {"metodo": "tiempo_termico", "cero_vegetativo": 0.0, "desde": "nascencia",
+         "hasta": "espigado / floracion", "valor_gdd": 950}])
+    check("gdd: el resumen usa TU valor como referencia del tramo (no el de tabla)",
+          lambda: G.resumen_parcela("EXTENSIVO", "TRIGO", spec_de(cult_val), "2026-04-01", "PG"),
+          lambda r: r and r["integrales"][0]["referencia_gdd"] == 950
+                    and r["integrales"][0]["referencia_fuente"] == "tuyo"
+                    and r["hitos_propios"] is True)
 
 
 def pruebas_balance_hidrico():
