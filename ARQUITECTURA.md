@@ -96,7 +96,9 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_tema.py` | Colores, fuentes, escala por DPI, icono, carga perezosa de matplotlib y ayudantes de maquetación. **No importa nada del programa.** |
 | `ui_widgets.py` | `LienzoMapa`, `CampoFecha`, `PopupCalendario`: los widgets que usa más de una pantalla. |
 | `ui_dialogos.py` | Los modales que abre la ficha (corrección, validación por índice, sincronizar campañas, efecto del producto). |
-| `ui_ficha.py` | `FichaParcela`, `VentanaRadar` y la comparación de mapas. |
+| `ui_ficha.py` | `FichaParcela` (armazón: `__init__`/`refrescar`, tabla, mapa, gráfica, interpretación, estadísticas), `VentanaRadar` y la comparación de mapas. Para no ser un fichero gigante, `FichaParcela` **se compone de mixins por sección**: `CuadernoMixin` (`ficha_cuaderno`), `ClimaGddMixin` (`ficha_clima_gdd`), `ValidacionMixin` (`ficha_validacion`) y `ExportMixin` (`ficha_export`). Mismo `self`, mismos métodos; solo cambia dónde vive el código. |
+| `ficha_comun.py` | Constantes de presentación (formatos de fecha, colores/etiquetas de evento, resoluciones de mapa) y ayudantes sueltos (`_abrir_archivo`, `tooltip_pasada`) que comparten `ui_ficha` y sus mixins. Viven aquí para que los mixins los importen sin crear un ciclo con `ui_ficha`. |
+| `ficha_cuaderno.py` / `ficha_clima_gdd.py` / `ficha_validacion.py` / `ficha_export.py` | Los mixins de `FichaParcela`: cuaderno de campo y rendimientos; clima/balance/grados-día; observaciones de campo y su nota; informes y Excel. Cada uno importa lo suyo (con `try/except` para los módulos opcionales que use). |
 | `ui_alta.py` | Alta/edición de parcela (SIGPAC y dibujo a mano) y relevo de campaña. |
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |

@@ -11,8 +11,22 @@ La ficha de una parcela y las ventanas que salen de ella:
   VentanaComparaMapas dos mapas de la misma parcela, lado a lado
   VentanaRadar        Sentinel-1: graficas de VV/VH/CR/RVI y mapa de radar
 
-Es la pantalla mas grande del programa y por eso tiene modulo propio. Abre los
-dialogos de `ui_dialogos` pasandose a si misma; ellos no la importan.
+Es la pantalla mas grande del programa y por eso tiene modulo propio. Para que no
+sea un unico fichero gigante, `FichaParcela` se compone de MIXINS por seccion, en
+ficheros aparte (mismo `self`, mismos nombres de metodo; solo cambia donde vive el
+codigo, no que hace):
+
+  CuadernoMixin   (ficha_cuaderno)    cuaderno de campo y rendimientos
+  ClimaGddMixin   (ficha_clima_gdd)   clima ERA5, balance hidrico y grados-dia
+  ValidacionMixin (ficha_validacion)  observaciones de campo y su nota
+  ExportMixin     (ficha_export)      informes de balance/tecnico y Excel
+
+Las constantes y ayudantes de presentacion compartidos viven en `ficha_comun`
+(para que los mixins los importen sin crear un ciclo con `ui_ficha`). Lo que queda
+aqui es el armazon: `__init__`/`refrescar`, la tabla, el mapa, la grafica, la
+interpretacion y las estadisticas, mas las ventanas auxiliares.
+
+Abre los dialogos de `ui_dialogos` pasandose a si misma; ellos no la importan.
 
 OJO: `FichaParcela`, `LienzoMapa` y `PanelMapaComparado` NO son widgets: son
 clases normales que pintan sobre un `master`. Pasarles `self` como padre de un
@@ -25,15 +39,18 @@ import threading
 from datetime import datetime
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 
 import ui_tema
 from ui_tema import (TEMA, FUENTES, esc, geom, tarjeta, centrar_sobre,
                      marco_scroll, enlazar_rueda, color_serie)
 from ui_widgets import LienzoMapa
 from ui_dialogos import (DialogoCorreccion, DialogoValidacionIndices, DialogoBorrarCampana,
-                         DialogoSincronizarCampanas, DialogoEfectoProducto,
-                         DialogoObservacionCampo)
+                         DialogoSincronizarCampanas)
+from ficha_cuaderno import CuadernoMixin
+from ficha_clima_gdd import ClimaGddMixin
+from ficha_validacion import ValidacionMixin
+from ficha_export import ExportMixin
 
 import almacen as DB
 import registro_parcela as REG
@@ -48,11 +65,10 @@ from interpretacion_fenologica import (evaluar_parcela, texto_interpretacion,
                                        ambito_parcela)
 from campanas import campanas_de_parcela, etiqueta_campana, PRIMERA_CAMPANA_S2
 from cultivo import spec_de
-from vista_ficha import preparar_interpretacion, resumen_validacion
+from vista_ficha import preparar_interpretacion
 from bitacora import log
 import sincronizacion
 from sincronizacion import ULTIMO_SYNC
-from ui_widgets import CampoFecha
 
 import importlib.util
 # Aqui solo hace falta SABER si Pillow esta; quien pinta imagenes es `ui_widgets`.
@@ -86,72 +102,10 @@ try:
 except Exception:
     _VAL = None
 
-_EE = gee_cliente.hay_ee()
-
-
-
-
-def _abrir_archivo(ruta):
-    """Abre un fichero con la aplicacion por defecto del sistema (multiplataforma)."""
-    import platform
-    import subprocess
-    try:
-        sistema = platform.system()
-        if sistema == "Windows":
-            os.startfile(ruta)                                   # noqa: solo en Windows
-        elif sistema == "Darwin":
-            subprocess.Popen(["open", ruta])
-        else:
-            subprocess.Popen(["xdg-open", ruta])
-    except Exception:
-        log.warning("no se pudo abrir %s con la aplicacion del sistema", ruta, exc_info=True)
-
-
-# Constantes de presentacion (se definen UNA vez, no en cada llamada/redibujado).
-_FMT_DIAS = ("lun", "mar", "mie", "jue", "vie", "sab", "dom")
-_FMT_MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
-# color y etiqueta de cada tipo de evento del cuaderno para las lineas de la grafica
-# Los eventos del cuaderno se marcan sobre la grafica como lineas verticales de
-# apoyo. NO llevan color propio: siete colores mas, encima de hasta ocho series de
-# datos, se comen el canal que sirve para saber que curva es cual. Van en tinta
-# apagada y se distinguen por su ETIQUETA, que es lo que se lee de todas formas.
-_NOMBRE_EVENTO = {"PRODUCTO": "Producto", "SIEGA": "Siega", "COSECHA": "Cosecha",
-                  "RIEGO": "Riego", "LABOREO": "Laboreo", "SIEMBRA": "Siembra",
-                  "OTRO": "Evento"}
-
-
-# --- texto emergente de la grafica: valores de los indices y fiabilidad del dia ---
-def tooltip_pasada(reg):
-    """Texto multilinea con los indices de una pasada y su fiabilidad (cobertura
-    valida de pixeles tras enmascarar nubes/sombra)."""
-    if not reg:
-        return ""
-    lineas = [reg.get("fecha", "")]
-    for K in INDICES_ORDEN:
-        v = reg.get(K.lower())
-        if v is not None:
-            lineas.append(f"{K}: {v:.3f}")
-    cob = reg.get("cobertura_valida")
-    if cob is not None:
-        pct = cob * 100 if cob <= 1 else cob
-        etiqueta = "alta" if pct >= 95 else "media" if pct >= 85 else "baja"
-        lineas.append(f"Fiabilidad: {pct:.0f}% ({etiqueta})")
-    return "\n".join(lineas)
-
-# (los colores de serie viven en PALETA_DATOS; se piden con `color_serie`)
-# indices que se muestran por defecto en la grafica (los demas, a eleccion)
-INDICES_GRAFICA_DEF = ["NDVI", "EVI", "SAVI", "NDMI"]
-
-# Resoluciones de descarga del mapa: (etiqueta, metros por pixel)
-# 10 m = nativo de Sentinel-2 en B2/B3/B4/B8. NDMI y MSAVI usan B11 (20 m nativos),
-# asi que por debajo de 20 m esos dos indices se remuestrean, no ganan detalle real.
-RESOLUCIONES = [
-    ("5 m (sobremuestreo)", 5),
-    ("10 m (nativo S2)", 10),
-    ("20 m (rapido)", 20),
-    ("60 m (vista rapida)", 60),
-]
-# MAX_PIXELES y dimensiones_para viven en gee_cliente.
+# Constantes de presentacion y ayudantes sueltos: viven en `ficha_comun` para que
+# los mixins de la ficha los compartan sin crear un ciclo de imports.
+from ficha_comun import (_PIL, _EE, _FMT_DIAS, _FMT_MESES, _NOMBRE_EVENTO,
+                         tooltip_pasada, INDICES_GRAFICA_DEF, RESOLUCIONES)
 
 
 class PanelMapaComparado:
@@ -451,7 +405,7 @@ class VentanaRadar(tk.Toplevel):
                                                             TEMA["danger_fg"]))
 
 
-class FichaParcela:
+class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
     def __init__(self, master, panel, nombre, campana):
         self.master, self.panel = master, panel
         self.nombre, self.campana = nombre, campana
@@ -662,207 +616,6 @@ class FichaParcela:
                   ("amplitud", "P90-P10", 66, 2), ("n_pixeles", "PIXELES", 62, 0),
                   ("cobertura_valida", "COB.%", 56, "pct")]
 
-    def _build_clima(self, parent):
-        """Tabla de clima diario de ERA5-Land. SOLO ENSENA DATOS: de momento no
-        mueve ningun diagnostico, ni un umbral, ni una fase."""
-        card = tarjeta(parent)
-        card.pack(fill="both", expand=True)
-        self._titulo(card, "Clima de la comarca (ERA5-Land)")
-        self.lbl_clima = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                                  font=FUENTES["small"], justify="left", anchor="w",
-                                  wraplength=1180)
-        self.lbl_clima.pack(fill="x", padx=12, pady=(0, 4))
-        # CONTEXTO HIDRICO (balance rodante lluvia-ET0): una linea, solo si el modulo
-        # opcional balance_hidrico esta. Es lectura; el mismo dato es el que en el
-        # diagnostico decide si un NDMI bajo se explica por la sequia comarcal.
-        self.lbl_balance = None
-        if _BH is not None:
-            self.lbl_balance = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                                        font=FUENTES["small"], justify="left", anchor="w",
-                                        wraplength=1180)
-            self.lbl_balance.pack(fill="x", padx=12, pady=(0, 4))
-        cols = [c[0] for c in _CLIMA.COLUMNAS]
-        self.tv_clima = ttk.Treeview(card, columns=cols, show="headings", height=6)
-        for clave, titulo, ancho, _dec in _CLIMA.COLUMNAS:
-            self.tv_clima.heading(clave, text=titulo)
-            self.tv_clima.column(clave, width=esc(ancho),
-                                 anchor="w" if clave == "fecha" else "center")
-        sb = ttk.Scrollbar(card, orient="vertical", command=self.tv_clima.yview)
-        self.tv_clima.configure(yscrollcommand=sb.set)
-        self.tv_clima.pack(side="left", fill="both", expand=True, padx=(12, 0), pady=(0, 12))
-        sb.pack(side="right", fill="y", padx=(0, 12), pady=(0, 12))
-        ttk.Button(card, text="  Descargar clima  ",
-                   command=self._sincronizar_clima).pack(side="bottom", anchor="w",
-                                                         padx=12, pady=(0, 8))
-        # GRADOS-DIA (integral termica): seccion OPCIONAL, dentro del clima. Solo
-        # aparece si el modulo grados_dia esta y la parcela tiene integrales.
-        self.gdd_card = None
-        if _GDD is not None:
-            self._build_gdd(parent)
-
-    def _build_gdd(self, parent):
-        """Grados-dia acumulados y las integrales termicas definidas en la parcela.
-
-        Es lectura: ensena el GDD y la fase que sale de el, y deja ELEGIR cual de las
-        integrales definidas se mira, con su referencia de bibliografia. Que la fase
-        del diagnostico la mande el GDD ya lo decide el motor si hay integral; aqui
-        solo se muestra."""
-        card = tarjeta(parent)
-        self.gdd_card = card
-        self._titulo(card, "Grados-día (integral térmica)")
-        self.lbl_gdd = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                                font=FUENTES["small"], justify="left", anchor="w",
-                                wraplength=1180)
-        self.lbl_gdd.pack(fill="x", padx=12, pady=(0, 4))
-        fila = tk.Frame(card, bg=TEMA["surface"])
-        fila.pack(fill="x", padx=12, pady=(0, 8))
-        tk.Label(fila, text="Integral que se mira:", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).pack(side="left")
-        self.cb_gdd = ttk.Combobox(fila, state="readonly", width=48, values=[])
-        self.cb_gdd.pack(side="left", padx=(6, 0))
-        self.cb_gdd.bind("<<ComboboxSelected>>", lambda e: self._pintar_gdd_sel())
-        self.lbl_gdd_ref = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text"],
-                                    font=FUENTES["small"], justify="left", anchor="w",
-                                    wraplength=1180)
-        self.lbl_gdd_ref.pack(fill="x", padx=12, pady=(0, 10))
-
-    def _pintar_clima(self):
-        """Vuelca los dias de clima del punto de rejilla de esta parcela."""
-        if _CLIMA is None or not hasattr(self, "tv_clima") or not self.tv_clima.winfo_exists():
-            return
-        dias = _CLIMA.clima_de_parcela(self.nombre, self.campana)
-        self.tv_clima.delete(*self.tv_clima.get_children())
-        for fila in _CLIMA.filas_tabla(dias):
-            self.tv_clima.insert("", tk.END, values=fila)
-        if dias:
-            self.lbl_clima.config(
-                text=_CLIMA.texto_resumen(_CLIMA.resumen(dias)) +
-                "\n⚠ El pixel de ERA5-Land son 11 km de lado (12.392 ha): TODAS tus "
-                "parcelas de la comarca reciben el mismo dato. Sirve de contexto, no "
-                "para comparar una finca con su vecina. Va con unos 8 dias de retraso.")
-        else:
-            self.lbl_clima.config(
-                text="Sin datos de clima para esta campana. Pulsa «Descargar clima» "
-                     "(hace falta Earth Engine). El dato es de comarca, no de parcela: "
-                     "el pixel de ERA5-Land son 11 km de lado.")
-        self._pintar_balance(dias)
-        self._pintar_gdd(dias)
-
-    def _pintar_balance(self, dias):
-        """Una linea con el balance hidrico rodante de la comarca (lluvia-ET0) y su
-        severidad. Reutiliza los dias ya cargados; no vuelve a la base. Solo si el
-        modulo balance_hidrico esta y hay dias."""
-        if _BH is None or not getattr(self, "lbl_balance", None) or not self.lbl_balance.winfo_exists():
-            return
-        fecha = dias[-1]["fecha"] if dias else None
-        ctx = _BH.contexto(dias, fecha) if fecha else None
-        if not ctx:
-            self.lbl_balance.pack_forget()
-            return
-        self.lbl_balance.pack(fill="x", padx=12, pady=(0, 4))
-        aviso = ("  El déficit prolongado explica un NDMI bajo sin que sea, por sí solo, "
-                 "un problema de esta parcela." if ctx["sequia"] else "")
-        self.lbl_balance.config(text=_BH.texto_contexto(ctx) + aviso)
-
-    def _pintar_gdd(self, dias):
-        """Recalcula y ensena los grados-dia. Solo actua si el modulo esta, la
-        parcela tiene integrales y hay una fecha a la que acumular."""
-        self._gdd_resumen = None
-        if _GDD is None or not getattr(self, "gdd_card", None) or not self.gdd_card.winfo_exists():
-            return
-        cult = self._cultivo_de(self.campana)
-        spec = spec_de(cult)
-        # Sin integrales definidas, esta seccion no aporta nada: se esconde y el
-        # programa sigue con el calendario, como si no existiera.
-        if not spec or not spec.get("integrales_termicas"):
-            self.gdd_card.pack_forget()
-            return
-        self.gdd_card.pack(fill="both", expand=True)
-        fecha = dias[-1]["fecha"] if dias else None
-        res = _GDD.resumen_parcela(cult.get("tipo"), spec.get("especie"), spec, fecha, self.nombre)
-        self._gdd_resumen = res
-        if not res:
-            self.lbl_gdd.config(text="Integrales térmicas definidas, pero aún no hay clima "
-                                     "descargado para acumular grados-día. Pulsa «Descargar clima».")
-            self.cb_gdd["values"] = []
-            self.cb_gdd.set("")
-            self.lbl_gdd_ref.config(text="")
-            return
-        ac = res.get("gdd_acumulado")
-        partes = []
-        if ac is not None:
-            partes.append(f"GDD acumulado desde la siembra: {ac:.0f} °C·día "
-                          f"({res.get('dias', 0)} días" +
-                          (f", {res['huecos']} sin dato" if res.get("huecos") else "") + ").")
-        if res.get("fase_gdd"):
-            partes.append(f"Fase por grados-día: {res['fase_gdd']}.")
-        if res.get("faltan_siguiente") is not None:
-            partes.append(f"Faltan ~{res['faltan_siguiente']:.0f} °C·día para la siguiente fase.")
-        if not res.get("hay_referencia"):
-            partes.append("(Este cultivo no tiene tabla de referencia de GDD: la fase la sigue "
-                          "marcando el calendario.)")
-        elif spec.get("integrales_termicas"):
-            partes.append("Con integral definida, la fase del diagnóstico la marca el GDD.")
-            if res.get("hitos_propios"):
-                partes.append("Afinado con tus valores de GDD entre estados (mandan sobre la "
-                              "tabla de bibliografía).")
-            if res.get("aviso_metodo"):
-                partes.append("⚠ El método elegido no es «tiempo térmico»: sus unidades no "
-                              "coinciden con los hitos de fase (en °C·día), así que la fase por "
-                              "GDD es solo orientativa.")
-        self.lbl_gdd.config(text="  ".join(partes) if partes else
-                            "Sin fecha de siembra o sin clima: no se puede acumular todavía.")
-        etiquetas = [f"{it['desde']} → {it['hasta']}  ·  {it['metodo']}" for it in res.get("integrales", [])]
-        self.cb_gdd["values"] = etiquetas
-        if etiquetas:
-            self.cb_gdd.current(0)
-            self._pintar_gdd_sel()
-        else:
-            self.cb_gdd.set("")
-            self.lbl_gdd_ref.config(text="")
-
-    def _pintar_gdd_sel(self):
-        """Ensena la referencia de bibliografia de la integral elegida en el combo."""
-        res = getattr(self, "_gdd_resumen", None)
-        if not res:
-            return
-        i = self.cb_gdd.current()
-        filas = res.get("integrales", [])
-        if i < 0 or i >= len(filas):
-            self.lbl_gdd_ref.config(text="")
-            return
-        it = filas[i]
-        ref = it.get("referencia_gdd")
-        if ref is not None:
-            fuente = it.get("referencia_fuente")
-            de_quien = ("tu valor" if fuente == "tuyo" else "referencia de bibliografía")
-            txt = (f"De «{it['desde']}» a «{it['hasta']}» ({it['metodo']}): "
-                   f"{de_quien} ≈ {ref:.0f} °C·día. "
-                   "Compárala con el acumulado real para ver si el cultivo va adelantado o atrasado.")
-        else:
-            txt = (f"De «{it['desde']}» a «{it['hasta']}» ({it['metodo']}): "
-                   "sin referencia para ese tramo (dale un valor °C·día, o pon como extremos "
-                   "fases conocidas del cultivo).")
-        self.lbl_gdd_ref.config(text=txt)
-
-    def _sincronizar_clima(self):
-        if _CLIMA is None:
-            return
-        if not _EE:
-            return messagebox.showwarning("Clima", "earthengine-api no disponible.")
-        ficha = self.panel.vista_ficha
-
-        def worker():
-            n, msg = _CLIMA.sincronizar_clima(self.nombre, self.campana, silencioso=True)
-
-            def fin():
-                if not ficha.winfo_exists():
-                    return
-                self._pintar_clima()
-                messagebox.showinfo("Clima", f"{msg}.")
-            ficha.after(0, fin)
-        threading.Thread(target=worker, daemon=True).start()
-
     def _build_estadisticas(self, parent):
         card = tarjeta(parent)
         card.pack(fill="both", expand=True)
@@ -1036,95 +789,6 @@ class FichaParcela:
         self.lbl_hetero.config(text="  ".join(partes) if partes else
                                "Sin datos suficientes para el análisis de zonas "
                                "(hacen falta varias pasadas con rejilla de píxeles).")
-
-    def _build_validacion(self, parent):
-        """Tarjeta de VALIDACION: lista las observaciones de campo (verdad-terreno)
-        y, si hay con que emparejar, la nota del sistema (aciertos de fase, error
-        del GDD, R² indice<->rendimiento, dron<->satelite). Solo lectura; el boton
-        de anotar vive en la cabecera de la ficha."""
-        card = tarjeta(parent)
-        card.pack(fill="x")
-        self._titulo(card, "Validacion con observaciones de campo")
-        self.lbl_val_met = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text"],
-                                    font=FUENTES["small"], justify="left", anchor="w",
-                                    wraplength=1180)
-        self.lbl_val_met.pack(fill="x", padx=12, pady=(0, 4))
-        wrap = tk.Frame(card, bg=TEMA["surface"])
-        wrap.pack(fill="x", padx=12, pady=(0, 12))
-        self.lst_val = tk.Listbox(wrap, height=4, font=FUENTES["small"], bd=1, relief="solid",
-                                  bg=TEMA["campo_bg"], fg=TEMA["text"], highlightthickness=0,
-                                  activestyle="none", exportselection=False)
-        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.lst_val.yview)
-        self.lst_val.configure(yscrollcommand=sb.set)
-        self.lst_val.pack(side="left", fill="x", expand=True)
-        sb.pack(side="right", fill="y")
-        self.lst_val.bind("<Button-3>", self._menu_observacion)
-        tk.Label(card, text="Clic derecho en una observacion: eliminar. Se anotan con el boton "
-                            "«Observacion de campo» de la cabecera.",
-                 bg=TEMA["surface"], fg=TEMA["text_muted"],
-                 font=FUENTES["small"]).pack(anchor="w", padx=12, pady=(0, 8))
-
-    def _pintar_validacion(self):
-        """Rellena la tarjeta de validacion. Robusto: nunca rompe la ficha."""
-        if not getattr(self, "lst_val", None) or not self.lst_val.winfo_exists():
-            return
-        try:
-            res = resumen_validacion(self.nombre)
-        except Exception:
-            log.debug("no se pudo montar el resumen de validacion", exc_info=True)
-            return
-        self._obs_val = res.get("observaciones", [])
-        self.lst_val.delete(0, tk.END)
-        for o in self._obs_val:
-            partes = [o.get("fecha", "?"), o.get("fuente", "campo")]
-            if o.get("fase_obs"):
-                partes.append(f"fase={o['fase_obs']}")
-            if o.get("rendimiento_kg_ha") is not None:
-                partes.append(f"{o['rendimiento_kg_ha']:.0f} kg/ha")
-            if o.get("humedad_suelo_pct") is not None:
-                partes.append(f"humedad {o['humedad_suelo_pct']:.0f}%")
-            if o.get("valor_dron") is not None:
-                partes.append(f"{o.get('indice_dron','dron')}={o['valor_dron']:.3f}")
-            if o.get("nota"):
-                partes.append(f"«{o['nota']}»")
-            self.lst_val.insert(tk.END, "  ·  ".join(str(p) for p in partes))
-        txt = res.get("texto") or ""
-        if txt:
-            self.lbl_val_met.config(text=txt, fg=TEMA["text"])
-        elif self._obs_val:
-            self.lbl_val_met.config(
-                text="Observaciones anotadas. Aun no hay con que emparejarlas "
-                     "(hacen falta pasadas de satelite en las mismas fechas).",
-                fg=TEMA["text_sec"])
-        else:
-            self.lbl_val_met.config(
-                text="Sin observaciones de campo todavia. Anota lo que veas a pie de "
-                     "finca, con sonda o con el dron para medir el acierto del sistema.",
-                fg=TEMA["text_sec"])
-
-    def _menu_observacion(self, event):
-        obs = getattr(self, "_obs_val", [])
-        sel = self.lst_val.nearest(event.y)
-        if sel < 0 or sel >= len(obs):
-            return
-        o = obs[sel]
-        # self.master, no self: FichaParcela no es un widget (ver _menu_evento)
-        menu = tk.Menu(self.master, tearoff=0)
-        menu.add_command(label="Eliminar observacion",
-                         command=lambda: self._borrar_observacion(o))
-        menu.tk_popup(event.x_root, event.y_root)
-
-    def _borrar_observacion(self, o):
-        if not messagebox.askyesno("Eliminar observacion",
-                                   f"¿Eliminar la observacion del {o.get('fecha','?')}?",
-                                   parent=self.master):
-            return
-        DB.eliminar_observacion(self.nombre, o.get("campana", self.campana), o.get("id"))
-        self._pintar_validacion()
-
-    def _observacion_campo(self):
-        """Abre el dialogo para anotar una observacion de campo y refresca al cerrar."""
-        DialogoObservacionCampo(self.master, self, al_terminar=self._pintar_validacion)
 
     def _build_interp(self, parent):
         # `expand=True`: comparte el ancho con la grafica en vez de quedarse en un
@@ -1544,268 +1208,6 @@ class FichaParcela:
     # barra: lo que NO puede es empujar el resto de la ficha.
     ALTO_RENDIMIENTOS = 3
 
-    def _build_cuaderno(self, parent):
-        card = tarjeta(parent)
-        card.pack(fill="both", expand=True)
-        self._titulo(card, "Cuaderno de campo (intervenciones)")
-
-        form = tk.Frame(card, bg=TEMA["surface"])
-        form.pack(fill="x", padx=12, pady=(0, 6))
-        tk.Label(form, text="Fecha de la intervencion", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).grid(row=0, column=0, sticky="w")
-        self.ev_fecha = CampoFecha(form, iso=datetime.now().strftime("%Y-%m-%d"))  # hoy por defecto
-        self.ev_fecha.grid(row=1, column=0, padx=(0, 8), sticky="w")
-        tk.Label(form, text="Tipo", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).grid(row=0, column=1, sticky="w")
-        self.ev_tipo = ttk.Combobox(form, state="readonly", width=12, values=REG.TIPOS_EVENTO)
-        self.ev_tipo.set("PRODUCTO")
-        self.ev_tipo.grid(row=1, column=1, padx=(0, 8))
-        self.ev_tipo.bind("<<ComboboxSelected>>", lambda e: self._toggle_campos_evento())
-        # al cambiar la fecha puede cambiar la campana (y con ella el cultivo), asi
-        # que se revisa si toca ensenar la humedad. add="+" para no pisar el manejador
-        # propio de CampoFecha.
-        self.ev_fecha.entry.bind("<FocusOut>", lambda e: self._toggle_campos_evento(), add="+")
-
-        # campos especificos de PRODUCTO
-        self.frame_prod = tk.Frame(form, bg=TEMA["surface"])
-        self.frame_prod.grid(row=1, column=2, columnspan=3, sticky="w")
-        tk.Label(self.frame_prod, text="Producto", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).grid(row=0, column=0, sticky="w", padx=(0, 4))
-        self.ev_prod = ttk.Entry(self.frame_prod, width=16)
-        self.ev_prod.grid(row=0, column=1, padx=(0, 8))
-        tk.Label(self.frame_prod, text="Objetivo", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).grid(row=0, column=2, sticky="w", padx=(0, 4))
-        self.ev_obj = ttk.Combobox(self.frame_prod, state="readonly", width=22,
-                                   values=REG.OBJETIVOS_PRODUCTO)
-        self.ev_obj.set(REG.OBJETIVOS_PRODUCTO[0])
-        self.ev_obj.grid(row=0, column=3, padx=(0, 8))
-        tk.Label(self.frame_prod, text="Dosis", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).grid(row=0, column=4, sticky="w", padx=(0, 4))
-        self.ev_dosis = ttk.Entry(self.frame_prod, width=10)
-        self.ev_dosis.grid(row=0, column=5)
-        tk.Label(self.frame_prod, text="Dia informe (opc.)", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).grid(row=0, column=6, sticky="w", padx=(8, 4))
-        self.ev_informe = CampoFecha(self.frame_prod, width=11)
-        self.ev_informe.grid(row=0, column=7, columnspan=2, sticky="w")
-
-        # campos especificos de COSECHA. Todos OPCIONALES: son el dato de bascula,
-        # no una estimacion. Comparten celda con frame_prod (nunca se ven a la vez).
-        self.frame_cosecha = tk.Frame(form, bg=TEMA["surface"])
-        self.frame_cosecha.grid(row=1, column=2, columnspan=3, sticky="w")
-        tk.Label(self.frame_cosecha, text="Rendimiento (kg/ha)", bg=TEMA["surface"],
-                 fg=TEMA["text_sec"], font=FUENTES["small"]).grid(row=0, column=0, sticky="w", padx=(0, 4))
-        self.ev_rend = ttk.Entry(self.frame_cosecha, width=9)
-        self.ev_rend.grid(row=0, column=1, padx=(0, 8))
-        # la humedad solo tiene sentido en grano de extensivo: en el resto no hay dato
-        self.frame_humedad = tk.Frame(self.frame_cosecha, bg=TEMA["surface"])
-        self.frame_humedad.grid(row=0, column=2, sticky="w")
-        tk.Label(self.frame_humedad, text="Humedad grano (%)", bg=TEMA["surface"],
-                 fg=TEMA["text_sec"], font=FUENTES["small"]).grid(row=0, column=0, sticky="w", padx=(0, 4))
-        self.ev_humedad = ttk.Entry(self.frame_humedad, width=7)
-        self.ev_humedad.grid(row=0, column=1, padx=(0, 8))
-        tk.Label(self.frame_cosecha, text="Superficie (ha)", bg=TEMA["surface"],
-                 fg=TEMA["text_sec"], font=FUENTES["small"]).grid(row=0, column=3, sticky="w", padx=(0, 4))
-        self.ev_sup = ttk.Entry(self.frame_cosecha, width=8)
-        self.ev_sup.grid(row=0, column=4, padx=(0, 8))
-        tk.Label(self.frame_cosecha, text="Origen del dato", bg=TEMA["surface"],
-                 fg=TEMA["text_sec"], font=FUENTES["small"]).grid(row=0, column=5, sticky="w", padx=(0, 4))
-        self.ev_fuente = ttk.Combobox(self.frame_cosecha, state="readonly", width=15,
-                                      values=[""] + list(REG.FUENTES_DATO))
-        self.ev_fuente.set("")
-        self.ev_fuente.grid(row=0, column=6)
-
-        tk.Label(form, text="Notas", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).grid(row=0, column=5, sticky="w")
-        self.ev_notas = ttk.Entry(form, width=26)
-        self.ev_notas.grid(row=1, column=5, padx=(8, 8))
-        ttk.Button(form, text="Anadir", style="Accent.TButton",
-                   command=self._add_evento).grid(row=1, column=6, padx=4)
-
-        cols = ("fecha", "tipo", "detalle", "efecto")
-        self.tv_ev = ttk.Treeview(card, columns=cols, show="headings", height=5)
-        for c, w in [("fecha", 90), ("tipo", 90), ("detalle", 300), ("efecto", 260)]:
-            self.tv_ev.heading(c, text=c.capitalize())
-            self.tv_ev.column(c, width=esc(w), anchor="w")
-        self.tv_ev.pack(fill="both", expand=True, padx=12, pady=(0, 6))
-        self.tv_ev.bind("<Double-1>", lambda e: self._ver_efecto_evento())
-        self.tv_ev.bind("<Button-3>", self._menu_evento)
-        tk.Label(card, text="Doble clic en un producto: ver su efecto sobre el cultivo. "
-                            "Clic derecho: eliminar.", bg=TEMA["surface"],
-                 fg=TEMA["text_muted"], font=FUENTES["small"]).pack(anchor="w", padx=12, pady=(0, 4))
-
-        # Historico de cosecha: lo unico medido en bascula, no interpretado.
-        # Se listan TODAS las campanas, no solo la que se esta viendo.
-        tk.Label(card, text="Rendimientos registrados  ·  se anotan con un evento COSECHA (grano) "
-                           "o SIEGA (forraje), que admite fechas de campanas anteriores",
-                 bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).pack(anchor="w", padx=12)
-        # Lista ACOTADA (ALTO_RENDIMIENTOS filas) con su propia barra: el historico
-        # crece una linea por campana y esta ficha vive en un marco de altura fija,
-        # asi que una etiqueta multilinea acabaria comiendose la tabla de eventos o
-        # recortandose sola. Con la lista, ocupe lo que ocupe el historico, el alto
-        # del cuaderno no se mueve.
-        wrap_rend = tk.Frame(card, bg=TEMA["surface"])
-        wrap_rend.pack(fill="x", padx=12, pady=(2, 10))
-        self.lst_rend = tk.Listbox(wrap_rend, height=self.ALTO_RENDIMIENTOS,
-                                   font=FUENTES["small"], bd=1, relief="solid",
-                                   bg=TEMA["campo_bg"], fg=TEMA["text"],
-                                   highlightthickness=0, activestyle="none",
-                                   exportselection=False)
-        sb_rend = ttk.Scrollbar(wrap_rend, orient="vertical", command=self.lst_rend.yview)
-        self.lst_rend.configure(yscrollcommand=sb_rend.set)
-        self.lst_rend.pack(side="left", fill="x", expand=True)
-        sb_rend.pack(side="right", fill="y")
-        self._toggle_campos_evento()
-        self._refrescar_eventos()
-
-    def _cultivo_de(self, campana):
-        return ((DB.ficha(self.nombre) or {}).get("cultivos_por_campana", {}) or {}).get(campana, {})
-
-    def _campana_evento(self, iso):
-        return REG.campana_de_evento(self.ev_tipo.get(), iso, self.campana)
-
-    def _toggle_campos_evento(self):
-        tipo = self.ev_tipo.get()
-        es_produccion = tipo in ("COSECHA", "SIEGA")   # ambos anotan kg/ha de bascula
-        (self.frame_prod.grid if tipo == "PRODUCTO" else self.frame_prod.grid_remove)()
-        (self.frame_cosecha.grid if es_produccion else self.frame_cosecha.grid_remove)()
-        # la humedad de grano solo tiene sentido en la cosecha de grano, no en la siega
-        if tipo == "COSECHA" and self._admite_humedad(self._campana_evento(self.ev_fecha.get_iso())):
-            self.frame_humedad.grid()
-        else:
-            self.frame_humedad.grid_remove()
-
-    def _admite_humedad(self, campana):
-        """Si toca pedir la humedad del grano para una cosecha de esa campana. Las
-        campanas viejas no suelen tener cultivo registrado: se hereda el de la que
-        se esta viendo (ver REG.admite_humedad_en_campana)."""
-        return REG.admite_humedad_en_campana(self._cultivo_de(campana),
-                                             self._cultivo_de(self.campana))
-
-    def _add_evento(self):
-        fecha = self.ev_fecha.get_iso()
-        if not fecha:
-            return messagebox.showwarning("Fecha", "Elige la fecha de la intervencion (dd-mm-aaaa).")
-        ev = {"fecha": fecha, "tipo": self.ev_tipo.get(), "notas": self.ev_notas.get().strip()}
-        campana = self._campana_evento(fecha)
-        if ev["tipo"] == "PRODUCTO":
-            if not self.ev_prod.get().strip():
-                return messagebox.showwarning("Producto", "Indica el nombre del producto.")
-            ev.update({"producto": self.ev_prod.get().strip(),
-                       "objetivo": self.ev_obj.get(), "dosis": self.ev_dosis.get().strip()})
-            # dia del informe opcional: fecha en la que se quiere medir el efecto
-            if not self.ev_informe.esta_vacio():
-                informe = self.ev_informe.get_iso()
-                if not informe:
-                    return messagebox.showwarning("Dia informe", "Dia del informe: dd-mm-aaaa "
-                                                  "(o dejalo vacio para el automatico).")
-                ev["fecha_informe"] = informe
-        elif ev["tipo"] in ("COSECHA", "SIEGA"):
-            es_cosecha = ev["tipo"] == "COSECHA"
-            titulo = "Cosecha" if es_cosecha else "Siega"
-            # la humedad de grano solo se anota en la cosecha de grano de extensivo;
-            # la siega (forraje) guarda kg/ha y superficie, pero no humedad de grano
-            admite = es_cosecha and self._admite_humedad(campana)
-            if es_cosecha and not admite and self.ev_humedad.get().strip():
-                self._toggle_campos_evento()
-                return messagebox.showwarning(
-                    "Cosecha", "Este cultivo no es grano de extensivo: ahi no se anota "
-                    "humedad de grano. Borra ese campo para continuar.")
-            try:
-                ev.update(REG.datos_cosecha(
-                    self.ev_rend.get(), self.ev_humedad.get(), self.ev_sup.get(),
-                    self.ev_fuente.get(), admite_humedad=admite))
-            except ValueError as e:
-                return messagebox.showwarning(titulo, f"Revisa el campo {e}: "
-                                              "escribe un numero (o dejalo vacio).")
-        REG.registrar_evento(self.nombre, campana, ev)
-        self.ev_notas.delete(0, tk.END)
-        if hasattr(self, "ev_prod"):
-            self.ev_prod.delete(0, tk.END)
-            self.ev_dosis.delete(0, tk.END)
-            self.ev_informe.set_iso("")
-        for w in (getattr(self, "ev_rend", None), getattr(self, "ev_humedad", None),
-                  getattr(self, "ev_sup", None)):
-            if w is not None:
-                w.delete(0, tk.END)
-        if hasattr(self, "ev_fuente"):
-            self.ev_fuente.set("")
-        if campana != self.campana:
-            _q = "Siega" if ev["tipo"] == "SIEGA" else "Cosecha"
-            messagebox.showinfo(_q, f"Anotada en la campana {campana}. Queda en el "
-                                "historico de rendimientos; para ver el evento, cambia a esa "
-                                "campana.", parent=self.master)
-        self._refrescar_eventos()
-        self._pintar_graficas(sorted(self.panel._historico(self.nombre),
-                                     key=lambda r: r.get("fecha", "")))
-        self.refrescar()   # el evento puede cambiar el diagnostico (siega/cosecha)
-
-    def _refrescar_eventos(self):
-        self.tv_ev.delete(*self.tv_ev.get_children())  # vaciado en UNA llamada a Tk
-        regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
-        for e in REG.eventos_de(self.nombre, self.campana):
-            if e.get("tipo") == "PRODUCTO":
-                det = f"{e.get('producto','')} · {e.get('objetivo','')}"
-                if e.get("dosis"):
-                    det += f" · {e['dosis']}"
-                ef = REG.efecto_producto(regs, e)
-                efec = (ef["verdicto"] if ef and ef.get("disponible") else
-                        (ef["nota"] if ef else "-"))
-            else:
-                det = e.get("notas", "") or "-"
-                efec = "-"
-            self.tv_ev.insert("", tk.END, values=(e.get("fecha", ""), e.get("tipo", ""),
-                                                  det, efec), tags=(e.get("id", ""),))
-        self._refrescar_rendimientos()
-
-    def _refrescar_rendimientos(self):
-        if not hasattr(self, "lst_rend") or not self.lst_rend.winfo_exists():
-            return
-        filas = DB.rendimientos(self.nombre)
-        self.lst_rend.delete(0, tk.END)          # vaciado en UNA llamada a Tk
-        for r in filas:
-            self.lst_rend.insert(tk.END, REG.linea_rendimiento(r))
-        if filas:
-            self.lst_rend.see(tk.END)            # la campana mas reciente, a la vista
-        else:
-            self.lst_rend.insert(tk.END, "  (todavia no hay ninguno)")
-            self.lst_rend.itemconfig(0, foreground=TEMA["text_muted"])
-
-    def _menu_evento(self, event):
-        fila = self.tv_ev.identify_row(event.y)
-        if not fila:
-            return
-        self.tv_ev.selection_set(fila)
-        # OJO: el padre es self.master, no self. FichaParcela NO es un widget (es
-        # una clase normal que pinta sobre master), asi que tk.Menu(self, ...)
-        # reventaba con AttributeError: 'FichaParcela' object has no attribute 'tk'.
-        m = tk.Menu(self.master, tearoff=0, bg=TEMA["surface"], fg=TEMA["text"], bd=0)
-        m.add_command(label="  Ver efecto", command=self._ver_efecto_evento)
-        m.add_separator()
-        m.add_command(label="  Eliminar evento", command=self._eliminar_evento)
-        m.tk_popup(event.x_root, event.y_root)
-
-    def _eliminar_evento(self):
-        sel = self.tv_ev.selection()
-        if not sel:
-            return
-        eid = self.tv_ev.item(sel[0], "tags")[0]
-        REG.eliminar_evento(self.nombre, self.campana, eid)
-        self._refrescar_eventos()
-        self.refrescar()
-
-    def _ver_efecto_evento(self):
-        sel = self.tv_ev.selection()
-        if not sel:
-            return
-        eid = self.tv_ev.item(sel[0], "tags")[0]
-        ev = next((e for e in REG.eventos_de(self.nombre, self.campana)
-                   if e.get("id") == eid), None)
-        if not ev or ev.get("tipo") != "PRODUCTO":
-            return messagebox.showinfo("Efecto", "Solo los productos tienen efecto medible.")
-        regs = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
-        DialogoEfectoProducto(self.master, self, ev, regs)
-
     def _pintar_mapa(self):
         self._pintar_leyenda()
         etq = self.cb_dia.get()
@@ -1881,125 +1283,6 @@ class FichaParcela:
             info = S1.interpretar_radar(optica, self._radar, diag)
             VentanaRadar(self.master, self.nombre, self.campana, self._radar, info, n, msg)
         self.master.after(0, fin)
-
-    def _menu_exportar(self):
-        """Menu emergente con los formatos que ofrece el modulo opcional informe_anual.
-        Si ese fichero se borra, este boton ni siquiera existe."""
-        if _INFORME is None:
-            return
-        m = tk.Menu(self.master, tearoff=0)
-        m.add_command(label="Informe de balance (PDF)",
-                      command=lambda: self._exportar("balance"))
-        m.add_command(label="Informe tecnico (PDF)",
-                      command=lambda: self._exportar("tecnico"))
-        m.add_separator()
-        excel_ok = getattr(_INFORME, "EXCEL_DISPONIBLE", False)
-        m.add_command(label="Hoja de calculo Excel (indices por mes + graficas)"
-                            + ("" if excel_ok else "  —  requiere openpyxl"),
-                      command=lambda: self._exportar("excel"),
-                      state=("normal" if excel_ok else "disabled"))
-        try:
-            m.tk_popup(self.master.winfo_pointerx(), self.master.winfo_pointery())
-        finally:
-            m.grab_release()
-
-    def _elegir_secciones_balance(self, radar, eventos):
-        """Modal para elegir que secciones incluye el informe de BALANCE.
-
-        Devuelve la lista de claves elegidas, o None si se cancela. Radar y cuaderno
-        solo se ofrecen marcados si de verdad hay datos ("los datos que se tienen")."""
-        cat = getattr(_INFORME, "SECCIONES_BALANCE", None)
-        if not cat:
-            return []          # sin catalogo: el informe sale completo
-        dlg = tk.Toplevel(self.master)
-        dlg.title("Informe de balance · qué incluir")
-        dlg.configure(bg=TEMA["page"])
-        dlg.transient(self.master)
-        dlg.grab_set()
-        tk.Label(dlg, text="Elige qué secciones incluir en el informe:", bg=TEMA["page"],
-                 fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 8))
-        hay = {"radar": bool(radar), "cuaderno": bool(eventos)}
-        cont = tk.Frame(dlg, bg=TEMA["page"])
-        cont.pack(fill="x", padx=16)
-        vars_ = {}
-        for clave, etiqueta in cat:
-            disponible = hay.get(clave, True)
-            v = tk.BooleanVar(value=disponible)
-            vars_[clave] = v
-            ttk.Checkbutton(cont, variable=v,
-                            text=etiqueta + ("" if disponible else "  (sin datos)")).pack(anchor="w", pady=1)
-        res = {"claves": None}
-        barra = tk.Frame(dlg, bg=TEMA["page"])
-        barra.pack(fill="x", padx=16, pady=14)
-
-        def _generar():
-            res["claves"] = [k for k, v in vars_.items() if v.get()]
-            dlg.destroy()
-        ttk.Button(barra, text="Generar", style="Accent.TButton", command=_generar).pack(side="right")
-        ttk.Button(barra, text="Cancelar", command=dlg.destroy).pack(side="right", padx=(0, 8))
-        centrar_sobre(dlg, self.master)
-        dlg.wait_window()
-        return res["claves"]
-
-    def _exportar(self, formato):
-        """Genera balance/tecnico (PDF) o Excel. Delegado al modulo opcional informe_anual."""
-        if _INFORME is None:
-            return
-        pdf_ok = getattr(_INFORME, "DISPONIBLE", False)
-        excel_ok = getattr(_INFORME, "EXCEL_DISPONIBLE", False)
-        if formato in ("balance", "tecnico") and not pdf_ok:
-            return messagebox.showwarning(
-                "Exportar", getattr(_INFORME, "MOTIVO_NO_DISPONIBLE",
-                                    "Falta reportlab."), parent=self.master)
-        if formato == "excel" and not excel_ok:
-            return messagebox.showwarning(
-                "Exportar", getattr(_INFORME, "MOTIVO_EXCEL", "Falta openpyxl."),
-                parent=self.master)
-        serie = sorted(self.panel._historico(self.nombre), key=lambda r: r.get("fecha", ""))
-        if not serie:
-            return messagebox.showinfo(
-                "Exportar", "Esta parcela aun no tiene pasadas de satelite que resumir.",
-                parent=self.master)
-        ficha = DB.ficha(self.nombre) or {}
-        cultivo = (ficha.get("cultivos_por_campana", {}) or {}).get(self.campana, {})
-        radar = sorted(DB.radar(self.nombre, self.campana), key=lambda r: r.get("fecha", ""))
-        eventos = REG.eventos_de(self.nombre, self.campana)
-
-        # el informe de balance deja ELEGIR que secciones incluir; el resto va completo
-        secciones = None
-        if formato == "balance":
-            secciones = self._elegir_secciones_balance(radar, eventos)
-            if secciones is None:      # cancelado
-                return
-
-        cfg = {"balance": ("Informe de balance", _INFORME.generar_informe_anual, ".pdf", "PDF", "pdf"),
-               "tecnico": ("Informe tecnico", _INFORME.generar_informe_tecnico, ".pdf", "PDF", "pdf"),
-               "excel":   ("Hoja de calculo", _INFORME.generar_excel, ".xlsx", "Excel", "xlsx")}
-        titulo, generar, ext, etiq, sufijo = cfg[formato]
-        base = "Informe" if formato != "excel" else "Indices"
-        destino = filedialog.asksaveasfilename(
-            parent=self.master, title=f"Guardar {titulo.lower()}", defaultextension=ext,
-            filetypes=[(etiq, f"*{ext}")],
-            initialfile=f"{base}_{sufijo}_{self.nombre}_{self.campana}{ext}")
-        if not destino:
-            return
-
-        def worker():
-            try:
-                kw = {"secciones": secciones} if formato == "balance" else {}
-                ruta = generar(self.nombre, self.campana, ficha, cultivo, serie,
-                               radar=radar, eventos=eventos, ruta_salida=destino, **kw)
-            except Exception as e:
-                self.master.after(0, lambda err=e: messagebox.showerror(
-                    titulo, f"No se pudo generar:\n\n{err}", parent=self.master))
-                return
-
-            def ok():
-                if messagebox.askyesno(titulo, f"Generado:\n{ruta}\n\n¿Abrirlo ahora?",
-                                       parent=self.master):
-                    _abrir_archivo(ruta)
-            self.master.after(0, ok)
-        threading.Thread(target=worker, daemon=True).start()
 
     def sincronizar(self):
         if not _EE:
