@@ -2426,6 +2426,23 @@ def pruebas_gee_cliente():
     import gee_cliente as G
     import almacen as DB
 
+    # --- mensajes de error CLAROS para el usuario (no la traza tecnica) ---
+    check("gee: un fallo de red se explica como falta de conexion",
+          lambda: G.mensaje_error(ConnectionError("getaddrinfo failed")),
+          lambda m: "conexion" in m.lower() and "descargados" in m.lower())
+    check("gee: un token caducado manda a la pestana de credenciales",
+          lambda: G.mensaje_error(Exception("Permission denied: invalid token")),
+          lambda m: "credenciales" in m.lower())
+    check("gee: pasarse de cuota se explica como limite de peticiones",
+          lambda: G.mensaje_error(Exception("Quota exceeded (429)")),
+          lambda m: "limite" in m.lower())
+    check("gee: un tiempo agotado invita a reintentar",
+          lambda: G.mensaje_error(TimeoutError("deadline exceeded")),
+          lambda m: "responder" in m.lower() or "momento" in m.lower())
+    check("gee: un error raro da un mensaje generico corto, sin traza",
+          lambda: G.mensaje_error(RuntimeError("x" * 500)),
+          lambda m: "RuntimeError" in m and len(m) < 120)
+
     def _pasada(fecha, cobertura, ndvi=0.55):
         return {"properties": {"fecha": fecha, "cobertura_valida": cobertura,
                                "ndvi": ndvi, "evi": 0.3, "savi": 0.4, "gndvi": 0.4,
@@ -2468,7 +2485,7 @@ def pruebas_gee_cliente():
     check("gee: sin ee disponible lo dice y no revienta",
           lambda: (setattr(G, "ee", None), G.sincronizar_parcela("Parcela_EE", "2025-2026"),
                    setattr(G, "ee", real_ee))[1],
-          lambda r: r[0] == 0 and "earthengine" in r[1])
+          lambda r: r[0] == 0 and "Earth Engine" in r[1] and "Credenciales" in r[1])
     # --- RADAR (Sentinel-1): misma descarga inyectable ---
     def _pasada_radar(fecha, vv, vh, n=60, orbita="ASCENDING"):
         return {"properties": {"fecha": fecha, "vv": vv, "vh": vh,
@@ -2501,7 +2518,7 @@ def pruebas_gee_cliente():
     check("gee radar: sin ee disponible lo dice y no revienta",
           lambda: (setattr(G, "ee", None), G.sincronizar_radar("Radar_EE", "2025-2026"),
                    setattr(G, "ee", real_ee))[1],
-          lambda r: r[0] == 0 and "earthengine" in r[1])
+          lambda r: r[0] == 0 and "Earth Engine" in r[1] and "Credenciales" in r[1])
     # el modulo de radar sigue siendo PURO: interpreta sin tocar red ni base de datos
     import sentinel1 as S1
     check("sentinel1: sigue siendo puro (sin ee ni almacen)",
@@ -3799,6 +3816,93 @@ def pruebas_observaciones_campo():
           lambda: [o.get("campana") for o in DB.observaciones("Obs1")], lambda r: r == [camp_2019])
 
 
+def pruebas_copias():
+    """Copias de seguridad de la base de datos (modulo copias)."""
+    import copias
+    import rutas
+    import sqlite3
+
+    d = tempfile.mkdtemp()
+    prev = os.environ.get(rutas.VAR_ENTORNO)
+    os.environ[rutas.VAR_ENTORNO] = d
+    try:
+        dbdir = tempfile.mkdtemp()
+        db = os.path.join(dbdir, "parcelas.db")
+        cn = sqlite3.connect(db)
+        cn.execute("CREATE TABLE t(x)")
+        cn.execute("INSERT INTO t VALUES(42)")
+        cn.commit()
+        cn.close()
+
+        from datetime import datetime
+        r1 = copias.crear_copia(db, ahora=datetime(2026, 1, 1, 10, 0, 0))
+        check("copias: crear_copia deja un fichero con fecha en la carpeta de copias",
+              lambda: r1 and os.path.exists(r1), lambda r: bool(r))
+        check("copias: listar devuelve la copia recien creada",
+              lambda: [c["nombre"] for c in copias.listar()], lambda r: r == [os.path.basename(r1)])
+
+        # una base restaurada devuelve el valor de la copia, no el actual
+        cn = sqlite3.connect(db); cn.execute("UPDATE t SET x=99"); cn.commit(); cn.close()
+        r2 = copias.crear_copia(db)         # copia con x=99
+        cn = sqlite3.connect(db); cn.execute("UPDATE t SET x=7"); cn.commit(); cn.close()
+        ok = copias.restaurar(r2, db)
+        cn = sqlite3.connect(db); v = cn.execute("SELECT x FROM t").fetchone()[0]; cn.close()
+        check("copias: restaurar deja la base como la copia (x=99, no 7)",
+              lambda: (ok, v), lambda r: r == (True, 99))
+        check("copias: al restaurar se guarda antes una copia de seguridad de los datos actuales",
+              lambda: any(f.startswith(copias.PREFIJO_RESTAURAR) for f in os.listdir(copias.dir_copias())),
+              lambda r: r is True)
+
+        # rotacion: no mas de `maximo` copias con fecha
+        for i in range(15):
+            copias.crear_copia(db, ahora=datetime(2026, 3, 1, 10, 0, i), maximo=10)
+        check("copias: la rotacion conserva solo las N mas nuevas",
+              lambda: len(copias.listar()) <= 10, lambda r: r is True)
+
+        # copia automatica: no repite si ya hay una reciente
+        antes = len(copias.listar())
+        copias.crear_copia_si_toca(db, intervalo_horas=12)
+        check("copias: la copia automatica NO duplica si hay una reciente",
+              lambda: len(copias.listar()), lambda r: r == antes)
+
+        # exportar a una ruta cualquiera
+        destino = os.path.join(tempfile.mkdtemp(), "export.db")
+        exp = copias.exportar(db, destino)
+        check("copias: exportar guarda una copia consultable fuera de la carpeta",
+              lambda: exp and os.path.exists(destino), lambda r: bool(r))
+
+        # una base que no existe no rompe: devuelve None
+        check("copias: crear_copia de una base inexistente devuelve None (no rompe)",
+              lambda: copias.crear_copia(os.path.join(d, "no_hay.db")), lambda r: r is None)
+    finally:
+        if prev is None:
+            os.environ.pop(rutas.VAR_ENTORNO, None)
+        else:
+            os.environ[rutas.VAR_ENTORNO] = prev
+
+
+def pruebas_empaquetar():
+    """El script de empaquetado (empaquetar.py): que la configuracion apunte a
+    ficheros reales, sin llegar a construir el ejecutable (eso necesita PyInstaller)."""
+    import empaquetar as E
+
+    check("empaquetar: el punto de entrada existe",
+          lambda: os.path.exists(E.ENTRADA), lambda r: r is True)
+    check("empaquetar: los ficheros de datos declarados existen (icono y manual)",
+          lambda: sorted(E._datos_existentes()),
+          lambda r: r == ["MANUAL.md", "icono.ico", "icono.png"])
+    args = E._argumentos()
+    check("empaquetar: los argumentos llevan el nombre y el punto de entrada",
+          lambda: ("--name" in args and E.NOMBRE in args and args[-1] == E.ENTRADA),
+          lambda r: r is True)
+    check("empaquetar: cada dato viaja con el separador correcto del sistema",
+          lambda: all(E._sep() in a for a in args
+                      if a.endswith(".") and E._sep() in a), lambda r: r is True)
+    check("empaquetar: se declaran los modulos opcionales como imports ocultos",
+          lambda: all(m in args for m in ("validacion", "grados_dia", "copias")),
+          lambda r: r is True)
+
+
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
@@ -3809,7 +3913,8 @@ def main():
               pruebas_escala_indices, pruebas_clima, pruebas_repaso,
               pruebas_vista_ficha, pruebas_grados_dia, pruebas_balance_hidrico,
               pruebas_heterogeneidad_espacial, pruebas_validacion,
-              pruebas_observaciones_campo, pruebas_instalador):
+              pruebas_observaciones_campo, pruebas_copias, pruebas_instalador,
+              pruebas_empaquetar):
         try:
             f()
         except Exception as e:

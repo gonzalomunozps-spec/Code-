@@ -53,6 +53,35 @@ def hay_ee():
     return ee is not None
 
 
+SIN_EE = ("El satelite (Earth Engine) no esta configurado. Ve a la pestana "
+          "«Credenciales» para conectarlo. Los datos ya descargados siguen "
+          "disponibles sin conexion.")
+
+
+def mensaje_error(exc):
+    """Convierte una excepcion de sincronizacion en un mensaje CLARO para el
+    usuario, reconociendo los fallos tipicos en produccion. Nunca ensena la traza
+    tecnica; para el detalle esta la bitacora. Es pura (clasifica por el texto)."""
+    t = f"{type(exc).__name__}: {exc}".lower()
+    def hay(*claves):
+        return any(k in t for k in claves)
+    if hay("network", "connection", "getaddrinfo", "resolve", "unreachable",
+           "temporarily", "ssl", "socket", "name or service", "no route"):
+        return ("Sin conexion con el satelite. Revisa tu conexion a internet e "
+                "intentalo de nuevo. Los datos ya descargados siguen disponibles.")
+    if hay("permission", "unauthor", "forbidden", "credential", "token",
+           "authenticate", "401", "403"):
+        return ("Earth Engine no acepto las credenciales (pueden haber caducado). "
+                "Vuelve a autorizar la conexion en la pestana «Credenciales».")
+    if hay("quota", "rate limit", "429", "too many", "exhausted"):
+        return ("Se ha alcanzado el limite de peticiones de Earth Engine por ahora. "
+                "Espera unos minutos y vuelve a intentarlo.")
+    if hay("timeout", "timed out", "deadline"):
+        return ("El satelite tardo demasiado en responder. Intentalo de nuevo en un "
+                "momento; los datos ya descargados siguen disponibles.")
+    return f"No se pudo sincronizar ({type(exc).__name__}). Intentalo de nuevo mas tarde."
+
+
 # =====================================================================
 # INDICES: definicion, rangos y paletas
 # =====================================================================
@@ -443,7 +472,7 @@ def rellenar_rejillas(nombre, campanas=None, silencioso=True):
     pasadas guardadas. Devuelve (n_rejillas, mensaje).
     """
     if not hay_ee():
-        return (0, "earthengine-api no disponible")
+        return (0, SIN_EE)
     try:
         ficha = DB.ficha(nombre)
         if not ficha or not ficha.get("coordenadas"):
@@ -467,7 +496,7 @@ def rellenar_rejillas(nombre, campanas=None, silencioso=True):
         log.warning("rejilla: fallo el relleno de %s", nombre, exc_info=True)
         if not silencioso:
             raise
-        return (0, f"error: {e}")
+        return (0, mensaje_error(e))
 
 
 def sincronizar_parcela(nombre, campana, silencioso=True):
@@ -478,7 +507,7 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
     """
     if not hay_ee():
         ULTIMO_SYNC.update(estado="fallo", msg="earthengine-api no disponible")
-        return (0, "earthengine-api no disponible")
+        return (0, SIN_EE)
     try:
         ficha = DB.ficha(nombre)
         if not ficha or not ficha.get("coordenadas"):
@@ -617,7 +646,7 @@ def sincronizar_parcela(nombre, campana, silencioso=True):
         ULTIMO_SYNC.update(estado="fallo", msg=f"{e}")
         if not silencioso:
             raise
-        return (0, f"error: {e}")
+        return (0, mensaje_error(e))
 
 
 # =====================================================================
@@ -632,7 +661,7 @@ def sincronizar_radar(nombre, campana, silencioso=True):
     RVI y CR por pasada. Devuelve (n_nuevos, mensaje). SOLO se llama desde el boton.
     """
     if not hay_ee():
-        return (0, "earthengine-api no disponible")
+        return (0, SIN_EE)
     try:
         ficha = DB.ficha(nombre)
         if not ficha or not ficha.get("coordenadas"):
@@ -708,4 +737,4 @@ def sincronizar_radar(nombre, campana, silencioso=True):
     except Exception as e:
         if not silencioso:
             raise
-        return (0, f"error: {e}")
+        return (0, mensaje_error(e))

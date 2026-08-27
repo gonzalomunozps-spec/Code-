@@ -754,6 +754,14 @@ def escenario_dialogos(P, DB):
         return c
     abrir("CampoFecha y calendario", _fecha)
 
+    def _copias(v):
+        v._crear()                       # crea una copia de seguridad
+        root.update()
+        if not v._copias:
+            raise AssertionError("la copia creada no aparece en la lista de copias")
+    import ui_copias
+    abrir("copias de seguridad", lambda: ui_copias.DialogoCopias(panel), _copias)
+
     def _alta_con_margen():
         v = P.VentanaAltaParcela(panel)
         root.update()

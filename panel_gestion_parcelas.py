@@ -356,6 +356,25 @@ class PanelGestionParcelas(ttk.Frame):
         self.btn_sync = ttk.Button(barra, text="  ↻ Sincronizar ahora  ",
                                    command=self._sincronizar_ahora)
         self.btn_sync.pack(side="right", padx=(0, 8))
+        ttk.Button(barra, text="  🛡 Copias  ", style="Ghost.TButton",
+                   command=self._abrir_copias).pack(side="right", padx=(0, 8))
+        ttk.Button(barra, text="  ❔ Ayuda  ", style="Ghost.TButton",
+                   command=self._abrir_manual).pack(side="right", padx=(0, 8))
+
+    def _abrir_copias(self):
+        """Abre la ventana de copias de seguridad (crear, restaurar, exportar)."""
+        from ui_copias import DialogoCopias
+        DialogoCopias(self)
+
+    def _abrir_manual(self):
+        """Abre el manual de usuario (MANUAL.md) con la aplicacion del sistema."""
+        import os
+        from ficha_comun import _abrir_archivo
+        ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MANUAL.md")
+        if os.path.exists(ruta):
+            _abrir_archivo(ruta)
+        else:
+            messagebox.showinfo("Ayuda", "No se encontro el manual (MANUAL.md).")
 
     def _sincronizar_ahora(self):
         """Sincronizacion manual de TODAS las parcelas, por si hay alguna pasada
@@ -683,6 +702,11 @@ def main(argv=None):
     activar_dpi()
 
     DB.conectar()                    # abre SQLite y migra los JSON antiguos si existen
+    try:                             # copia de seguridad automatica (si no hay una reciente)
+        import copias
+        copias.crear_copia_si_toca(DB.RUTA_DB)
+    except Exception:
+        pass                         # una copia fallida jamas debe impedir arrancar
     cfg = CRED.cargar()
     CRED.aplicar_entorno(cfg)
 

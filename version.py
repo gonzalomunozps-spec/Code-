@@ -16,4 +16,4 @@ Se sigue SemVer (https://semver.org): MAYOR.MENOR.PARCHE.
   - PARCHE cuando solo se corrigen fallos.
 """
 
-__version__ = "1.11.1"
+__version__ = "1.12.0"
