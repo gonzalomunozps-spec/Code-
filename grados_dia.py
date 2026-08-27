@@ -22,14 +22,23 @@ lo corrigen usando la temperatura real.
 
 QUE ES UNA INTEGRAL TERMICA
 ---------------------------
-El grado-dia de un dia es cuanto calor UTIL ha hecho por encima de una temperatura
-base (`Tbase`) por debajo de la cual el cultivo no crece:
+Dos conceptos que NO hay que confundir (Tema 5, Fitotecnia General):
 
-    GDD_dia = max(0, (Tmax + Tmin) / 2 - Tbase)
+  - CERO VEGETATIVO (Tbase, To): la Tª por debajo de la cual el cultivo no crece.
+    Es propio de CADA ESPECIE (0 C en cereales de invierno, 6 en girasol, 10 en
+    maiz...). En la interfaz se autorrellena al elegir el cultivo, y es editable.
 
-y la integral es la SUMA de esos grados-dia a lo largo de una ventana. La `Tbase`
-depende del cultivo (0 C en cereales de invierno, 10 C en maiz...). Algunos
-metodos ademas TOPAN la Tmax (un maiz no crece mas rapido por encima de 30 C).
+  - METODO de calculo: la FORMULA con la que se cuenta el calor. El temario da
+    cuatro (ver `METODOS_CALCULO`):
+        directo (Reaumur)   Σ Tm             con Tm ≥ 0
+        tiempo termico      Σ (Tm − To)      con Tm ≥ To   (el grado-dia clasico)
+        exponencial         Σ 2^((Tm−4,5)/10)
+        heliotermico        Σ (Tm × horas de luz)
+
+La integral es la SUMA de esos aportes a lo largo de una ventana. El tiempo termico
+puede ademas TOPAR la Tmax (un maiz no crece mas rapido por encima de 30 C). Los
+hitos de fase por GDD (`GDD_FASES`) estan en °C·dia de TIEMPO TERMICO: con otro
+metodo las unidades no casan y la fase por GDD es solo orientativa.
 
 AVISO IMPORTANTE
 ----------------
@@ -41,78 +50,200 @@ la fase por GDD solo PRIMA cuando el usuario define una integral a proposito.
 
 # Solo las tablas de fenologia, que son puras. El clima y la base se leen mas
 # arriba (en `fase_override` y en la interfaz), para no atar este nucleo a la BD.
+import math
+import datetime as _dt
+
 import fenologia_especies as FEN
 
 
 # =====================================================================
-# TIPOS DE INTEGRAL TERMICA
+# DOS CONCEPTOS DISTINTOS: EL METODO (la formula) Y EL CERO VEGETATIVO (la Tbase)
 # =====================================================================
-# Cada metodo: (clave, etiqueta, Tbase en C, tope de Tmax en C o None).
-# La Tbase sale de la bibliografia clasica por cultivo/grupo; el tope (cutoff
-# superior) es el metodo "con corte" para cultivos que se paran con el calor.
-METODOS = [
-    ("base0",      "Base 0 °C — cereales de invierno (trigo, cebada, avena)", 0.0,  None),
-    ("base5",      "Base 5 °C — colza, remolacha, guisante", 5.0,  None),
-    ("base6",      "Base 6 °C — girasol", 6.0,  None),
-    ("base10",     "Base 10 °C — maíz, sorgo (C4)", 10.0, None),
-    ("base10cut30", "Base 10 °C con tope 30 °C — maíz, método con corte", 10.0, 30.0),
+# Un error frecuente es meter la Tbase dentro del "metodo". Son cosas distintas
+# (Tema 5, Fitotecnia General): el CERO VEGETATIVO (Tbase, To) es propio de CADA
+# ESPECIE -la Tª por debajo de la cual cesa el crecimiento-, y el METODO es la
+# FORMULA con la que se cuenta el calor. Aqui van separados: la especie decide el
+# cero vegetativo (se autorrellena, editable); el usuario elige el metodo.
+#
+# TIPOS DE INTEGRAL TERMICA (metodos de calculo del temario):
+#   directo (Reaumur)      IT = Σ Tm            (Tm ≥ 0)  -relacion lineal-
+#   tiempo_termico/residual IT = Σ (Tm − To)    (Tm ≥ To) -el clasico grado-dia-
+#   exponencial            IT = Σ 2^((Tm−4,5)/10) (Tm ≥ 4,5) -reacciones biologicas-
+#   heliotermico           I.HT = Σ (Tm × I)    con I = horas de luz del dia
+METODOS_CALCULO = [
+    ("tiempo_termico", "Tiempo térmico / residual — Σ (Tm − cero vegetativo)"),
+    ("directo",        "Directo (Reaumur) — Σ Tm, con Tm ≥ 0"),
+    ("exponencial",    "Exponencial — Σ 2^((Tm − 4,5)/10)"),
+    ("heliotermico",   "Constante heliotérmica — Σ (Tm × horas de luz)"),
 ]
-_METODO = {k: (et, tb, tope) for k, et, tb, tope in METODOS}
+_METODO_CALC = dict(METODOS_CALCULO)
+METODO_CALC_DEF = "tiempo_termico"
 
-# Metodo por defecto sugerido por grupo de cultivo (solo para preseleccionar en la
-# interfaz; el usuario puede cambiarlo).
-METODO_SUGERIDO = {
-    "TRIGO": "base0", "CEBADA": "base0", "AVENA": "base0", "CENTENO": "base0",
-    "TRITICALE": "base0", "COLZA": "base5", "GUISANTE": "base5", "VEZA": "base5",
-    "REMOLACHA": "base5", "GIRASOL": "base6", "MAIZ": "base10cut30", "SORGO": "base10cut30",
+# CERO VEGETATIVO (Tbase, To) por especie, en C. Valores calibrados con los que
+# cuadran los hitos de fase por GDD (`GDD_FASES`). Se autorrellena al elegir el
+# cultivo, pero es EDITABLE: quien quiera puede teclear el de su temario
+# (p. ej. girasol 7, sorgo 15). Fallback 0 C para lo no listado.
+CERO_VEGETATIVO = {
+    "TRIGO": 0.0, "CEBADA": 0.0, "AVENA": 0.0, "CENTENO": 0.0, "TRITICALE": 0.0,
+    "COLZA": 5.0, "GUISANTE": 5.0, "VEZA": 5.0, "REMOLACHA": 5.0,
+    "GIRASOL": 6.0, "MAIZ": 10.0, "SORGO": 10.0,
 }
+# Tope superior de Tmax sugerido (cutoff): un C4 no crece mas rapido por mucho
+# calor. Se ofrece como valor por defecto, editable y opcional.
+TOPE_SUGERIDO = {"MAIZ": 30.0, "SORGO": 30.0}
+
+# Compatibilidad con integrales guardadas con el esquema anterior, donde el
+# "metodo" era en realidad (Tbase, tope): se traducen a tiempo termico.
+_LEGACY_METODO = {"base0": (0.0, None), "base5": (5.0, None), "base6": (6.0, None),
+                  "base10": (10.0, None), "base10cut30": (10.0, 30.0)}
 
 
-def metodo(clave):
-    """(etiqueta, Tbase, tope) del metodo, o el base0 si no se reconoce."""
-    return _METODO.get(clave, _METODO["base0"])
+def cero_vegetativo(especie):
+    """Cero vegetativo (Tbase) sugerido para la especie. 0 C si no esta en la tabla."""
+    return CERO_VEGETATIVO.get((especie or "").upper(), 0.0)
 
 
+def tope_sugerido(especie):
+    """Tope de Tmax sugerido para la especie (o None si no lo tiene)."""
+    return TOPE_SUGERIDO.get((especie or "").upper())
+
+
+def etiqueta_calculo(clave):
+    """Etiqueta larga del metodo de calculo (o la del tiempo termico si no se
+    reconoce)."""
+    return _METODO_CALC.get(clave, _METODO_CALC[METODO_CALC_DEF])
+
+
+def params_integral(it):
+    """(metodo, cero_vegetativo, tope) de una integral, aceptando el formato NUEVO
+    ({metodo:'tiempo_termico', cero_vegetativo, tope}) y el ANTIGUO ({metodo:'base6'}).
+
+    El formato antiguo se traduce a tiempo termico con su Tbase y su tope, para que
+    las integrales ya guardadas sigan calculando exactamente igual que antes."""
+    it = it or {}
+    m = it.get("metodo") or METODO_CALC_DEF
+    if m in _LEGACY_METODO:
+        to, tope = _LEGACY_METODO[m]
+        return "tiempo_termico", to, tope
+    if m not in _METODO_CALC:
+        m = METODO_CALC_DEF
+    to = it.get("cero_vegetativo")
+    to = 0.0 if to in (None, "") else float(to)
+    tope = it.get("tope")
+    tope = float(tope) if tope not in (None, "") else None
+    return m, to, tope
+
+
+def etiqueta_integral(it):
+    """Etiqueta corta y legible de una integral para listas y desplegables:
+    metodo + cero vegetativo (+ tope, si lo hay)."""
+    m, to, tope = params_integral(it)
+    nombre = {"tiempo_termico": "Tiempo térmico", "directo": "Directo (Reaumur)",
+              "exponencial": "Exponencial", "heliotermico": "Heliotérmica"}.get(m, m)
+    if m == "directo":
+        return nombre                               # base 0 implicita
+    if m == "exponencial":
+        return f"{nombre} (ref. 4,5 °C)"
+    if m == "heliotermico":
+        return f"{nombre} (Tm × horas de luz)"
+    extra = f", tope {tope:.0f} °C" if tope is not None else ""
+    return f"{nombre} (cero veg. {to:.0f} °C{extra})"
+
+
+# Compatibilidad hacia atras: codigo viejo podia llamar a estas. `etiqueta_metodo`
+# ahora entiende tanto claves nuevas como las antiguas.
 def etiqueta_metodo(clave):
-    return _METODO.get(clave, _METODO["base0"])[0]
+    if clave in _LEGACY_METODO:
+        to, tope = _LEGACY_METODO[clave]
+        extra = f", tope {tope:.0f} °C" if tope is not None else ""
+        return f"Tiempo térmico (cero veg. {to:.0f} °C{extra})"
+    return etiqueta_calculo(clave)
 
 
 # =====================================================================
 # ACUMULACION (pura: se prueba sin red)
 # =====================================================================
+def _media(t_min, t_max, tope=None):
+    """Tª media del dia, topando la Tmax antes de promediar si hay tope."""
+    tmax = min(t_max, tope) if tope is not None else t_max
+    return (tmax + t_min) / 2.0
+
+
 def gdd_dia(t_min, t_max, tbase, tope=None):
-    """Grados-dia de UN dia. None si falta alguna temperatura.
+    """Grados-dia de UN dia por TIEMPO TERMICO (residual). None si falta una Tª.
 
     Metodo de la media con tope superior opcional (single-average con cutoff):
     se topa la Tmax antes de promediar, y el resultado no baja de cero (un dia frio
     no RESTA calor acumulado)."""
     if t_min is None or t_max is None:
         return None
-    tmax = min(t_max, tope) if tope is not None else t_max
-    media = (tmax + t_min) / 2.0
-    return round(max(0.0, media - tbase), 2)
+    return round(max(0.0, _media(t_min, t_max, tope) - tbase), 2)
 
 
-def acumular(clima_dias, clave_metodo, desde=None, hasta=None):
-    """Suma de grados-dia sobre una ventana de fechas [desde, hasta] (ISO, ambas
-    inclusive; None = sin limite por ese lado).
+def horas_luz(lat, fecha_iso):
+    """Duracion del dia en HORAS de sol (modelo CBM, Forsythe et al. 1995), a partir
+    de la latitud y el dia del ano. Pura; la usa el metodo heliotermico. None si no
+    hay latitud o la fecha no se entiende."""
+    if lat is None:
+        return None
+    try:
+        doy = _dt.date.fromisoformat(fecha_iso).timetuple().tm_yday
+    except (ValueError, TypeError):
+        return None
+    lat_r = math.radians(lat)
+    P = math.asin(0.39795 * math.cos(0.2163108 + 2 * math.atan(
+        0.9671396 * math.tan(0.00860 * (doy - 186)))))
+    arg = ((math.sin(math.radians(0.8333)) + math.sin(lat_r) * math.sin(P)) /
+           (math.cos(lat_r) * math.cos(P)))
+    arg = max(-1.0, min(1.0, arg))                 # polos/dia polar: se satura, no rompe
+    return round(24.0 - (24.0 / math.pi) * math.acos(arg), 3)
 
-    `clima_dias` es la lista de dias de `clima_era5.clima_de_parcela` (cada uno con
-    `fecha`, `t_min`, `t_max`). Devuelve un dict con el total, los dias contados y
-    los que no tenian temperatura (para poder decir si el dato esta completo)."""
-    _et, tbase, tope = metodo(clave_metodo)
+
+def aporte_dia(t_min, t_max, metodo=METODO_CALC_DEF, cero_veg=0.0, tope=None, horas=None):
+    """Aporte termico de UN dia segun el TIPO de integral. None si faltan datos.
+
+      tiempo_termico  max(0, media − cero_veg)     -grado-dia clasico-
+      directo         max(0, media)                -Reaumur, Tm ≥ 0-
+      exponencial     2^((media − 4,5)/10)         -0 si media < 4,5-
+      heliotermico    max(0, media) × horas de luz -None si no hay horas-
+    """
+    if t_min is None or t_max is None:
+        return None
+    if metodo == "directo":
+        return round(max(0.0, _media(t_min, t_max)), 2)
+    if metodo == "exponencial":
+        m = _media(t_min, t_max)
+        return round(2.0 ** ((m - 4.5) / 10.0), 4) if m >= 4.5 else 0.0
+    if metodo == "heliotermico":
+        if horas is None:
+            return None
+        return round(max(0.0, _media(t_min, t_max)) * horas, 2)
+    return gdd_dia(t_min, t_max, cero_veg, tope)   # tiempo termico (por defecto)
+
+
+def acumular(clima_dias, integral=None, desde=None, hasta=None, lat=None):
+    """Suma del aporte termico sobre [desde, hasta] (ISO, inclusive; None = sin
+    limite por ese lado), con el metodo de `integral`.
+
+    `integral` es un dict {metodo, cero_vegetativo, tope} y acepta el formato viejo
+    ({metodo:'base6'}). `clima_dias` son los dias de `clima_era5` (fecha, t_min,
+    t_max). Para el metodo heliotermico hace falta `lat` (para las horas de luz);
+    sin ella, esos dias cuentan como hueco. Devuelve total, dias contados y huecos."""
+    metodo, cero_veg, tope = params_integral(integral or {})
     total, n, huecos = 0.0, 0, 0
     for d in clima_dias or []:
         f = d.get("fecha")
         if not f or (desde and f < desde) or (hasta and f > hasta):
             continue
-        g = gdd_dia(d.get("t_min"), d.get("t_max"), tbase, tope)
+        horas = horas_luz(lat, f) if metodo == "heliotermico" else None
+        g = aporte_dia(d.get("t_min"), d.get("t_max"), metodo, cero_veg, tope, horas)
         if g is None:
             huecos += 1
             continue
         total += g
         n += 1
-    return {"gdd": round(total, 1), "dias": n, "huecos": huecos, "metodo": clave_metodo}
+    return {"gdd": round(total, 1), "dias": n, "huecos": huecos,
+            "metodo": metodo, "cero_vegetativo": cero_veg, "tope": tope}
 
 
 # =====================================================================
@@ -228,28 +359,42 @@ def _clima_de(parcela, desde, hasta):
         return []
 
 
-def _metodo_de_integrales(integrales, especie):
-    """El metodo a usar para la fase: el de la integral que arranca en la siembra,
-    o el de la primera, o el sugerido para la especie."""
+def _integral_para_fase(integrales, especie):
+    """La integral cuyo GDD gobierna la fase: la que arranca en la siembra, o la
+    primera; si no hay ninguna, una de tiempo termico con la base de la especie."""
     for it in integrales or []:
         if (it.get("desde") or "").lower() in ("siembra", "nascencia", "emergencia"):
-            return it.get("metodo") or METODO_SUGERIDO.get(especie, "base0")
+            return it
     if integrales:
-        return integrales[0].get("metodo") or METODO_SUGERIDO.get(especie, "base0")
-    return METODO_SUGERIDO.get(especie, "base0")
+        return integrales[0]
+    return {"metodo": METODO_CALC_DEF, "cero_vegetativo": cero_vegetativo(especie)}
+
+
+def _lat_de(parcela):
+    """Latitud (centro de la parcela) para las horas de luz del metodo heliotermico.
+    None si no hay coordenadas. `coordenadas` es [[lon,lat], ...]."""
+    try:
+        import almacen as DB
+        coords = (DB.ficha(parcela) or {}).get("coordenadas") or []
+        lats = [c[1] for c in coords if isinstance(c, (list, tuple)) and len(c) >= 2]
+        return sum(lats) / len(lats) if lats else None
+    except Exception:
+        return None
 
 
 def gdd_acumulado(especie, spec, fecha_iso, parcela):
     """GDD acumulado desde la siembra hasta `fecha_iso`, con clima real. None si no
-    se puede (sin siembra, sin clima, sin metodo)."""
+    se puede (sin siembra, sin clima). El metodo y el cero vegetativo salen de la
+    integral que gobierna la fase."""
     siembra = (spec or {}).get("fecha_siembra")
     if not siembra or not fecha_iso:
         return None
-    met = _metodo_de_integrales((spec or {}).get("integrales_termicas"), especie)
+    it = _integral_para_fase((spec or {}).get("integrales_termicas"), especie)
     clima = _clima_de(parcela, siembra, fecha_iso)
     if not clima:
         return None
-    r = acumular(clima, met, desde=siembra, hasta=fecha_iso)
+    lat = _lat_de(parcela) if params_integral(it)[0] == "heliotermico" else None
+    r = acumular(clima, it, desde=siembra, hasta=fecha_iso, lat=lat)
     return r if r["dias"] > 0 else None
 
 
@@ -285,16 +430,23 @@ def resumen_parcela(tipo, especie, spec, fecha_iso, parcela):
     hitos = dict((f, g) for g, f in GDD_FASES.get(especie, []))
     filas = []
     for it in integrales:
-        et = etiqueta_metodo(it.get("metodo"))
+        met, cv, tope = params_integral(it)
         d, h = it.get("desde", "siembra"), it.get("hasta", "cosecha")
         ref = None
         if d in hitos and h in hitos:
             ref = round(hitos[h] - hitos[d], 0)
-        filas.append({"metodo": et, "desde": d, "hasta": h, "referencia_gdd": ref})
+        filas.append({"metodo": etiqueta_integral(it), "metodo_clave": met,
+                      "cero_vegetativo": cv, "tope": tope,
+                      "desde": d, "hasta": h, "referencia_gdd": ref})
+    met_fase = params_integral(_integral_para_fase(integrales, especie))[0]
     return {
         "gdd_acumulado": ac["gdd"] if ac else None,
         "dias": ac["dias"] if ac else 0,
         "huecos": ac["huecos"] if ac else 0,
+        "metodo_fase": met_fase,
+        # los hitos de fase estan en °día de tiempo termico: con otro metodo las
+        # unidades no casan y la fase por GDD es orientativa (el usuario lo eligio).
+        "aviso_metodo": met_fase != "tiempo_termico",
         "fase_gdd": fase_por_gdd(especie, ac["gdd"]) if ac else None,
         "faltan_siguiente": gdd_hasta_siguiente(especie, ac["gdd"]) if ac else None,
         "hay_referencia": hay_referencia_gdd(especie),

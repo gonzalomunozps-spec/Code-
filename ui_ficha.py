@@ -803,6 +803,10 @@ class FichaParcela:
                           "marcando el calendario.)")
         elif spec.get("integrales_termicas"):
             partes.append("Con integral definida, la fase del diagnóstico la marca el GDD.")
+            if res.get("aviso_metodo"):
+                partes.append("⚠ El método elegido no es «tiempo térmico»: sus unidades no "
+                              "coinciden con los hitos de fase (en °C·día), así que la fase por "
+                              "GDD es solo orientativa.")
         self.lbl_gdd.config(text="  ".join(partes) if partes else
                             "Sin fecha de siembra o sin clima: no se puede acumular todavía.")
         etiquetas = [f"{it['desde']} → {it['hasta']}  ·  {it['metodo']}" for it in res.get("integrales", [])]

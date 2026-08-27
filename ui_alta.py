@@ -380,18 +380,39 @@ class VentanaAltaParcela(tk.Toplevel):
                  bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["small"]).pack(
             anchor="w", padx=8, pady=(8, 0))
         tk.Label(caja, text="Si añades alguna, la fase del cultivo la marca el GDD y no el "
-                            "calendario.\nElige el método y desde/hasta qué fase cuenta. Si no "
-                            "añades ninguna, todo sigue igual.",
+                            "calendario.\nElige el MÉTODO de cálculo y desde/hasta qué fase "
+                            "cuenta. El CERO VEGETATIVO es propio de cada especie: se rellena "
+                            "solo al elegir el cultivo, y puedes cambiarlo. Si no añades ninguna, "
+                            "todo sigue igual.",
                  bg=TEMA["surface"], fg=TEMA["text_muted"], font=FUENTES["small"],
                  justify="left").pack(anchor="w", padx=8, pady=(0, 4))
 
-        # metodo (Tbase). Se guarda la CLAVE, se ensena la etiqueta.
-        self._int_metodo = {et: cl for cl, et, _tb, _tope in _GDD.METODOS}
-        tk.Label(caja, text="Método", bg=TEMA["surface"], fg=TEMA["text_sec"],
-                 font=FUENTES["small"]).pack(anchor="w", padx=8)
+        # METODO de calculo (la formula): tiempo termico, directo, exponencial,
+        # heliotermico. Se guarda la CLAVE, se ensena la etiqueta.
+        self._int_metodo = {et: cl for cl, et in _GDD.METODOS_CALCULO}
+        tk.Label(caja, text="Método de cálculo (tipo de integral térmica)", bg=TEMA["surface"],
+                 fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w", padx=8)
         self.cb_int_metodo = ttk.Combobox(caja, state="readonly",
-                                           values=[et for _cl, et, _tb, _tope in _GDD.METODOS])
+                                           values=[et for _cl, et in _GDD.METODOS_CALCULO])
+        self.cb_int_metodo.set(_GDD.etiqueta_calculo(_GDD.METODO_CALC_DEF))
         self.cb_int_metodo.pack(fill="x", padx=8, pady=(0, 4))
+
+        # CERO VEGETATIVO (Tbase) y TOPE, en su propia fila. El cero vegetativo se
+        # autorrellena por especie (editable); solo lo usa el tiempo termico.
+        fila_cv = tk.Frame(caja, bg=TEMA["surface"])
+        fila_cv.pack(fill="x", padx=8, pady=(0, 4))
+        ccv = tk.Frame(fila_cv, bg=TEMA["surface"])
+        ccv.pack(side="left", fill="x", expand=True)
+        tk.Label(ccv, text="Cero vegetativo (°C)", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w")
+        self.e_int_cv = ttk.Entry(ccv)
+        self.e_int_cv.pack(fill="x")
+        ctope = tk.Frame(fila_cv, bg=TEMA["surface"])
+        ctope.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        tk.Label(ctope, text="Tope Tmáx (°C, opcional)", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w")
+        self.e_int_tope = ttk.Entry(ctope)
+        self.e_int_tope.pack(fill="x")
 
         fila = tk.Frame(caja, bg=TEMA["surface"])
         fila.pack(fill="x", padx=8)
@@ -436,13 +457,14 @@ class VentanaAltaParcela(tk.Toplevel):
         ops = self._opciones_fases()
         self.cb_int_desde["values"] = ops
         self.cb_int_hasta["values"] = ops
-        # sugerir el metodo (Tbase) propio del cultivo, para que la referencia de
-        # bibliografia cuadre con los hitos de GDD de esa especie. Solo si el usuario
-        # aun no ha elegido uno: no se le pisa su decision.
-        if not self.cb_int_metodo.get():
-            sug = _GDD.METODO_SUGERIDO.get(self.cb_sub.get())
-            if sug:
-                self.cb_int_metodo.set(_GDD.etiqueta_metodo(sug))
+        # autorrellenar el CERO VEGETATIVO propio de la especie (editable). Solo si
+        # el campo esta vacio: no se pisa lo que el usuario haya tecleado.
+        if hasattr(self, "e_int_cv") and not self.e_int_cv.get().strip():
+            self.e_int_cv.insert(0, f"{_GDD.cero_vegetativo(self.cb_sub.get()):.0f}")
+        if hasattr(self, "e_int_tope") and not self.e_int_tope.get().strip():
+            tope = _GDD.tope_sugerido(self.cb_sub.get())
+            if tope is not None:
+                self.e_int_tope.insert(0, f"{tope:.0f}")
 
     def _anadir_integral(self):
         et = self.cb_int_metodo.get().strip()
@@ -451,8 +473,33 @@ class VentanaAltaParcela(tk.Toplevel):
             return messagebox.showwarning("Integral térmica", "Elige un método.", parent=self)
         desde = (self.cb_int_desde.get() or "").strip() or "siembra"
         hasta = (self.cb_int_hasta.get() or "").strip() or "cosecha"
-        self.integrales.append({"metodo": clave, "desde": desde, "hasta": hasta})
+        it = {"metodo": clave, "desde": desde, "hasta": hasta}
+        # cero vegetativo y tope: solo tienen sentido con el tiempo termico
+        if clave == "tiempo_termico":
+            try:
+                it["cero_vegetativo"] = self._num_opc(self.e_int_cv.get(), "cero vegetativo",
+                                                      por_defecto=_GDD.cero_vegetativo(self.cb_sub.get()))
+                tope = self._num_opc(self.e_int_tope.get(), "tope")
+                if tope is not None:
+                    it["tope"] = tope
+            except ValueError as e:
+                return messagebox.showwarning("Integral térmica",
+                                              f"Revisa «{e}»: escribe un número (o déjalo vacío).",
+                                              parent=self)
+        self.integrales.append(it)
         self._pintar_lista_integrales()
+
+    @staticmethod
+    def _num_opc(txt, campo, por_defecto=None):
+        """Convierte un campo opcional a float. Vacio -> por_defecto. Lanza
+        ValueError(campo) si no es un numero."""
+        t = (txt or "").strip().replace(",", ".")
+        if not t:
+            return por_defecto
+        try:
+            return float(t)
+        except ValueError:
+            raise ValueError(campo)
 
     def _quitar_integral(self):
         sel = self.lst_integrales.curselection()
@@ -466,7 +513,7 @@ class VentanaAltaParcela(tk.Toplevel):
             return
         self.lst_integrales.delete(0, tk.END)
         for it in self.integrales:
-            et = _GDD.etiqueta_metodo(it.get("metodo"))
+            et = _GDD.etiqueta_integral(it)
             self.lst_integrales.insert(
                 tk.END, f"{it.get('desde')} → {it.get('hasta')}  ·  {et}")
 

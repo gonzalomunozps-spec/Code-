@@ -3340,6 +3340,45 @@ def pruebas_grados_dia():
     check("gdd: un cultivo sin tabla GDD no tiene referencia (usara calendario)",
           lambda: G.hay_referencia_gdd("VEZA"), lambda r: r is False)
 
+    # --- cero vegetativo por especie (se autorrellena en el alta) ---
+    check("gdd: el cero vegetativo es propio de la especie (girasol 6, maiz 10)",
+          lambda: (G.cero_vegetativo("GIRASOL"), G.cero_vegetativo("MAIZ")),
+          lambda r: r == (6.0, 10.0))
+    check("gdd: una especie desconocida cae a cero vegetativo 0",
+          lambda: G.cero_vegetativo("MARCIANO"), lambda r: r == 0.0)
+    check("gdd: el maiz sugiere tope de Tmax; el trigo no",
+          lambda: (G.tope_sugerido("MAIZ"), G.tope_sugerido("TRIGO")), lambda r: r == (30.0, None))
+
+    # --- metodo y cero vegetativo son cosas SEPARADAS; formato viejo y nuevo ---
+    check("gdd: una integral vieja (metodo='base6') se lee como tiempo termico To=6",
+          lambda: G.params_integral({"metodo": "base6"}), lambda r: r == ("tiempo_termico", 6.0, None))
+    check("gdd: una integral vieja con corte conserva su tope",
+          lambda: G.params_integral({"metodo": "base10cut30"}),
+          lambda r: r == ("tiempo_termico", 10.0, 30.0))
+    check("gdd: el formato nuevo separa metodo y cero vegetativo",
+          lambda: G.params_integral({"metodo": "directo", "cero_vegetativo": 7}),
+          lambda r: r[0] == "directo")
+
+    # --- los cuatro tipos de integral termica del temario ---
+    check("gdd: directo (Reaumur) suma la media sin restar base (8/22 -> 15)",
+          lambda: G.aporte_dia(8, 22, "directo"), lambda r: r == 15.0)
+    check("gdd: tiempo termico resta el cero vegetativo (8/22, To=6 -> 9)",
+          lambda: G.aporte_dia(8, 22, "tiempo_termico", 6.0), lambda r: r == 9.0)
+    check("gdd: exponencial duplica cada 10 grados (media 14,5 -> 2^1 = 2)",
+          lambda: G.aporte_dia(9, 20, "exponencial"), lambda r: abs(r - 2.0) < 1e-6)
+    check("gdd: exponencial no cuenta por debajo de 4,5 grados",
+          lambda: G.aporte_dia(0, 4, "exponencial"), lambda r: r == 0.0)
+    check("gdd: heliotermico multiplica la media por las horas de luz",
+          lambda: G.aporte_dia(8, 22, "heliotermico", horas=12.0), lambda r: r == 180.0)
+    check("gdd: heliotermico sin horas de luz no puede contar (hueco)",
+          lambda: G.aporte_dia(8, 22, "heliotermico"), lambda r: r is None)
+
+    # --- horas de luz (modelo CBM): mas largo el dia en verano que en invierno ---
+    check("gdd: el dia dura mas en el solsticio de verano que en el de invierno (lat 40)",
+          lambda: G.horas_luz(40, "2026-06-21") > G.horas_luz(40, "2026-12-21"), lambda r: r is True)
+    check("gdd: sin latitud no hay horas de luz (None)",
+          lambda: G.horas_luz(None, "2026-06-21"), lambda r: r is None)
+
     # --- con clima real (base sintetica) + override en el diagnostico ---
     try:
         import clima_era5 as C
@@ -3369,6 +3408,20 @@ def pruebas_grados_dia():
     check("gdd: el resumen para la ficha trae el GDD y la referencia de la integral",
           lambda: G.resumen_parcela("EXTENSIVO", "TRIGO", spec_de(cult_g), "2026-04-01", "PG"),
           lambda r: r and r["gdd_acumulado"] and r["integrales"][0]["referencia_gdd"] == 1000)
+    # con un metodo que NO es tiempo termico, el resumen avisa (unidades no comparables)
+    cult_exp = dict(cult, integrales_termicas=[
+        {"metodo": "exponencial", "desde": "nascencia", "hasta": "espigado / floracion"}])
+    check("gdd: con metodo exponencial el resumen marca el aviso de unidades",
+          lambda: G.resumen_parcela("EXTENSIVO", "TRIGO", spec_de(cult_exp), "2026-04-01", "PG"),
+          lambda r: r and r.get("aviso_metodo") is True and r.get("metodo_fase") == "exponencial")
+    # una integral con el CERO VEGETATIVO nuevo acumula con esa base (To=10 < que To=0)
+    cult_cv = dict(cult, integrales_termicas=[
+        {"metodo": "tiempo_termico", "cero_vegetativo": 10.0, "desde": "nascencia",
+         "hasta": "espigado / floracion"}])
+    check("gdd: subir el cero vegetativo baja el GDD acumulado (menos calor util)",
+          lambda: G.gdd_acumulado("TRIGO", spec_de(cult_cv), "2026-04-01", "PG")["gdd"]
+                  < G.gdd_acumulado("TRIGO", spec_de(cult_g), "2026-04-01", "PG")["gdd"],
+          lambda r: r is True)
 
 
 def pruebas_balance_hidrico():
