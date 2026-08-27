@@ -3902,6 +3902,22 @@ def pruebas_empaquetar():
           lambda: all(m in args for m in ("validacion", "grados_dia", "copias")),
           lambda r: r is True)
 
+    # --- instalador de Windows (Inno Setup): coherencia de los ficheros ---
+    def _lee(f):
+        with open(os.path.join(E.DIR, f), encoding="utf-8") as fh:
+            return fh.read()
+    iss = _lee("instalador_windows.iss")
+    check("instalador win: el .iss empaqueta la carpeta que genera PyInstaller",
+          lambda: ("dist\\MonitorParcelas\\*" in iss and E.NOMBRE + ".exe" in iss),
+          lambda r: r is True)
+    check("instalador win: el .iss crea acceso de escritorio y desinstalador",
+          lambda: ("desktopicon" in iss and "uninstallexe" in iss.lower()),
+          lambda r: r is True)
+    bat = _lee("construir_windows.bat")
+    check("instalador win: el .bat encadena empaquetar.py y el .iss",
+          lambda: ("empaquetar.py" in bat and "instalador_windows.iss" in bat and "ISCC" in bat),
+          lambda r: r is True)
+
 
 # =====================================================================
 def main():
