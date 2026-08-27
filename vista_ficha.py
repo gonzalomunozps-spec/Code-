@@ -18,6 +18,8 @@ dominio; no escribe ni toca widgets. Las entidades viajan como `dict`, como en
 todo el programa.
 """
 
+from datetime import date
+
 import almacen as DB
 import registro_parcela as REG
 import contraste_indices as CI
@@ -25,11 +27,17 @@ from interpretacion_fenologica import (evaluar_parcela, ajuste_por_validaciones,
                                        observaciones_del_agricultor)
 from cultivo import spec_de
 from gee_cliente import INDICES_ORDEN
+from bitacora import log
 
 try:
     import calibracion_umbrales as _CALIB
 except Exception:
     _CALIB = None
+
+try:
+    import validacion as _VAL
+except Exception:
+    _VAL = None
 
 
 def preparar_interpretacion(nombre, campana, regs, idx):
@@ -127,6 +135,134 @@ def preparar_interpretacion(nombre, campana, regs, idx):
         "motivo": diag.get("motivo", ""),
         "interpretacion_cache": actual.get("interpretacion"),
     }
+
+
+def _iso_a_dia(iso):
+    try:
+        a, m, d = (iso or "").split("-")
+        return date(int(a), int(m), int(d))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _pasada_cercana(regs, iso):
+    """La pasada mas cercana en el tiempo a una fecha ISO (o None). Empareja la
+    observacion de campo con el satelite: el dia exacto casi nunca coincide."""
+    obj = _iso_a_dia(iso)
+    if not obj or not regs:
+        return None
+    mejor, mejor_d = None, None
+    for r in regs:
+        d = _iso_a_dia(r.get("fecha", ""))
+        if not d:
+            continue
+        dist = abs((d - obj).days)
+        if mejor_d is None or dist < mejor_d:
+            mejor, mejor_d = r, dist
+    return mejor
+
+
+def _fase_sistema(nombre, campana, regs, iso):
+    """La fase que el sistema daria para la pasada mas cercana a `iso`. Es la
+    prediccion ORIGINAL del motor (sin correcciones a mano): con ella se mide,
+    para no examinarse con las respuestas. None si no se puede calcular."""
+    obj = _iso_a_dia(iso)
+    if not obj or not regs:
+        return None
+    # indice de la pasada mas cercana; el motor necesita la serie HASTA ese dia
+    idx, mejor_d = None, None
+    for i, r in enumerate(regs):
+        d = _iso_a_dia(r.get("fecha", ""))
+        if not d:
+            continue
+        dist = abs((d - obj).days)
+        if mejor_d is None or dist < mejor_d:
+            idx, mejor_d = i, dist
+    if idx is None:
+        return None
+    ficha = DB.ficha(nombre) or {}
+    cult = (ficha.get("cultivos_por_campana", {}) or {}).get(campana, {})
+    tipo, sub = cult.get("tipo", "BARBECHO"), cult.get("subtipo", "")
+    if tipo == "BARBECHO":
+        return None
+    spec = spec_de(cult)
+    diag = evaluar_parcela(tipo, sub, regs[:idx + 1], spec=spec, parcela=nombre,
+                           heterogeneidad_activa=ficha.get("heterogeneidad", True),
+                           arbolado=bool(ficha.get("arbolado")))
+    return diag.get("fase")
+
+
+def resumen_validacion(nombre):
+    """Puntua el sistema contra las OBSERVACIONES DE CAMPO de la parcela.
+
+    Empareja lo observado con lo que el sistema predijo -la prediccion original,
+    nunca la corregida a mano- y llama al modulo `validacion` para las metricas.
+    Cuatro emparejamientos:
+      fase        fase observada  vs  fase del motor en la pasada mas cercana
+      rendimiento kg/ha medidos   vs  NDVI maximo de la campana (predictor clasico)
+      dron        NDVI/NDRE de vuelo vs  el mismo indice del satelite mas cercano
+      humedad     (pendiente de modelo de suelo; se guarda pero aun no se empareja)
+
+    Robusto: nunca lanza. Devuelve dict con la lista de observaciones y, si el
+    modulo `validacion` esta y hay pares, el informe y su texto. Sin modulo o sin
+    datos, `informe`/`texto` van vacios pero las observaciones se listan igual."""
+    try:
+        obs = DB.observaciones(nombre)
+    except Exception:
+        log.debug("no se pudieron leer las observaciones de campo", exc_info=True)
+        obs = []
+    base = {"observaciones": obs, "n_obs": len(obs), "informe": None, "texto": ""}
+    if not obs or _VAL is None:
+        return base
+
+    # regs por campana, una sola vez (varias observaciones comparten campana)
+    regs_cache = {}
+    def _regs(campana):
+        if campana not in regs_cache:
+            try:
+                regs_cache[campana] = sorted(DB.pasadas(nombre, campana),
+                                             key=lambda r: r.get("fecha", ""))
+            except Exception:
+                regs_cache[campana] = []
+        return regs_cache[campana]
+
+    pares_fase, pares_rend, pares_dron = [], [], []
+    for o in obs:
+        camp = o.get("campana", "")
+        fecha = o.get("fecha", "")
+        regs = _regs(camp)
+        # FASE observada vs fase del motor
+        if o.get("fase_obs"):
+            try:
+                fsis = _fase_sistema(nombre, camp, regs, fecha)
+                if fsis:
+                    pares_fase.append((fsis, o["fase_obs"]))
+            except Exception:
+                log.debug("no se pudo emparejar la fase observada", exc_info=True)
+        # RENDIMIENTO medido vs NDVI maximo de la campana
+        if o.get("rendimiento_kg_ha") is not None:
+            ndvis = [r.get("ndvi") for r in regs if r.get("ndvi") is not None]
+            if ndvis:
+                pares_rend.append((max(ndvis), o["rendimiento_kg_ha"]))
+        # DRON vs satelite (mismo indice, pasada mas cercana)
+        if o.get("valor_dron") is not None and o.get("indice_dron"):
+            r = _pasada_cercana(regs, fecha)
+            if r is not None:
+                sat = r.get(o["indice_dron"].lower())
+                if sat is not None:
+                    pares_dron.append((sat, o["valor_dron"]))
+
+    inf = _VAL.informe(pares_fase=pares_fase, pares_rend=pares_rend)
+    # el dron valida satelite<->dron: va como su propio bloque de regresion
+    if pares_dron:
+        inf["dron"] = _VAL.regresion(pares_dron)
+    base["informe"] = inf
+    partes = [t for t in (_VAL.texto(inf),) if t]
+    if pares_dron and inf.get("dron") and inf["dron"].get("r2") is not None:
+        d = inf["dron"]
+        partes.append(f"Dron↔satélite: R²={d['r2']:.2f}, error {d['rmse']:.3f}, n={d['n']}")
+    base["texto"] = "\n".join(partes)
+    return base
 
 
 def _encabezado(diag, actual, aj, nota_usuario, cultivo_id, historial, nombre):

@@ -55,6 +55,19 @@ def _anotar(donde, e):
     FALLOS.append((donde, type(e).__name__, str(e), traceback.format_exc()))
 
 
+def _buscar_toplevel(raiz, titulo):
+    """Busca en todo el arbol un Toplevel abierto con ese titulo (los dialogos
+    cuelgan del marco de la ficha, no siempre de la raiz)."""
+    import tkinter as tk
+    for w in raiz.winfo_children():
+        if isinstance(w, tk.Toplevel) and w.title() == titulo:
+            return w
+        hallado = _buscar_toplevel(w, titulo)
+        if hallado is not None:
+            return hallado
+    return None
+
+
 def _paso(nombre, fn):
     """Ejecuta un paso y anota el fallo en vez de abortar la tanda."""
     try:
@@ -349,6 +362,20 @@ def escenario_fichas(P, DB):
         _paso(f"{nombre}: ver efecto", lambda f=f: (f._ver_efecto_evento(), root.update()))
         _paso(f"{nombre}: correccion", lambda f=f: (f._abrir_correccion(), root.update()))
         _paso(f"{nombre}: validar", lambda f=f: (f._validar("correcto"), root.update()))
+        # observacion de campo: abre el dialogo, anota un dato y comprueba que la
+        # tarjeta de validacion lo recoge (solo si el modulo `validacion` esta)
+        if getattr(f, "lst_val", None) is not None:
+            def _observacion(f=f):
+                antes = f.lst_val.size()
+                f._observacion_campo(); root.update()
+                dlg = _buscar_toplevel(root, "Observacion de campo")
+                if dlg is None:
+                    raise AssertionError("no se abrio el dialogo de observacion de campo")
+                dlg.e_rend.insert(0, "4200"); dlg.cb_fuente.set("campo")
+                dlg._guardar(); root.update()
+                if f.lst_val.size() <= antes:
+                    raise AssertionError("la observacion no aparece en la tarjeta de validacion")
+            _paso(f"{nombre}: observacion de campo", _observacion)
         _paso(f"{nombre}: comparar mapas", lambda f=f: (f._comparar_mapas(), root.update()))
         _paso(f"{nombre}: menu exportar", lambda f=f: (f._menu_exportar(), root.update()))
         _paso(f"{nombre}: campanas anteriores",

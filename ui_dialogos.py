@@ -23,6 +23,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from ui_tema import TEMA, FUENTES, centrar_sobre, marco_scroll
+from ui_widgets import CampoFecha
 
 import almacen as DB
 import registro_parcela as REG
@@ -501,5 +502,149 @@ class DialogoBorrarCampana(tk.Toplevel):
                             f"Borrada la campana {self.campana} de "
                             f"{self.nombre.replace('_', ' ')} ({n} pasada(s)).",
                             parent=self.master)
+        if callable(self.al_terminar):
+            self.al_terminar()
+
+
+def _num(txt, campo, minimo=None, maximo=None):
+    """Convierte un campo de texto a float o lanza ValueError con el NOMBRE del
+    campo (para el aviso). Vacio -> None (el dato es opcional)."""
+    t = (txt or "").strip().replace(",", ".")
+    if not t:
+        return None
+    try:
+        v = float(t)
+    except ValueError:
+        raise ValueError(campo)
+    if (minimo is not None and v < minimo) or (maximo is not None and v > maximo):
+        raise ValueError(campo)
+    return v
+
+
+class DialogoObservacionCampo(tk.Toplevel):
+    """Anota una OBSERVACION DE CAMPO: la verdad-terreno con la que se mide el
+    acierto del sistema (modulo opcional `validacion`).
+
+    Recoge lo que se vio de verdad -a pie de finca, con una sonda de humedad o con
+    un vuelo de dron multiespectral- para esta parcela y una fecha. Todos los
+    campos son opcionales salvo la fecha: se anota lo que se haya medido. El dato
+    se guarda como VERDAD y no toca el diagnostico del sistema; solo sirve para
+    puntuarlo despues (evita la circularidad de corregir con lo mismo que mides).
+    """
+
+    FUENTES_OBS = ["campo", "sonda", "dron"]
+
+    def __init__(self, master, ficha, al_terminar=None):
+        super().__init__(master)
+        self.ficha = ficha
+        self.al_terminar = al_terminar
+        self.title("Observacion de campo")
+        self.configure(bg=TEMA["surface"])
+        self.resizable(False, False)
+        self.transient(master.winfo_toplevel())
+        self.lift()
+        self.after(60, self.focus_force)
+        self.after(0, lambda: centrar_sobre(self, self.master))
+        self.grab_set()
+
+        cab = f"{ficha.nombre.replace('_', ' ')}  ·  campana {ficha.campana}"
+        tk.Label(self, text=cab, bg=TEMA["surface"], fg=TEMA["text"],
+                 font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 0))
+        tk.Label(self, text="Anota lo que observaste de verdad. Se guarda como dato medido "
+                            "para medir el acierto del sistema; no cambia el diagnostico.",
+                 bg=TEMA["surface"], fg=TEMA["text_sec"], font=FUENTES["small"],
+                 wraplength=440, justify="left").pack(anchor="w", padx=16, pady=(2, 8))
+
+        form = tk.Frame(self, bg=TEMA["surface"])
+        form.pack(fill="x", padx=16)
+
+        def _fila(r, texto):
+            tk.Label(form, text=texto, bg=TEMA["surface"], fg=TEMA["text_sec"],
+                     font=FUENTES["small"]).grid(row=r, column=0, sticky="w", pady=(6, 0))
+
+        _fila(0, "Fecha de la observacion")
+        self.fecha = CampoFecha(form, iso=datetime.now().strftime("%Y-%m-%d"))
+        self.fecha.grid(row=0, column=1, sticky="w", pady=(6, 0))
+        _fila(1, "Origen del dato")
+        self.cb_fuente = ttk.Combobox(form, state="readonly", width=12, values=self.FUENTES_OBS)
+        self.cb_fuente.set("campo")
+        self.cb_fuente.grid(row=1, column=1, sticky="w", pady=(6, 0))
+
+        _fila(2, "Fase fenologica observada")
+        ctx = {"cultivo": self._cultivo_str()}
+        self.cb_fase = ttk.Combobox(form, state="normal", width=26, values=_fases_para(ctx))
+        self.cb_fase.set("")
+        self.cb_fase.grid(row=2, column=1, sticky="w", pady=(6, 0))
+
+        _fila(3, "Rendimiento medido (kg/ha)")
+        self.e_rend = ttk.Entry(form, width=12)
+        self.e_rend.grid(row=3, column=1, sticky="w", pady=(6, 0))
+
+        _fila(4, "Humedad de sonda (%)")
+        self.e_hum = ttk.Entry(form, width=12)
+        self.e_hum.grid(row=4, column=1, sticky="w", pady=(6, 0))
+
+        _fila(5, "Dron: indice y valor")
+        drf = tk.Frame(form, bg=TEMA["surface"])
+        drf.grid(row=5, column=1, sticky="w", pady=(6, 0))
+        self.cb_idx = ttk.Combobox(drf, state="readonly", width=7, values=["", "NDVI", "NDRE"])
+        self.cb_idx.set("")
+        self.cb_idx.pack(side="left")
+        self.e_dron = ttk.Entry(drf, width=8)
+        self.e_dron.pack(side="left", padx=(6, 0))
+
+        _fila(6, "Nota (opcional)")
+        self.txt = tk.Text(form, width=34, height=3, bd=1, relief="solid",
+                           font=FUENTES["body"], highlightthickness=0)
+        self.txt.grid(row=6, column=1, sticky="w", pady=(6, 0))
+
+        bar = tk.Frame(self, bg=TEMA["surface"])
+        bar.pack(fill="x", padx=16, pady=14)
+        ttk.Button(bar, text="Cancelar", style="Ghost.TButton",
+                   command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="Guardar observacion", style="Accent.TButton",
+                   command=self._guardar).pack(side="right", padx=(0, 8))
+
+    def _cultivo_str(self):
+        """"TIPO/SUBTIPO/ESPECIE" del cultivo de la campana, para las fases."""
+        cul = ((DB.ficha(self.ficha.nombre) or {}).get("cultivos_por_campana", {})
+               or {}).get(self.ficha.campana, {}) or {}
+        partes = [cul.get("tipo", ""), cul.get("subtipo", ""), cul.get("especie", "")]
+        return "/".join(partes)
+
+    def _guardar(self):
+        fecha = self.fecha.get_iso()
+        if not fecha:
+            return messagebox.showwarning("Fecha", "Elige la fecha de la observacion (dd-mm-aaaa).",
+                                          parent=self)
+        try:
+            rend = _num(self.e_rend.get(), "rendimiento (kg/ha)", minimo=0)
+            hum = _num(self.e_hum.get(), "humedad de sonda (%)", minimo=0, maximo=100)
+            dron = _num(self.e_dron.get(), "valor del dron", minimo=-1, maximo=1)
+        except ValueError as e:
+            return messagebox.showwarning("Revisa el dato", f"El campo «{e}» debe ser un numero "
+                                          "valido (o dejarlo vacio).", parent=self)
+        fase = self.cb_fase.get().strip()
+        idx = self.cb_idx.get().strip()
+        nota = self.txt.get("1.0", tk.END).strip()
+
+        obs = {"fecha": fecha, "fuente": self.cb_fuente.get()}
+        if fase:
+            obs["fase_obs"] = fase
+        if rend is not None:
+            obs["rendimiento_kg_ha"] = rend
+        if hum is not None:
+            obs["humedad_suelo_pct"] = hum
+        if dron is not None and idx:
+            obs["indice_dron"] = idx
+            obs["valor_dron"] = dron
+        if nota:
+            obs["nota"] = nota
+        # que traiga ALGO ademas de la fecha y la fuente: una fila vacia no mide nada
+        if len(obs) <= 2:
+            return messagebox.showwarning("Sin datos", "Anota al menos un dato: fase, rendimiento, "
+                                          "humedad o lectura de dron.", parent=self)
+        DB.registrar_observacion(self.ficha.nombre, self.ficha.campana, obs)
+        self.destroy()
         if callable(self.al_terminar):
             self.al_terminar()

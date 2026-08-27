@@ -55,7 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 9
+ESQUEMA_VERSION = 10
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -202,6 +202,10 @@ def _crear_tablas():
             fecha TEXT,
             datos TEXT,                -- JSON del dia ya en unidades de campo (°C, mm, MJ/m2)
             PRIMARY KEY(punto, fecha));
+        CREATE TABLE IF NOT EXISTS observaciones_campo(
+            id TEXT PRIMARY KEY,
+            nombre TEXT, campana TEXT, fecha TEXT,
+            datos TEXT);               -- JSON: fuente, fase_obs, rendimiento, humedad, dron, nota
         CREATE INDEX IF NOT EXISTS ix_clima_punto ON clima(punto, fecha);
         CREATE INDEX IF NOT EXISTS ix_vidx_busca
             ON validaciones_indice(indice, especie, fase, ambito, clave_ambito);
@@ -212,6 +216,7 @@ def _crear_tablas():
         CREATE INDEX IF NOT EXISTS ix_cultivos_c ON cultivos(campana);
         CREATE INDEX IF NOT EXISTS ix_eventos_np ON eventos(nombre, campana);
         CREATE INDEX IF NOT EXISTS ix_valida_ts  ON validaciones(ts);
+        CREATE INDEX IF NOT EXISTS ix_obs_np ON observaciones_campo(nombre, campana);
     """)
     _CONN.commit()
 
@@ -353,11 +358,31 @@ def _migracion_8(c):
         c.execute("ALTER TABLE validaciones ADD COLUMN fase_real TEXT")
 
 
+def _migracion_10(c):
+    """Tabla `observaciones_campo`: la VERDAD-TERRENO que se anota en la ficha.
+
+    Guarda lo que se observa de verdad -a pie de finca, con sonda o con un vuelo
+    de dron- para poder MEDIR cuanto acierta el sistema (modulo opcional
+    `validacion`). Es dato medido, no interpretado: aqui no se calcula nada.
+
+    Cada fila lleva su JSON en `datos` (fuente, fase_obs, rendimiento_kg_ha,
+    humedad_suelo_pct, indice_dron, valor_dron, nota, registrado), como los
+    eventos del cuaderno. Vive en el almacen -no en el modulo- para que, si se
+    borra `validacion`, las observaciones ya anotadas se queden quietas sin
+    estorbar. Si la tabla ya viene de `_crear_tablas` (base nueva), no se hace
+    nada."""
+    c.execute("""CREATE TABLE IF NOT EXISTS observaciones_campo(
+                     id TEXT PRIMARY KEY,
+                     nombre TEXT, campana TEXT, fecha TEXT,
+                     datos TEXT)""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_obs_np ON observaciones_campo(nombre, campana)")
+
+
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
 _MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4,
                 5: _migracion_5, 6: _migracion_6, 7: _migracion_7, 8: _migracion_8,
-                9: _migracion_9}
+                9: _migracion_9, 10: _migracion_10}
 
 
 def _migrar_esquema():
@@ -581,7 +606,8 @@ def eliminar_parcela(nombre):
         # quedan huerfanas y una parcela nueva con el mismo nombre heredaria los datos
         # de la anterior (le pasaba a pasadas_radar y a validaciones).
         for t in ("pasadas", "pasadas_radar", "pixeles", "cultivos", "eventos",
-                  "validaciones", "validaciones_indice", "parcelas"):
+                  "validaciones", "validaciones_indice", "observaciones_campo",
+                  "parcelas"):
             c.execute(f"DELETE FROM {t} WHERE nombre=?", (nombre,))
         c.commit()
     # ...y fuera del lock, porque quien escuche no tiene por que ser rapido y no
@@ -610,7 +636,7 @@ def eliminar_campana(nombre, campana):
         n = c.execute("SELECT COUNT(*) FROM pasadas WHERE nombre=? AND campana=?",
                       (nombre, campana)).fetchone()[0]
         for t in ("pasadas", "pasadas_radar", "pixeles", "cultivos", "eventos",
-                  "validaciones", "validaciones_indice"):
+                  "validaciones", "validaciones_indice", "observaciones_campo"):
             c.execute(f"DELETE FROM {t} WHERE nombre=? AND campana=?", (nombre, campana))
         c.commit()
     return n
@@ -894,6 +920,69 @@ def eliminar_evento(parcela, campana, evento_id):
     with _LOCK:
         c.execute("DELETE FROM eventos WHERE id=? AND nombre=? AND campana=?",
                   (evento_id, parcela, campana))
+        c.commit()
+
+
+# ---------------------------------------------------------------------------
+# OBSERVACIONES DE CAMPO (verdad-terreno para medir el acierto del sistema)
+# ---------------------------------------------------------------------------
+def registrar_observacion(parcela, campana, obs):
+    """Anota una observacion de campo (dato MEDIDO, no interpretado).
+
+    `obs` es un dict con lo que se haya observado; las claves que no vengan no se
+    guardan. Campos usuales: fuente ('campo'|'sonda'|'dron'), fase_obs,
+    rendimiento_kg_ha, humedad_suelo_pct, indice_dron ('NDVI'|'NDRE'),
+    valor_dron, nota. Se le pone id y sello de registro si no los trae, igual que
+    a los eventos del cuaderno. Devuelve la observacion ya con su id."""
+    c = _c()
+    o = dict(obs)
+    o.setdefault("id", f"obs_{parcela}_{campana}_{o.get('fecha','')}_{uuid.uuid4().hex[:8]}")
+    o.setdefault("registrado", datetime.now().strftime("%Y-%m-%d %H:%M"))
+    datos = {k: v for k, v in o.items() if k != "id"}
+    with _LOCK:
+        c.execute("INSERT OR REPLACE INTO observaciones_campo(id,nombre,campana,fecha,datos) "
+                  "VALUES(?,?,?,?,?)",
+                  (o["id"], parcela, campana, o.get("fecha", ""),
+                   json.dumps(datos, ensure_ascii=False)))
+        c.commit()
+    return o
+
+
+def observaciones_de(parcela, campana):
+    """Observaciones de campo de UNA campana, ordenadas por fecha."""
+    c = _c()
+    with _LOCK:
+        out = []
+        for r in c.execute("SELECT id,datos FROM observaciones_campo "
+                           "WHERE nombre=? AND campana=? ORDER BY fecha", (parcela, campana)):
+            d = json.loads(r["datos"]) if r["datos"] else {}
+            d["id"] = r["id"]
+            out.append(d)
+        return out
+
+
+def observaciones(parcela):
+    """Observaciones de campo de TODAS las campanas de la parcela (para validar
+    a lo largo de varias campanas). Cada elemento trae su campana y su id."""
+    c = _c()
+    with _LOCK:
+        out = []
+        for r in c.execute("SELECT id,campana,datos FROM observaciones_campo "
+                           "WHERE nombre=? ORDER BY campana,fecha", (parcela,)):
+            d = json.loads(r["datos"]) if r["datos"] else {}
+            d["id"] = r["id"]
+            d["campana"] = r["campana"]
+            out.append(d)
+        return out
+
+
+def eliminar_observacion(parcela, campana, obs_id):
+    # acotada por parcela y campana ademas de por id, igual que eliminar_evento:
+    # con los tres criterios es imposible borrar la observacion de OTRA parcela.
+    c = _c()
+    with _LOCK:
+        c.execute("DELETE FROM observaciones_campo WHERE id=? AND nombre=? AND campana=?",
+                  (obs_id, parcela, campana))
         c.commit()
 
 

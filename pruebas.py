@@ -3582,6 +3582,127 @@ def pruebas_instalador():
         INS.REGISTRO = orig
 
 
+def pruebas_validacion():
+    """Metricas de validacion contra observaciones de campo. Nucleo PURO y modulo
+    OPCIONAL: si se borra, el grupo se omite entero."""
+    try:
+        import validacion as V
+    except Exception:
+        return
+
+    # --- matriz de confusion de fases ---
+    pares = [("floracion", "floracion"), ("floracion", "floracion"),
+             ("madurez", "floracion"), ("emergencia", "emergencia")]
+    m = V.matriz_fases(pares)
+    check("validacion: exactitud = aciertos/total (3 de 4 = 0.75)",
+          lambda: round(m["exactitud"], 3), lambda r: r == 0.75)
+    check("validacion: la diagonal cuenta los aciertos (3)",
+          lambda: m["aciertos"], lambda r: r == 3)
+    check("validacion: la celda mal clasificada queda fuera de la diagonal",
+          lambda: m["matriz"]["madurez"]["floracion"], lambda r: r == 1)
+    check("validacion: kappa esta entre -1 y 1",
+          lambda: V.matriz_fases(pares)["kappa"], lambda k: -1 <= k <= 1)
+    check("validacion: los pares con un lado vacio se descartan",
+          lambda: V.matriz_fases([("a", "a"), ("", "b"), ("c", "")])["total"], lambda r: r == 1)
+    check("validacion: una sola fase perfecta -> kappa None (azar indefinido)",
+          lambda: V.matriz_fases([("x", "x"), ("x", "x")])["kappa"], lambda k: k is None)
+    check("validacion: sin pares, exactitud None (no se inventa una nota)",
+          lambda: V.matriz_fases([])["exactitud"], lambda r: r is None)
+
+    # --- RMSE / MAE / sesgo (dias de GDD, % de humedad) ---
+    check("validacion: RMSE de prediccion perfecta es 0",
+          lambda: V.rmse([(5, 5), (10, 10)]), lambda r: r == 0)
+    check("validacion: RMSE penaliza mas el error grande que el MAE",
+          lambda: V.rmse([(0, 0), (0, 10)]) > V.mae([(0, 0), (0, 10)]), lambda r: r is True)
+    check("validacion: el sesgo positivo delata sobreestimacion",
+          lambda: V.sesgo([(12, 10), (14, 12)]), lambda r: r == 2)
+    check("validacion: los textos no numericos se ignoran en RMSE",
+          lambda: V.rmse([("x", "y"), (3, 3)]), lambda r: r == 0)
+
+    # --- regresion indice<->rendimiento ---
+    r = V.regresion([(0.3, 2000), (0.5, 3000), (0.7, 4000)])
+    check("validacion: relacion lineal perfecta da R2 = 1",
+          lambda: round(r["r2"], 6), lambda x: x == 1.0)
+    check("validacion: la pendiente de la recta es la esperada (5000 kg/ha por unidad)",
+          lambda: round(r["pendiente"], 0), lambda x: x == 5000)
+    check("validacion: menos de dos puntos no permite regresion (None)",
+          lambda: V.regresion([(0.3, 2000)]), lambda x: x is None)
+    check("validacion: si el indice no varia, no hay recta (None)",
+          lambda: V.regresion([(0.5, 1), (0.5, 2)]), lambda x: x is None)
+
+    # --- informe agregado y su texto ---
+    inf = V.informe(pares_fase=[("a", "a"), ("a", "b")], pares_gdd=[(3, 5), (8, 8)],
+                    pares_rend=[(0.3, 2000), (0.6, 4000)], pares_humedad=[(12, 14)])
+    check("validacion: el informe trae los cuatro bloques cuando hay datos",
+          lambda: all(inf[k] for k in ("fases", "gdd", "rendimiento", "humedad")),
+          lambda r: r is True)
+    check("validacion: un bloque sin datos queda en None (la vista sabe no pintarlo)",
+          lambda: V.informe(pares_fase=[("a", "a")])["gdd"], lambda r: r is None)
+    check("validacion: el texto resume fase, GDD, rendimiento y humedad",
+          lambda: V.texto(inf),
+          lambda t: "Fases" in t and "GDD" in t and "R²" in t and "Humedad" in t)
+    check("validacion: sin ninguna medida, el texto es vacio (nada que mostrar)",
+          lambda: V.texto(V.informe()), lambda t: t == "")
+    check("validacion: la matriz en texto lista las fases",
+          lambda: V.texto_matriz(m), lambda t: "floracion"[:8] in t)
+
+
+def pruebas_observaciones_campo():
+    """Almacen de observaciones de campo (verdad-terreno) y su emparejamiento con
+    lo que predijo el sistema (vista_ficha.resumen_validacion)."""
+    import almacen as DB
+    import vista_ficha as VF
+
+    DB.registrar_observacion("Obs1", "2024",
+                             {"fecha": "2024-05-10", "fuente": "campo", "fase_obs": "floracion",
+                              "rendimiento_kg_ha": 4200, "nota": "espigada"})
+    DB.registrar_observacion("Obs1", "2024",
+                             {"fecha": "2024-06-01", "fuente": "dron", "indice_dron": "NDVI",
+                              "valor_dron": 0.62})
+    check("obs-campo: se guardan y se releen por campana",
+          lambda: len(DB.observaciones_de("Obs1", "2024")), lambda r: r == 2)
+    check("obs-campo: se releen tambien por parcela (todas las campanas)",
+          lambda: len(DB.observaciones("Obs1")), lambda r: r == 2)
+    check("obs-campo: cada observacion trae su campana al leerla por parcela",
+          lambda: DB.observaciones("Obs1")[0].get("campana"), lambda r: r == "2024")
+
+    # borrado acotado: no debe tocar otra parcela con el mismo id imposible
+    oid = DB.observaciones_de("Obs1", "2024")[0]["id"]
+    DB.eliminar_observacion("Obs1", "2024", oid)
+    check("obs-campo: eliminar quita solo la observacion pedida",
+          lambda: len(DB.observaciones("Obs1")), lambda r: r == 1)
+
+    # resumen robusto sin pasadas: lista las observaciones aunque no haya con que medir
+    res = VF.resumen_validacion("Obs1")
+    check("obs-campo: el resumen nunca rompe y lista lo anotado",
+          lambda: res["n_obs"], lambda r: r == 1)
+
+    # empareja dron<->satelite cuando hay pasadas cercanas con NDVI (2 puntos: la
+    # regresion necesita al menos dos para poder trazar la recta)
+    DB.anadir_pasadas("Obs2", "2024", [{"fecha": "2024-06-02", "ndvi": 0.55},
+                                       {"fecha": "2024-07-02", "ndvi": 0.40}])
+    DB.registrar_observacion("Obs2", "2024",
+                             {"fecha": "2024-06-01", "fuente": "dron", "indice_dron": "NDVI",
+                              "valor_dron": 0.60})
+    DB.registrar_observacion("Obs2", "2024",
+                             {"fecha": "2024-07-01", "fuente": "dron", "indice_dron": "NDVI",
+                              "valor_dron": 0.44})
+    try:
+        import validacion  # el emparejamiento del dron necesita el modulo
+        res2 = VF.resumen_validacion("Obs2")
+        check("obs-campo: empareja el dron con la pasada de satelite mas cercana",
+              lambda: (res2["informe"] or {}).get("dron") is not None, lambda r: r is True)
+        check("obs-campo: el dron<->satelite aparece en el texto del resumen",
+              lambda: "Dron" in (res2.get("texto") or ""), lambda r: r is True)
+    except Exception:
+        pass
+
+    # limpieza en cascada: borrar la campana se lleva las observaciones
+    DB.eliminar_campana("Obs1", "2024")
+    check("obs-campo: borrar la campana arrastra sus observaciones",
+          lambda: len(DB.observaciones("Obs1")), lambda r: r == 0)
+
+
 # =====================================================================
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
@@ -3591,7 +3712,8 @@ def main():
               pruebas_rejilla_coherencia, pruebas_buffer_y_zonas,
               pruebas_escala_indices, pruebas_clima, pruebas_repaso,
               pruebas_vista_ficha, pruebas_grados_dia, pruebas_balance_hidrico,
-              pruebas_heterogeneidad_espacial, pruebas_instalador):
+              pruebas_heterogeneidad_espacial, pruebas_validacion,
+              pruebas_observaciones_campo, pruebas_instalador):
         try:
             f()
         except Exception as e:

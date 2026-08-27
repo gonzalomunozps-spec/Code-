@@ -41,6 +41,7 @@ CAPA 1  DATOS                 almacen.py ──► bitacora.py ──► rutas.p
 CAPA 0  HOJAS PURAS    fechas  geo  campanas  cultivo  sigpac
                        contraste_indices  fenologia_especies  herbicida_contexto*
                        grados_dia*  balance_hidrico*  heterogeneidad_espacial*
+                       validacion*
 ```
 `*` = módulo **opcional y extraíble** (ver §6).
 
@@ -63,6 +64,7 @@ Son la base testeable. Ninguno importa a otro.
 | `grados_dia.py` | Integrales térmicas (grados-día): métodos por cultivo, acumulación desde el clima diario, hitos de GDD por fase y `fase_override` (si el usuario define integrales, la fase del extensivo la marca el GDD y no el calendario). El núcleo es puro; el clima lo pide de forma perezosa a `clima_era5`/`almacen` dentro de las funciones. **Opcional.** |
 | `balance_hidrico.py` | Contexto de sequía comarcal: balance rodante lluvia − ET0 sobre una ventana y `explicacion_deficit`, que decide si un NDMI bajo se explica por la sequía general (en secano no escala la alerta por sí solo; en regadío sí). No toca umbrales; solo aporta contexto al diagnóstico. Núcleo puro; el clima, perezoso a `clima_era5`/`almacen`. **Opcional.** |
 | `heterogeneidad_espacial.py` | Análisis por píxel de la rejilla georreferenciada: agrupamiento de píxeles bajos y componentes conexas (foco compacto vs ruido), tamaño de la mancha, persistencia entre fechas, y **máscara de arbolado permanente** (encinas/dehesa) por firma temporal, para excluirlo del juicio del herbáceo. Núcleo puro; `analizar_parcela` lee las rejillas de `almacen`. **Opcional.** |
+| `validacion.py` | Mide **cuánto acierta** el sistema contra las observaciones de campo (verdad-terreno): matriz de confusión de fases con κ de Cohen, RMSE del GDD en días, regresión índice↔rendimiento (R²) y error de humedad frente a sonda. Núcleo **puro**: recibe pares (predicho, observado) y devuelve métricas; no toca umbrales ni corrige el diagnóstico (mide contra la predicción **original**, para no viciar la nota). El emparejamiento vive en `vista_ficha.resumen_validacion`; la captura, en `DialogoObservacionCampo` y la tabla `observaciones_campo`. **Opcional.** |
 
 ### Capa 1 — Datos
 | Módulo | Responsabilidad |
@@ -528,13 +530,18 @@ resto sigue igual**; no hay interruptor que tocar.
 - `heterogeneidad_espacial.py` → desaparecen el análisis por píxel (foco/persistencia)
   y la casilla de arbolado; el cuadro de zonas cae a la lectura clásica. El flag
   `arbolado` guardado se queda en la base, por si se repone.
+- `validacion.py` → desaparecen las métricas de acierto (matriz de fases, RMSE del
+  GDD, R² índice↔rendimiento, dron↔satélite) y su bloque en la tarjeta de
+  validación; el botón «Observación de campo» y la tabla `observaciones_campo`
+  siguen, así que lo ya anotado se conserva y se sigue pudiendo anotar. Al reponer
+  el módulo, vuelven las métricas sobre esos datos.
 
 Sus pruebas se autoexcluyen: la suite sigue en verde con o sin ellos.
-Comprobado borrando cada fichero: completo 693, sin `herbicida_contexto` 691,
-sin `grados_dia` 684, sin `balance_hidrico` 683, sin `heterogeneidad_espacial` 680,
-sin `informe_anual` 677, sin `calibracion_umbrales` 664, sin `clima_era5` 654 —
-todos en verde (y la interfaz también, sin `clima_era5`, `grados_dia`,
-`balance_hidrico` y `heterogeneidad_espacial`).
+Comprobado borrando cada fichero: completo 721, sin `validacion` 699,
+sin `herbicida_contexto`, sin `grados_dia`, sin `balance_hidrico`, sin
+`heterogeneidad_espacial`, sin `informe_anual`, sin `calibracion_umbrales`,
+sin `clima_era5` — todos en verde (y la interfaz también, sin `clima_era5`,
+`grados_dia`, `balance_hidrico`, `heterogeneidad_espacial` y `validacion`).
 
 **Instalación (aparte del programa):** `instalar.py` / `desinstalar.py` (lógica en
 `instalador.py`) crean/quitan un entorno con las dependencias y un acceso directo,
