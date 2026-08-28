@@ -2,15 +2,37 @@
 
 Cómo convertir el programa en **un único `Setup.exe`** que envías a alguien y se
 instala con doble clic (sin Python, sin nada más). Esto lo hace **quien reparte**
-el programa, en un equipo **con Windows** (un `.exe` solo se genera desde
-Windows).
+el programa.
 
-## Una sola vez: instalar las herramientas
+Un `.exe` de Windows **solo se puede generar desde Windows** (PyInstaller empaqueta
+el intérprete de la máquina donde corre, e Inno Setup es un compilador de Windows).
+Por eso hay dos vías: dejar que lo compile GitHub en una máquina Windows suya, o
+compilarlo tú en un PC con Windows.
+
+## Opción A (recomendada): que lo compile GitHub por ti
+
+**No necesitas un PC con Windows.** El repositorio trae un flujo que construye el
+instalador en una máquina Windows de GitHub:
+
+1. Entra en el repositorio, pestaña **Actions**.
+2. Elige **Instalador de Windows** en la lista de la izquierda.
+3. Pulsa **Run workflow** y confirma.
+4. Cuando termine (unos minutos), abre la ejecución y descarga el `Setup.exe`
+   desde el apartado **Artifacts**, al pie de la página.
+
+También se construye solo al publicar una etiqueta de versión (`v1.13.0`, por
+ejemplo), y en ese caso queda adjunto a la Release.
+
+---
+
+## Opción B: compilarlo tú en un PC con Windows
+
+### Una sola vez: instalar las herramientas
 1. **Python** (si no lo tienes ya): https://www.python.org/downloads/  — marca
    «Add Python to PATH» al instalar.
 2. **Inno Setup 6** (gratis): https://jrsoftware.org/isdl.php
 
-## Cada vez que quieras generar el instalador
+### Cada vez que quieras generar el instalador
 Descomprime el programa, abre su carpeta y haz **doble clic en
 `construir_windows.bat`**. Hace los dos pasos solo:
 
@@ -32,7 +54,7 @@ Output\MonitorParcelas-Setup-<version>.exe
 - Añade **«Desinstalar Monitor de Parcelas»** (se quita como cualquier programa,
   desde «Aplicaciones» de Windows).
 
-## Si prefieres hacerlo a mano
+### Si prefieres hacerlo a mano
 ```bat
 pip install pyinstaller
 python empaquetar.py
