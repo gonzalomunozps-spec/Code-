@@ -75,8 +75,24 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Adjuntarlo a la Release (solo al etiquetar una version)
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Publica (o actualiza) la Release de esta version con el instalador dentro.
+      # Es la accion quien CREA la etiqueta a partir de `version.py`, asi que no
+      # hace falta etiquetar a mano. A diferencia de un artefacto de Actions, un
+      # fichero de Release se descarga con un enlace directo, SIN iniciar sesion
+      # y desde el movil, que es como se reparte un instalador.
+      - name: Publicar la Release con el instalador
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.ver.outputs.v }}
+          name: Monitor de Parcelas v${{ steps.ver.outputs.v }}
+          body: |
+            **Instalador de Windows** de Monitor de Parcelas v${{ steps.ver.outputs.v }}.
+
+            Descarga `MonitorParcelas-Setup-${{ steps.ver.outputs.v }}.exe` de aqui
+            abajo y haz doble clic. No necesita Python ni nada mas.
+
+            Al abrirlo, Windows avisara de que el editor es desconocido (el
+            ejecutable no lleva certificado de firma comercial): pulsa
+            **Mas informacion -> Ejecutar de todas formas**.
           files: Output/*.exe
+          fail_on_unmatched_files: true
