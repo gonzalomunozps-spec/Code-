@@ -22,6 +22,11 @@ on:
     # antes de integrar. Una vez en la rama principal, esta linea sobra.
     branches: ["claude/informacion-disponible-75rbpp"]
 
+# Adjuntar el Setup.exe a una Release necesita permiso de escritura sobre el
+# repositorio. Se declara aqui, acotado: el resto del flujo solo lee.
+permissions:
+  contents: write
+
 jobs:
   instalador:
     runs-on: windows-latest
