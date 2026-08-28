@@ -16,6 +16,11 @@ on:
   workflow_dispatch:          # boton para lanzarlo cuando quieras
   push:
     tags: ["v*"]              # y al etiquetar una version
+    # El boton "Run workflow" solo aparece para flujos que YA estan en la rama
+    # principal (asi lo decide GitHub). Mientras esto viva en la rama de trabajo,
+    # se construye tambien al empujar a ella, para poder tener el instalador
+    # antes de integrar. Una vez en la rama principal, esta linea sobra.
+    branches: ["claude/informacion-disponible-75rbpp"]
 
 jobs:
   instalador:
