@@ -50,7 +50,7 @@ Son la base testeable. Ninguno importa a otro.
 
 | Módulo | Responsabilidad |
 |---|---|
-| `fenologia_especies.py` | Tablas por especie: fase según días desde siembra (extensivos) o mes + marco (leñosos). En leñosos, además, **fases fisiológicas** y umbrales por **régimen hídrico** (regadío/secano). |
+| `fenologia_especies.py` | **VARIEDADES:** una variedad se rige por las normas generales de su especie (mismas fases y mismos rangos de partida); lo que cambia es que la **calibración la afina por separado** — en `validaciones_indice` el vacío NO es comodín, así que una variedad cuenta solo con **sus** validaciones y arranca con la bibliografía. **PRADERA:** asociación de especies para siega en verde; no entra en `EXTENSIVO_ESPECIES` porque es perenne y se corta varias veces, así que va por el **ciclo de cortes** (`FENOLOGIA["EXTENSIVO_SIEGA_VERDE"]`) y no por días desde la siembra; el motor lo fuerza aunque se marque como grano. Tablas por especie: fase según días desde siembra (extensivos) o mes + marco (leñosos). En leñosos, además, **fases fisiológicas** y umbrales por **régimen hídrico** (regadío/secano). |
 | `contraste_indices.py` | Cruza índices entre sí para separar senescencia, estrés hídrico y malas hierbas; heterogeneidad intraparcela. `separacion_copa_cubierta` reparte copa/cubierta en leñosos usando los percentiles de la pasada. |
 | `fechas.py` | Conversión ISO ↔ dd-mm-aaaa, máscara y validación al teclear. |
 | `geo.py` | Superficie de la parcela (fórmula del polígono). |
@@ -69,7 +69,7 @@ Son la base testeable. Ninguno importa a otro.
 ### Capa 1 — Datos
 | Módulo | Responsabilidad |
 |---|---|
-| `almacen.py` | **Único** punto de acceso a SQLite: parcelas, pasadas, radar, eventos, validaciones. WAL + `RLock`; conexión compartida con *double-checked locking*. Migra los JSON antiguos una sola vez. |
+| `almacen.py` | **Único** punto de acceso a SQLite: parcelas, pasadas, radar, eventos, validaciones, observaciones de campo y **catálogo de variedades** (esquema v11). WAL + `RLock`; conexión compartida con *double-checked locking*. Migra los JSON antiguos una sola vez. |
 | `bitacora.py` | Registro de incidencias a `parcelas.log`. Nunca escribe en consola; si no puede escribir, degrada a `NullHandler`. |
 | `rutas.py` | **Dónde viven los datos**: `GESTOR_PARCELAS_DIR` → `platformdirs` (opcional) → `~/.gestor_parcelas`. También purga los PNG viejos de la caché. |
 | `credenciales.py` | Config y clave de OpenAI. La clave se **cifra en el llavero del SO** (`keyring`, opcional) cuando se puede; si no, respaldo **ofuscado** (base64) en fichero 0600, escritura atómica. La variable `OPENAI_API_KEY` tiene prioridad y no toca disco. |

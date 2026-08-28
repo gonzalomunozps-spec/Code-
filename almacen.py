@@ -55,7 +55,7 @@ _LOCK = threading.RLock()
 #   - `_crear_tablas` usa CREATE TABLE IF NOT EXISTS, asi que crea el esquema
 #     COMPLETO y ACTUAL para una base nueva; las migraciones solo sirven para
 #     poner al dia las bases que ya existian.
-ESQUEMA_VERSION = 10
+ESQUEMA_VERSION = 11
 
 # JSON antiguos a importar la primera vez. Se buscan en el DIRECTORIO DE TRABAJO
 # a proposito: son ficheros de versiones antiguas, que se ejecutaban ahi.
@@ -235,12 +235,18 @@ def _crear_tablas():
             clave_ambito TEXT,
             regimen TEXT,              -- REGADIO | SECANO (lenosos); vacio = comodin
             densidad TEXT,             -- tradicional | intensivo | seto; vacio = comodin
+            variedad TEXT,             -- variedad concreta; vacio = la especie "a secas"
             ts TEXT);
         CREATE TABLE IF NOT EXISTS clima(
             punto TEXT,                -- punto de la rejilla de ERA5: "lat,lon" a 0.1 grados
             fecha TEXT,
             datos TEXT,                -- JSON del dia ya en unidades de campo (°C, mm, MJ/m2)
             PRIMARY KEY(punto, fecha));
+        CREATE TABLE IF NOT EXISTS variedades(
+            especie TEXT,              -- especie a la que pertenece (TRIGO, PRADERA...)
+            nombre TEXT,               -- nombre de la variedad o mezcla comercial
+            ts TEXT,
+            PRIMARY KEY(especie, nombre));
         CREATE TABLE IF NOT EXISTS observaciones_campo(
             id TEXT PRIMARY KEY,
             nombre TEXT, campana TEXT, fecha TEXT,
@@ -417,11 +423,32 @@ def _migracion_10(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_obs_np ON observaciones_campo(nombre, campana)")
 
 
+def _migracion_11(c):
+    """VARIEDADES: catalogo por especie y la variedad en cada validacion de indice.
+
+    Una variedad se rige por las normas generales de su especie (mismas fases,
+    mismos rangos de partida), pero sus umbrales se afinan por separado con las
+    validaciones: por eso `validaciones_indice` gana una columna `variedad`.
+
+    OJO, a diferencia de `regimen` y `densidad`, el vacio aqui NO es comodin: es
+    "la especie a secas". Una variedad concreta solo cuenta con SUS validaciones,
+    que es lo que se pidio (empieza limpia, con la bibliografia). Las filas
+    anteriores a esta migracion quedan con variedad vacia, o sea, atribuidas a la
+    especie, que es exactamente lo que eran."""
+    c.execute("""CREATE TABLE IF NOT EXISTS variedades(
+                     especie TEXT, nombre TEXT, ts TEXT,
+                     PRIMARY KEY(especie, nombre))""")
+    if "variedad" not in {r[1] for r in c.execute("PRAGMA table_info(validaciones_indice)")}:
+        c.execute("ALTER TABLE validaciones_indice ADD COLUMN variedad TEXT")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_vidx_variedad "
+              "ON validaciones_indice(indice, especie, variedad, fase)")
+
+
 # Migraciones por version de destino: {version: funcion(conexion)}.
 # La 1 es el esquema inicial, que ya crea `_crear_tablas`, por eso no hay entrada.
 _MIGRACIONES = {2: _migracion_2, 3: _migracion_3, 4: _migracion_4,
                 5: _migracion_5, 6: _migracion_6, 7: _migracion_7, 8: _migracion_8,
-                9: _migracion_9, 10: _migracion_10}
+                9: _migracion_9, 10: _migracion_10, 11: _migracion_11}
 
 
 def _migrar_esquema():
@@ -1026,6 +1053,45 @@ def eliminar_observacion(parcela, campana, obs_id):
 
 
 # ---------------------------------------------------------------------------
+# VARIEDADES (catalogo por especie; arranca vacio y lo llena el usuario)
+# ---------------------------------------------------------------------------
+def variedades_de(especie):
+    """Variedades registradas para una especie, en orden alfabetico. Lista vacia
+    si no hay ninguna todavia, que es como empieza el programa."""
+    if not especie:
+        return []
+    c = _c()
+    with _LOCK:
+        return [r["nombre"] for r in c.execute(
+            "SELECT nombre FROM variedades WHERE especie=? ORDER BY nombre COLLATE NOCASE",
+            (especie,))]
+
+
+def anadir_variedad(especie, nombre):
+    """Registra una variedad para una especie. Idempotente: repetirla no duplica.
+    Devuelve el nombre ya limpio, o None si no habia nada que guardar."""
+    especie = (especie or "").strip()
+    nombre = (nombre or "").strip()
+    if not especie or not nombre:
+        return None
+    c = _c()
+    with _LOCK:
+        c.execute("INSERT OR IGNORE INTO variedades(especie,nombre,ts) VALUES(?,?,?)",
+                  (especie, nombre, datetime.now().strftime("%Y-%m-%d %H:%M")))
+        c.commit()
+    return nombre
+
+
+def eliminar_variedad(especie, nombre):
+    """Quita una variedad del catalogo. Lo ya validado con ella NO se borra: sigue
+    en `validaciones_indice`, y vuelve a contar si se repone la variedad."""
+    c = _c()
+    with _LOCK:
+        c.execute("DELETE FROM variedades WHERE especie=? AND nombre=?", (especie, nombre))
+        c.commit()
+
+
+# ---------------------------------------------------------------------------
 # REJILLA DE PIXELES (NDVI pixel a pixel, para comparar en el tiempo)
 # ---------------------------------------------------------------------------
 def guardar_rejilla(nombre, campana, fecha, datos):
@@ -1111,7 +1177,7 @@ def tamano_rejillas(nombre=None):
 # umbral- vive en calibracion_umbrales.py, para poder borrarlo sin tocar nada.
 def guardar_validacion_indice(nombre, campana, fecha, indice, valor, especie, fase,
                               dijo_sistema, dijo_usuario, ambito, clave_ambito,
-                              regimen="", densidad=""):
+                              regimen="", densidad="", variedad=""):
     """Anota lo que el usuario dice de UN indice en UNA pasada.
 
     La clave incluye el ambito: la misma pasada puede corregirse a nivel de
@@ -1122,18 +1188,18 @@ def guardar_validacion_indice(nombre, campana, fecha, indice, valor, especie, fa
     with _LOCK:
         c.execute("INSERT OR REPLACE INTO validaciones_indice(id,nombre,campana,fecha,indice,"
                   "valor,especie,fase,dijo_sistema,dijo_usuario,ambito,clave_ambito,"
-                  "regimen,densidad,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "regimen,densidad,variedad,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (clave, nombre, campana, fecha, indice,
                    None if valor is None else float(valor), especie or "", fase or "",
                    dijo_sistema or "", dijo_usuario or "", ambito or "parcela",
-                   clave_ambito or "", regimen or "", densidad or "",
+                   clave_ambito or "", regimen or "", densidad or "", variedad or "",
                    datetime.now().strftime("%Y-%m-%d %H:%M")))
         c.commit()
     return clave
 
 
 def validaciones_indice(indice=None, especie=None, fase=None, ambitos=None,
-                        regimen=None, densidad=None):
+                        regimen=None, densidad=None, variedad=None):
     """Validaciones por indice, filtrando por lo que se necesite.
 
     `ambitos` es una lista de pares (ambito, clave) -por ejemplo
@@ -1151,6 +1217,12 @@ def validaciones_indice(indice=None, especie=None, fase=None, ambitos=None,
         if val:
             sql += f" AND ({col}=? OR {col}='' OR {col} IS NULL)"
             args.append(val)
+    # VARIEDAD: aqui el vacio NO es comodin. Una variedad concreta cuenta solo con
+    # SUS validaciones (arranca limpia, con la bibliografia), y la especie "a secas"
+    # cuenta solo con las suyas. Por eso es igualdad exacta y no un OR con ''.
+    if variedad is not None:
+        sql += " AND COALESCE(variedad,'')=?"
+        args.append(variedad or "")
     if ambitos:
         sql += " AND (" + " OR ".join(["(ambito=? AND clave_ambito=?)"] * len(ambitos)) + ")"
         for a, k in ambitos:

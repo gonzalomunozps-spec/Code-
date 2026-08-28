@@ -43,6 +43,10 @@ except Exception:
 # arrastra `ee`) solo por un numero que hay que ensenar en un formulario.
 BUFFER_POR_DEFECTO = 15.0
 
+# Texto de "no he elegido variedad" en el desplegable. Se guarda como cadena vacia:
+# es la especie a secas, no una variedad llamada asi.
+SIN_VARIEDAD = "(sin variedad)"
+
 
 def _copa_de(entry):
     """Diametro de copa tecleado, en metros, o None si esta vacio o no vale.
@@ -142,7 +146,30 @@ class VentanaAltaParcela(tk.Toplevel):
         self.cb_sub = ttk.Combobox(cols, state="readonly", values=[])
         self.cb_sub.pack(fill="x")
         # al cambiar la especie, refrescar las fases que ofrece la seccion de integrales
-        self.cb_sub.bind("<<ComboboxSelected>>", lambda e: self._refrescar_fases_integral())
+        self.cb_sub.bind("<<ComboboxSelected>>", lambda e: self._especie_cambio())
+
+        # VARIEDAD (o mezcla comercial). El catalogo arranca VACIO y lo llena el
+        # usuario con «+ Nueva». Una variedad se rige por las normas generales de su
+        # especie (mismas fases y mismos rangos de partida); lo que cambia es que sus
+        # umbrales se afinan por separado con las validaciones. Dejarla vacia es
+        # perfectamente valido: entonces se trabaja con la especie "a secas".
+        filav = tk.Frame(form, bg=TEMA["surface"])
+        filav.pack(fill="x", pady=(6, 0), **pad)
+        colv = tk.Frame(filav, bg=TEMA["surface"])
+        colv.pack(side="left", fill="x", expand=True)
+        tk.Label(colv, text="Variedad (opcional)", bg=TEMA["surface"], fg=TEMA["text_sec"],
+                 font=FUENTES["small"]).pack(anchor="w")
+        self.cb_variedad = ttk.Combobox(colv, state="readonly", values=[])
+        self.cb_variedad.pack(fill="x")
+        colb = tk.Frame(filav, bg=TEMA["surface"])
+        colb.pack(side="left", padx=(6, 0))
+        tk.Label(colb, text=" ", bg=TEMA["surface"], font=FUENTES["small"]).pack(anchor="w")
+        ttk.Button(colb, text="+ Nueva", width=9,
+                   command=self._nueva_variedad).pack()
+        self.lbl_variedad = tk.Label(
+            form, text="", bg=TEMA["surface"], fg=TEMA["text_muted"],
+            font=FUENTES["small"], justify="left", wraplength=380)
+        self.lbl_variedad.pack(anchor="w", pady=(2, 0), **pad)
 
         # campos especificos de la especie: siembra (cereal) o marco (leñoso)
         self.frame_spec = tk.Frame(form, bg=TEMA["surface"])
@@ -283,6 +310,11 @@ class VentanaAltaParcela(tk.Toplevel):
             self._sub()                            # rellena especies y muestra los campos del tipo
             if cult.get("especie"):
                 self.cb_sub.set(cult["especie"])
+            # la variedad guardada se repone en el desplegable; si se borro del
+            # catalogo, `_refrescar_variedades` la deja en «(sin variedad)» y el
+            # usuario decide (lo validado con ella no se pierde: sigue en la base)
+            self._refrescar_variedades(elegir=cult.get("variedad") or None)
+            self._ajustar_por_especie()
             if tipo == "EXTENSIVO":
                 self.cb_finalidad.set("Siega en verde (forraje)"
                                       if cult.get("subtipo") == "SIEGA_VERDE" or cult.get("finalidad") == "SIEGA_VERDE"
@@ -355,7 +387,10 @@ class VentanaAltaParcela(tk.Toplevel):
             self.cb_regimen.pack(anchor="w", pady=(0, 2))
             self.lbl_tipo_calc.pack(anchor="w")
             self._calc_marco()
-        # las fases posibles cambian con el tipo/especie: repoblar desde/hasta
+        # las fases posibles cambian con el tipo/especie: repoblar desde/hasta,
+        # y con la especie cambian tambien las variedades y la finalidad admitida
+        self._refrescar_variedades()
+        self._ajustar_por_especie()
         self._refrescar_fases_integral()
 
     def _calc_marco(self):
@@ -449,6 +484,73 @@ class VentanaAltaParcela(tk.Toplevel):
             fill="x", padx=8, pady=(4, 8))
         self._refrescar_fases_integral()
         self._pintar_lista_integrales()
+
+    def _variedad_elegida(self):
+        """La variedad seleccionada, o cadena vacia si es «(sin variedad)». Vacio
+        significa "la especie a secas", no una variedad con ese nombre."""
+        v = (self.cb_variedad.get() or "").strip() if hasattr(self, "cb_variedad") else ""
+        return "" if v == SIN_VARIEDAD else v
+
+    def _especie_cambio(self):
+        """Al cambiar de especie: repoblar variedades y fases, y ajustar la
+        finalidad si el cultivo solo admite una."""
+        self._refrescar_variedades()
+        self._ajustar_por_especie()
+        self._refrescar_fases_integral()
+
+    def _refrescar_variedades(self, elegir=None):
+        """Repuebla el desplegable con las variedades de la especie elegida.
+
+        El catalogo empieza VACIO: al principio la unica opcion es «(sin variedad)»,
+        que significa trabajar con la especie a secas. Cambiar de especie no arrastra
+        las variedades de la anterior, que serian de otro cultivo."""
+        if not hasattr(self, "cb_variedad"):
+            return
+        especie = self.cb_sub.get()
+        try:
+            vs = DB.variedades_de(especie)
+        except Exception:
+            vs = []
+        self.cb_variedad["values"] = [SIN_VARIEDAD] + vs
+        self.cb_variedad.set(elegir if elegir in vs else SIN_VARIEDAD)
+        self.lbl_variedad.config(
+            text=("Se rige por las normas generales de " + (especie or "la especie") +
+                  ". Sus umbrales se afinan aparte, con las validaciones que hagas "
+                  "sobre ella.") if vs else
+            ("Todavia no hay variedades de " + (especie or "esta especie") +
+             ". Pulsa «+ Nueva» para anadir una."))
+
+    def _nueva_variedad(self):
+        """Anade una variedad al catalogo de la especie elegida y la selecciona."""
+        especie = self.cb_sub.get()
+        if not especie:
+            return messagebox.showwarning("Variedad", "Elige antes la especie.", parent=self)
+        from tkinter import simpledialog
+        nombre = simpledialog.askstring(
+            "Nueva variedad", f"Nombre de la variedad o mezcla de {especie}:", parent=self)
+        if not nombre or not nombre.strip():
+            return
+        nombre = nombre.strip()
+        if nombre == SIN_VARIEDAD:
+            return messagebox.showwarning("Variedad", "Ese nombre esta reservado.", parent=self)
+        try:
+            DB.anadir_variedad(especie, nombre)
+        except Exception:
+            return messagebox.showwarning("Variedad", "No se pudo guardar la variedad.",
+                                          parent=self)
+        self._refrescar_variedades(elegir=nombre)
+
+    def _ajustar_por_especie(self):
+        """Una PRADERA es una asociacion de especies que se SIEGA: no tiene cosecha
+        de grano. Se fuerza la finalidad y se bloquea, para no dejar guardar una
+        combinacion que no existe en campo."""
+        if not hasattr(self, "cb_finalidad"):
+            return
+        if self.cb_sub.get() == FEN.PRADERA:
+            self.cb_finalidad.set("Siega en verde (forraje)")
+            self.cb_finalidad.config(state="disabled")
+        else:
+            self.cb_finalidad.config(state="readonly")
 
     def _opciones_fases(self):
         """Endpoints para desde/hasta: siembra, las fases del cultivo y cosecha.
@@ -614,7 +716,7 @@ class VentanaAltaParcela(tk.Toplevel):
         if len(self.coords) < 3:
             return messagebox.showwarning("Geometria", "Define al menos 3 vertices (SIGPAC o mapa).", parent=self)
 
-        spec = {"especie": esp}
+        spec = {"especie": esp, "variedad": self._variedad_elegida()}
         if tipo == "EXTENSIVO":
             spec["finalidad"] = ("SIEGA_VERDE" if self.cb_finalidad.get().startswith("Siega")
                                  else "COSECHA_GRANO")
@@ -826,6 +928,11 @@ class DialogoRelevoCampana(tk.Toplevel):
         ficha = DB.ficha(nombre) or {}
         campos = ficha.get("cultivos_por_campana", {})
         prev = campos.get(sorted(campos)[-1]) if campos else None
+        # Variedad de la campana anterior. Este dialogo no tiene selector propio:
+        # se arrastra SOLO si se repite la especie. Si hay rotacion, la variedad de
+        # otro cultivo no pinta nada y se deja vacia (la especie a secas).
+        self._esp_prev = (prev or {}).get("especie") or ""
+        self._var_prev = (prev or {}).get("variedad") or ""
         self.cb_tipo.set(prev.get("tipo") if prev else "LENOSO")
         self._sub()
         # rellenar con lo de la campana anterior si existe
@@ -852,7 +959,9 @@ class DialogoRelevoCampana(tk.Toplevel):
             return messagebox.showwarning("Cultivo", "Selecciona el tipo de cultivo.", parent=self)
         if tipo != "BARBECHO" and not esp:
             return messagebox.showwarning("Cultivo", "Selecciona la especie.", parent=self)
-        spec = {"especie": esp} if tipo != "BARBECHO" else {}
+        # la variedad se hereda solo si NO ha cambiado la especie (ver _prellenar)
+        var = getattr(self, "_var_prev", "") if esp == getattr(self, "_esp_prev", "") else ""
+        spec = {"especie": esp, "variedad": var} if tipo != "BARBECHO" else {}
         if tipo == "EXTENSIVO":
             spec["finalidad"] = ("SIEGA_VERDE" if self.cb_finalidad.get().startswith("Siega")
                                  else "COSECHA_GRANO")

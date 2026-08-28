@@ -247,7 +247,18 @@ def _resolver_fase(tipo, subtipo, spec, fecha, act, parcela):
     no, por el calendario de meses. Excepcion: el forraje SEGADO EN VERDE no usa la
     fenologia del cereal de grano, porque el cultivo se corta varias veces.
     Extraido de `evaluar_parcela` SIN cambiar el comportamiento."""
-    siega_verde = (tipo == "EXTENSIVO" and subtipo == "SIEGA_VERDE")
+    # Una PRADERA va SIEMPRE por el ciclo de cortes, la marquen como la marquen: es
+    # una asociacion de especies perenne que se siega varias veces, y la fenologia
+    # por dias desde la siembra de un cereal de grano no le aplica. El alta ya fuerza
+    # la siega en verde; esto lo garantiza tambien para registros antiguos o tocados
+    # a mano.
+    es_pradera = (spec or {}).get("especie") == FEN.PRADERA
+    siega_verde = (tipo == "EXTENSIVO" and (subtipo == "SIEGA_VERDE" or es_pradera))
+    if es_pradera:
+        # ...y el calendario por meses tambien tiene que ser el de la siega: si no,
+        # una pradera marcada por error como grano caeria en «espigado» y «llenado
+        # de grano», fases que en un forraje que se corta varias veces no existen.
+        subtipo = "SIEGA_VERDE"
     fase_esp = None
     fase = lo = hi = caida_ok = None
     if spec and spec.get("especie") and not siega_verde:
@@ -290,8 +301,13 @@ def _umbrales_calibrados(fase_esp, lo, hi, spec, fase, parcela):
     la tabla. Extraido de `evaluar_parcela` sin cambiar el comportamiento."""
     umbrales = FEN.umbrales_de_fase(fase_esp)
     if _CAL is not None and parcela:
+        # La VARIEDAD afina por separado: se rige por las normas generales de su
+        # especie (estos mismos umbrales de partida), pero solo cuentan para ella
+        # las validaciones hechas con esa variedad. Sin variedad elegida, vacio, que
+        # es "la especie a secas".
         umbrales = _CAL.ajustar_umbrales(dict(umbrales, lo=lo, hi=hi),
-                                         (spec or {}).get("especie"), fase, parcela)
+                                         (spec or {}).get("especie"), fase, parcela,
+                                         variedad=(spec or {}).get("variedad", ""))
         lo, hi = umbrales.get("lo", lo), umbrales.get("hi", hi)
     return umbrales, lo, hi
 

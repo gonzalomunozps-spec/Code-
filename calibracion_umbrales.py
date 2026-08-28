@@ -205,7 +205,7 @@ def sistema_de(umbrales):
 
 
 def registrar(parcela, campana, fecha, especie, fase, lecturas, respuestas, ambito,
-              umbrales=None):
+              umbrales=None, variedad=""):
     """Guarda las respuestas del usuario para una pasada.
 
     `lecturas` es lo que devolvio `lectura_de_pasada`; `respuestas` es
@@ -223,7 +223,7 @@ def registrar(parcela, campana, fecha, especie, fase, lecturas, respuestas, ambi
         DB.guardar_validacion_indice(parcela, campana, fecha, idx, lec["valor"],
                                      especie or "", fase or "",
                                      lec.get("sistema", SIN_CRITERIO), dijo,
-                                     ambito, clave, regimen, densidad)
+                                     ambito, clave, regimen, densidad, variedad or "")
         n += 1
     _invalidar()
     return n
@@ -259,7 +259,7 @@ def _acotar(indice, valor, biblio):
 
 
 def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos,
-                     regimen="", densidad=""):
+                     regimen="", densidad="", variedad=""):
     """Umbral ajustado para (indice, especie, fase), o None si no hay evidencia.
 
     Gana el ambito MAS CONCRETO que reuna evidencia suficiente: MIN_OBSERVACIONES
@@ -271,7 +271,8 @@ def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos,
     lo que ya sepa el municipio sigue valiendo."""
     if biblio is None:
         return None                     # la bibliografia dice que aqui no se juzga
-    llave = (indice, clave_umbral, especie, fase, tuple(ambitos), regimen, densidad)
+    llave = (indice, clave_umbral, especie, fase, tuple(ambitos), regimen, densidad,
+             variedad or "")
     with _LOCK:
         if llave in _CACHE:
             return _CACHE[llave]
@@ -279,7 +280,8 @@ def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos,
     for ambito, clave in ambitos:
         filas = DB.validaciones_indice(indice=indice, especie=especie, fase=fase,
                                        ambitos=[(ambito, clave)],
-                                       regimen=regimen, densidad=densidad)
+                                       regimen=regimen, densidad=densidad,
+                                       variedad=variedad or "")
         if len(filas) < MIN_OBSERVACIONES:
             continue
         # ...y que NO sean todas del mismo dia. Diez validaciones de una sola
@@ -303,7 +305,7 @@ def umbral_calibrado(indice, clave_umbral, biblio, especie, fase, ambitos,
     return resultado
 
 
-def ajustar_umbrales(umbrales, especie, fase, parcela, ficha=None):
+def ajustar_umbrales(umbrales, especie, fase, parcela, ficha=None, variedad=""):
     """Devuelve los umbrales de la fase con lo aprendido aplicado encima.
 
     No modifica el dict recibido. Anade la clave `calibrado` con lo que se ha
@@ -319,7 +321,7 @@ def ajustar_umbrales(umbrales, especie, fase, parcela, ficha=None):
             if clave is None:
                 continue
             aj = umbral_calibrado(indice, clave, umbrales.get(clave), especie, fase,
-                                  ambitos, regimen, densidad)
+                                  ambitos, regimen, densidad, variedad)
             if aj and aj["valor"] != umbrales.get(clave):
                 fuera[clave] = aj["valor"]
                 detalle[f"{indice}.{clave}"] = aj

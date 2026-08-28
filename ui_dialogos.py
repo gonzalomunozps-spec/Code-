@@ -155,7 +155,10 @@ class DialogoValidacionIndices(tk.Toplevel):
                  font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 0))
         sub = f"Fase: {ctx.get('fase', '?')}"
         if ctx.get("especie"):
-            sub = f"{ctx['especie']}  ·  " + sub
+            esp = ctx["especie"]
+            if ctx.get("variedad"):
+                esp += f" «{ctx['variedad']}»"     # se valida ESA variedad, no la especie
+            sub = f"{esp}  ·  " + sub
         tk.Label(self, text=sub, bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).pack(anchor="w", padx=16)
         tk.Label(self, text="Confirma o corrige lo que el sistema ve en cada indice. "
@@ -226,7 +229,8 @@ class DialogoValidacionIndices(tk.Toplevel):
         n = _CALIB.registrar(self.ficha.nombre, self.ficha.campana, self.ctx.get("fecha"),
                              self.ctx.get("especie"), self.ctx.get("fase"),
                              self.ctx.get("lecturas"), respuestas, ambito,
-                             umbrales=self.ctx.get("umbrales"))
+                             umbrales=self.ctx.get("umbrales"),
+                             variedad=self.ctx.get("variedad", ""))
         self.destroy()
         self.ficha.refrescar()          # el umbral puede haber cambiado ya
         messagebox.showinfo("Validacion",

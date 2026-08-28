@@ -21,6 +21,11 @@ def spec_de(cultivo: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not cultivo or not cultivo.get("especie"):
         return None
     return {"especie": cultivo.get("especie"),
+            # VARIEDAD (o mezcla comercial). Se rige por las normas generales de su
+            # especie -mismas fases y mismos rangos de partida-, pero la calibracion
+            # la afina POR SEPARADO: solo cuentan para ella sus propias validaciones.
+            # Vacio = la especie "a secas"; los registros antiguos se comportan igual.
+            "variedad": cultivo.get("variedad") or "",
             "fecha_siembra": cultivo.get("fecha_siembra"),
             "marco_calle": cultivo.get("marco_calle"),
             "marco_pie": cultivo.get("marco_pie"),

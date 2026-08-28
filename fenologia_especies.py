@@ -775,8 +775,21 @@ def fase_por_especie(grupo, especie, fecha_iso, fecha_siembra=None,
     return {"fase": "desconocido", "lo": 0.30, "hi": 0.80, "caida": False}
 
 
+# PRADERA: asociacion de especies (gramineas + leguminosas) para SIEGA EN VERDE.
+# No lleva fenologia por dias desde la siembra como los cereales, y es a proposito:
+# es perenne y se corta varias veces al ano, asi que el reloj no es "dias desde que
+# se sembro" sino el CICLO DE CORTES. Por eso no entra en EXTENSIVO_ESPECIES y se
+# rige por el calendario de siega en verde
+# (`interpretacion_fenologica.FASES_MES["EXTENSIVO_SIEGA_VERDE"]`), que ya modela
+# crecimiento, corte y rebrote. Estos nombres son los de ESE calendario: si alli
+# cambian, hay que cambiarlos aqui (no se importa para no crear un ciclo entre
+# capas: `interpretacion_fenologica` ya importa este modulo).
+PRADERA = "PRADERA"
+FASES_PRADERA = ["presiembra", "implantacion", "crecimiento / corte",
+                 "rebrote / cortes", "fin de ciclo"]
+
 ESPECIES = {
-    "EXTENSIVO": list(CEREAL_ESPECIES.keys()),
+    "EXTENSIVO": list(CEREAL_ESPECIES.keys()) + [PRADERA],
     "LENOSO": list(LENOSO_ESPECIES.keys()),
     "BARBECHO": [],
 }
@@ -789,6 +802,8 @@ def fases_posibles(tipo, especie):
     pura de las tablas, no participa en ningun diagnostico. Lista vacia si no se
     reconoce el cultivo (entonces el usuario la escribe libremente)."""
     if tipo == "EXTENSIVO":
+        if especie == PRADERA:
+            return list(FASES_PRADERA)     # ciclo de cortes, no dias desde siembra
         info = EXTENSIVO_ESPECIES.get(especie)
         return [f[2] for f in info["fases"]] if info else []
     if tipo == "LENOSO":

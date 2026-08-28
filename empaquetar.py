@@ -55,9 +55,53 @@ def _datos_existentes():
     return [d for d in DATOS if os.path.exists(os.path.join(DIR, d))]
 
 
+# --- Ficheros de VERSION para Windows -------------------------------------
+# Un .exe sin datos de version ni fabricante es, para un antivirus, un binario
+# anonimo: puntua peor en los analisis heuristicos. Rellenarlos no firma nada
+# -eso solo lo hace un certificado- pero quita uno de los motivos de sospecha.
+def _version_info():
+    from version import __version__
+    n = [int(x) for x in (__version__.split(".") + ["0", "0", "0", "0"])[:4]]
+    return f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers=({n[0]}, {n[1]}, {n[2]}, {n[3]}),
+                    prodvers=({n[0]}, {n[1]}, {n[2]}, {n[3]}),
+                    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0),
+  kids=[StringFileInfo([StringTable('040a04b0', [
+            StringStruct('CompanyName', 'Monitor de Parcelas'),
+            StringStruct('FileDescription', 'Seguimiento de parcelas agricolas por satelite'),
+            StringStruct('FileVersion', '{__version__}'),
+            StringStruct('InternalName', '{NOMBRE}'),
+            StringStruct('OriginalFilename', '{NOMBRE}.exe'),
+            StringStruct('ProductName', 'Monitor de Parcelas'),
+            StringStruct('ProductVersion', '{__version__}')])]),
+        VarFileInfo([VarStruct('Translation', [0x040a, 1200])])]
+)
+"""
+
+
+def _escribir_version_info():
+    """Deja el fichero de version junto al script y devuelve su ruta (o None si no
+    se pudo). Solo tiene efecto en Windows; en el resto PyInstaller lo ignora."""
+    ruta = os.path.join(DIR, "version_info.txt")
+    try:
+        with open(ruta, "w", encoding="utf-8") as f:
+            f.write(_version_info())
+        return ruta
+    except OSError:
+        return None
+
+
 def _argumentos():
     """La lista de argumentos para PyInstaller (sin el ejecutable de python)."""
-    args = ["--name", NOMBRE, "--windowed", "--noconfirm", "--clean"]
+    # `--noupx`: UPX comprime el ejecutable, y los binarios comprimidos con UPX son
+    # de lo que MAS dispara los antivirus (es la tecnica que usa medio malware para
+    # ofuscarse). Renunciar a el hace el ejecutable mas grande pero mucho menos
+    # sospechoso, que es justo lo que interesa aqui.
+    args = ["--name", NOMBRE, "--windowed", "--noconfirm", "--clean", "--noupx"]
+    if os.name == "nt":
+        vi = _escribir_version_info()
+        if vi:
+            args += ["--version-file", vi]
     # icono: .ico en Windows; en el resto se intenta el .png (PyInstaller lo acepta
     # en Linux; en macOS querria .icns, y si no puede, sigue sin icono).
     ico = os.path.join(DIR, "icono.ico")

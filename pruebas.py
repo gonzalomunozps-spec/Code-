@@ -326,10 +326,14 @@ def pruebas_fenologia():
           marco_calle=5, marco_pie=4), lambda r: r.get("grupo") == "LENOSO")
     check("fase_por_especie: barbecho", lambda: fase_por_especie("BARBECHO", "", "2026-06-01"),
           lambda r: r.get("barbecho") is True)
-    # --- calendario propio por cultivo extensivo (12 cultivos diferenciados) ---
-    from fenologia_especies import ESPECIES, fase_extensivo
-    check("extensivo: la UI lista los 12 cultivos",
-          lambda: ESPECIES["EXTENSIVO"], lambda r: len(r) == 12 and "MAIZ" in r and "GIRASOL" in r)
+    # --- calendario propio por cultivo extensivo (12 con fenologia por dias, mas
+    #     PRADERA, que va por el ciclo de cortes de la siega en verde) ---
+    from fenologia_especies import ESPECIES, fase_extensivo, PRADERA, EXTENSIVO_ESPECIES
+    check("extensivo: la UI lista los 12 cultivos con fenologia por dias, mas la pradera",
+          lambda: ESPECIES["EXTENSIVO"],
+          lambda r: len(r) == 13 and "MAIZ" in r and "GIRASOL" in r and PRADERA in r)
+    check("pradera: NO tiene fenologia por dias desde la siembra (es perenne y se siega)",
+          lambda: PRADERA in EXTENSIVO_ESPECIES, lambda r: r is False)
     check("maiz: das~65 -> floracion, NDVI alto, sin caida",
           lambda: fase_extensivo("MAIZ", "2026-04-15", "2026-06-19"),
           lambda r: "floracion" in r["fase"] and r["lo"] >= 0.7 and r["caida"] is False)
@@ -3915,6 +3919,119 @@ def pruebas_copias():
             os.environ[rutas.VAR_ENTORNO] = prev
 
 
+def pruebas_variedades():
+    """Catalogo de variedades y calibracion POR VARIEDAD.
+
+    Una variedad se rige por las normas generales de su especie (mismas fases y
+    mismos rangos de partida), pero sus umbrales se afinan APARTE: lo validado con
+    una variedad no mueve los umbrales de otra ni los de la especie a secas."""
+    import almacen as DB
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "var.db"))
+
+    # --- catalogo: arranca vacio y lo llena el usuario ---
+    check("variedades: una especie sin variedades devuelve lista vacia",
+          lambda: DB.variedades_de("TRIGO"), lambda r: r == [])
+    DB.anadir_variedad("TRIGO", "Marius")
+    DB.anadir_variedad("TRIGO", "Califa")
+    DB.anadir_variedad("CEBADA", "Shakira")
+    check("variedades: se guardan y salen ordenadas",
+          lambda: DB.variedades_de("TRIGO"), lambda r: r == ["Califa", "Marius"])
+    check("variedades: cada especie tiene las suyas",
+          lambda: DB.variedades_de("CEBADA"), lambda r: r == ["Shakira"])
+    check("variedades: anadir dos veces la misma no duplica",
+          lambda: (DB.anadir_variedad("TRIGO", "Marius"), len(DB.variedades_de("TRIGO")))[1],
+          lambda r: r == 2)
+    check("variedades: un nombre vacio no se guarda",
+          lambda: (DB.anadir_variedad("TRIGO", "   "), len(DB.variedades_de("TRIGO")))[1],
+          lambda r: r == 2)
+    DB.eliminar_variedad("TRIGO", "Califa")
+    check("variedades: eliminar la quita del catalogo",
+          lambda: DB.variedades_de("TRIGO"), lambda r: r == ["Marius"])
+
+    # --- la variedad ACOTA las validaciones (vacio NO es comodin) ---
+    DB.guardar_ficha("V1", {"propietario": "x", "superficie_ha": 1,
+                            "coordenadas": [[0, 0], [0, 1], [1, 1]]})
+    # el ajuste exige MIN_OBSERVACIONES validaciones de MIN_FECHAS dias distintos
+    for i, f in enumerate(("2026-03-01", "2026-03-11", "2026-03-21",
+                           "2026-04-01", "2026-04-11", "2026-04-21")):
+        DB.guardar_validacion_indice("V1", "2025-2026", f, "NDVI", 0.40 + i * 0.01,
+                                     "TRIGO", "ahijado", "normal", "bajo",
+                                     "parcela", "V1", "", "", "Marius")
+    check("variedades: filtrar por la variedad devuelve solo lo suyo",
+          lambda: len(DB.validaciones_indice(indice="NDVI", especie="TRIGO",
+                                             fase="ahijado", variedad="Marius")),
+          lambda r: r == 6)
+    check("variedades: otra variedad NO hereda esas validaciones",
+          lambda: len(DB.validaciones_indice(indice="NDVI", especie="TRIGO",
+                                             fase="ahijado", variedad="Califa")),
+          lambda r: r == 0)
+    check("variedades: la especie a secas tampoco las cuenta (vacio no es comodin)",
+          lambda: len(DB.validaciones_indice(indice="NDVI", especie="TRIGO",
+                                             fase="ahijado", variedad="")),
+          lambda r: r == 0)
+    check("variedades: sin pedir variedad se ven todas (compatibilidad)",
+          lambda: len(DB.validaciones_indice(indice="NDVI", especie="TRIGO", fase="ahijado")),
+          lambda r: r == 6)
+
+    # --- el umbral calibrado se mueve para ESA variedad y no para las demas ---
+    try:
+        import calibracion_umbrales as C
+    except Exception:
+        return
+    C._invalidar()
+    amb = [("parcela", "V1")]
+    check("variedades: la variedad validada mueve su umbral",
+          lambda: C.umbral_calibrado("NDVI", "lo", 0.30, "TRIGO", "ahijado", amb,
+                                     variedad="Marius"),
+          lambda r: r is not None)
+    check("variedades: otra variedad se queda con la bibliografia",
+          lambda: C.umbral_calibrado("NDVI", "lo", 0.30, "TRIGO", "ahijado", amb,
+                                     variedad="Califa"),
+          lambda r: r is None)
+    check("variedades: la especie a secas se queda con la bibliografia",
+          lambda: C.umbral_calibrado("NDVI", "lo", 0.30, "TRIGO", "ahijado", amb,
+                                     variedad=""),
+          lambda r: r is None)
+
+    # --- spec_de transporta la variedad; los registros antiguos siguen valiendo ---
+    from cultivo import spec_de
+    check("variedades: spec_de lleva la variedad al motor",
+          lambda: spec_de({"especie": "TRIGO", "variedad": "Marius"})["variedad"],
+          lambda r: r == "Marius")
+    check("variedades: un cultivo antiguo sin variedad queda en vacio (especie a secas)",
+          lambda: spec_de({"especie": "TRIGO"})["variedad"], lambda r: r == "")
+
+
+def pruebas_pradera():
+    """PRADERA: asociacion de especies que se siega. Va por el CICLO DE CORTES, no
+    por la fenologia de dias desde la siembra de un cereal de grano."""
+    import fenologia_especies as FEN
+    from interpretacion_fenologica import evaluar_parcela
+    from cultivo import spec_de
+
+    check("pradera: aparece entre las especies de extensivo",
+          lambda: FEN.PRADERA in FEN.ESPECIES["EXTENSIVO"], lambda r: r is True)
+    check("pradera: sus fases son las del ciclo de cortes",
+          lambda: FEN.fases_posibles("EXTENSIVO", FEN.PRADERA),
+          lambda r: "crecimiento / corte" in r and "rebrote / cortes" in r)
+
+    serie = [{"fecha": "2026-04-10", "ndvi": 0.55, "cobertura_valida": 0.96,
+              "evi": 0.4, "savi": 0.45, "gndvi": 0.45, "lai": 2.2, "msavi": 0.45,
+              "ndmi": 0.2, "ndvi_std": 0.05, "n_pixeles": 800}]
+    cult = {"tipo": "EXTENSIVO", "subtipo": "SIEGA_VERDE", "especie": FEN.PRADERA,
+            "fecha_siembra": "2025-10-01"}
+    r = evaluar_parcela("EXTENSIVO", "SIEGA_VERDE", serie, spec=spec_de(cult))
+    check("pradera: se diagnostica con la fase del ciclo de cortes",
+          lambda: r["fase"], lambda f: f in FEN.fases_posibles("EXTENSIVO", FEN.PRADERA))
+
+    # aunque alguien la marque como grano, sigue yendo por el ciclo de cortes
+    r2 = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie,
+                         spec=spec_de(dict(cult, subtipo="COSECHA_GRANO")))
+    check("pradera: marcada como grano por error, NO usa fenologia de cereal",
+          lambda: r2["fase"], lambda f: f in FEN.fases_posibles("EXTENSIVO", FEN.PRADERA))
+
+
 def pruebas_sync_cancelable():
     """El recorrido de sincronizacion es CANCELABLE y avisa del progreso.
 
@@ -3989,6 +4106,16 @@ def pruebas_empaquetar():
           lambda: all(m in args for m in ("validacion", "grados_dia", "copias")),
           lambda r: r is True)
 
+    # --- menos falsos positivos del antivirus (sin firmar nada) ---
+    check("empaquetar: no se comprime con UPX (es lo que mas dispara los antivirus)",
+          lambda: "--noupx" in args, lambda r: r is True)
+    vi = E._version_info()
+    check("empaquetar: el ejecutable lleva metadatos de version y fabricante",
+          lambda: vi, lambda t: "CompanyName" in t and "ProductVersion" in t)
+    check("empaquetar: la version de los metadatos es la del programa",
+          lambda: (__import__("version").__version__, vi),
+          lambda r: r[0] in r[1])
+
     # --- instalador de Windows (Inno Setup): coherencia de los ficheros ---
     def _lee(f):
         with open(os.path.join(E.DIR, f), encoding="utf-8") as fh:
@@ -4016,7 +4143,8 @@ def main():
               pruebas_escala_indices, pruebas_clima, pruebas_repaso,
               pruebas_vista_ficha, pruebas_grados_dia, pruebas_balance_hidrico,
               pruebas_heterogeneidad_espacial, pruebas_validacion,
-              pruebas_observaciones_campo, pruebas_copias, pruebas_sync_cancelable,
+              pruebas_observaciones_campo, pruebas_copias, pruebas_variedades,
+              pruebas_pradera, pruebas_sync_cancelable,
               pruebas_instalador,
               pruebas_empaquetar):
         try:

@@ -114,6 +114,9 @@ def preparar_interpretacion(nombre, campana, regs, idx):
         idx_ctx = {
             "fecha": actual.get("fecha"), "fase": diag.get("fase"),
             "especie": (spec or {}).get("especie", ""),
+            # la variedad acota lo que se valida: lo dicho de una variedad no
+            # mueve los umbrales de otra ni los de la especie a secas
+            "variedad": (spec or {}).get("variedad", ""),
             "lecturas": _CALIB.lectura_de_pasada(actual, diag.get("umbrales") or {},
                                                  INDICES_ORDEN),
             "umbrales": diag.get("umbrales") or {}}
