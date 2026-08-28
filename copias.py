@@ -43,9 +43,9 @@ def dir_copias():
     return d
 
 
-def _nombre(ahora=None):
+def _nombre(ahora=None, prefijo=PREFIJO):
     ahora = ahora or datetime.now()
-    return f"{PREFIJO}{ahora.strftime('%Y%m%d_%H%M%S')}{SUFIJO}"
+    return f"{prefijo}{ahora.strftime('%Y%m%d_%H%M%S')}{SUFIJO}"
 
 
 def listar():
@@ -92,12 +92,15 @@ def rotar(maximo=MAX_COPIAS):
     return borradas
 
 
-def crear_copia(origen_db, ahora=None, maximo=MAX_COPIAS):
+def crear_copia(origen_db, ahora=None, maximo=MAX_COPIAS, prefijo=PREFIJO):
     """Crea una copia con fecha de `origen_db` y rota. Devuelve la ruta creada, o
-    None si no se pudo (la base no existe o fallo la copia). Nunca lanza."""
+    None si no se pudo (la base no existe o fallo la copia). Nunca lanza.
+
+    `prefijo` distinto (p. ej. PREFIJO_RESTAURAR) hace una copia que NO sale en
+    `listar()` ni entra en la rotacion: la red de seguridad de antes de restaurar."""
     if not origen_db or not os.path.exists(origen_db):
         return None
-    destino = os.path.join(dir_copias(), _nombre(ahora))
+    destino = os.path.join(dir_copias(), _nombre(ahora, prefijo))
     try:
         _copiar_db(origen_db, destino)
     except Exception:

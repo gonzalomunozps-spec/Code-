@@ -190,6 +190,12 @@ class PanelGestionParcelas(ttk.Frame):
         self._filas_campana = None
         self._filas_gen = -1
         self._tarea_busqueda = None      # el repintado pendiente de la busqueda
+        # SINCRONIZACION EN CURSO. Con cientos de parcelas, recorrerlas todas son
+        # minutos de red: hace falta poder CANCELAR y ver por donde va. El Event lo
+        # comparten los dos recorridos (manual y automatico) y se mira entre parcela
+        # y parcela, nunca a mitad de una escritura.
+        self._cancelar_sync = threading.Event()
+        self._sync_en_curso = False
 
         self.contenedor = tk.Frame(self, bg=TEMA["page"])
         self.vista_lista = tk.Frame(self.contenedor, bg=TEMA["page"])
@@ -259,20 +265,58 @@ class PanelGestionParcelas(ttk.Frame):
         toca (nunca se sincronizo o ya paso el intervalo desde el ultimo sync);
         asi, abrir la app varias veces el mismo dia no repite, pero si han pasado
         los dias configurados, al iniciarse se pone al dia sola."""
-        if _EE and sincronizacion.toca_sincronizar(sincronizacion.marca_leer(), INTERVALO_AUTOSYNC_MS):
+        if (_EE and not self._sync_en_curso
+                and sincronizacion.toca_sincronizar(sincronizacion.marca_leer(), INTERVALO_AUTOSYNC_MS)):
+            self._sync_en_curso = True
+            self._cancelar_sync.clear()
             threading.Thread(target=self._sync_todas, daemon=True).start()
         self.after(INTERVALO_AUTOSYNC_MS, self._auto_sync)
 
-    def _sync_todas(self):
-        total = 0
-        for nombre in DB.nombres():
+    def _recorrer_sincronizando(self, progreso=None):
+        """Sincroniza TODAS las parcelas de la campana, una a una.
+
+        Devuelve (pasadas_nuevas, parcelas_revisadas, cancelado). Mira el Event de
+        cancelacion ENTRE parcelas: asi se corta rapido sin dejar a medias la
+        descarga de ninguna. `progreso(i, total)` se llama tras cada parcela (la
+        interfaz lo usa para decir «37/500»)."""
+        total = revisadas = 0
+        nombres = DB.nombres()
+        cuantas = len(nombres)
+        for i, nombre in enumerate(nombres, 1):
+            if self._cancelar_sync.is_set():
+                return total, revisadas, True
             n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
             total += n
-        if ULTIMO_SYNC.get("estado") != "fallo":     # solo marca la hora si conecto
-            sincronizacion.marca_guardar()
+            revisadas += 1
+            if progreso is not None:
+                progreso(i, cuantas)
+        return total, revisadas, False
+
+    def _sync_todas(self):
+        """Recorrido AUTOMATICO (al arrancar y cada intervalo). Sin dialogos: solo
+        actualiza el indicador y, si trajo algo, repinta la lista."""
+        try:
+            total, _rev, cancelado = self._recorrer_sincronizando(self._progreso_sync)
+        finally:
+            self._sync_en_curso = False
+        if not cancelado and ULTIMO_SYNC.get("estado") != "fallo":
+            sincronizacion.marca_guardar()   # solo marca la hora si conecto y termino
         self.after(0, self._actualizar_estado_sync)   # refleja exito/fallo del auto-sync
         if total:
             self.after(0, self._refrescar)
+
+    def _progreso_sync(self, i, cuantas):
+        """Ensena por que parcela va la sincronizacion. Se marshalla al hilo de la
+        interfaz; con una parcela por evento, ni con cientos satura nada."""
+        def pintar():
+            if hasattr(self, "lbl_sync") and self.lbl_sync.winfo_exists():
+                self.lbl_sync.config(text=f"↻ GEE: {i}/{cuantas}", fg=TEMA["header_sub"])
+        self.after(0, pintar)
+
+    def detener_sincronizacion(self):
+        """Pide que el recorrido en curso pare en cuanto termine la parcela actual.
+        La llama el boton de cancelar y el cierre del programa."""
+        self._cancelar_sync.set()
 
     def _build_cabecera(self):
         cab = tk.Frame(self, bg=TEMA["header_bg"])
@@ -377,23 +421,29 @@ class PanelGestionParcelas(ttk.Frame):
             messagebox.showinfo("Ayuda", "No se encontro el manual (MANUAL.md).")
 
     def _sincronizar_ahora(self):
-        """Sincronizacion manual de TODAS las parcelas, por si hay alguna pasada
-        nueva antes de la comprobacion automatica."""
+        """Sincronizacion manual de TODAS las parcelas. Mientras corre, el mismo
+        boton sirve para CANCELAR: con cientos de parcelas esto son minutos de red
+        y dejar al usuario sin salida no es aceptable."""
+        if self._sync_en_curso:                     # segunda pulsacion = cancelar
+            self.detener_sincronizacion()
+            self.btn_sync.config(text="  ⏹ Cancelando…  ", state="disabled")
+            return
         if not _EE:
             return messagebox.showwarning(
                 "Sincronizacion", "earthengine-api no disponible. Configura la conexion "
                 "en la pestana 'Credenciales'.")
-        self.btn_sync.config(text="  ↻ Sincronizando…  ", state="disabled")
+        self._sync_en_curso = True
+        self._cancelar_sync.clear()
+        self.btn_sync.config(text="  ⏹ Cancelar  ", state="normal")
         self.lbl_sync.config(text="↻ GEE: sincronizando…", fg=TEMA["header_sub"])
         threading.Thread(target=self._sync_todas_notificando, daemon=True).start()
 
     def _sync_todas_notificando(self):
-        total, n_par = 0, 0
-        for nombre in DB.nombres():
-            n, _ = sincronizar_parcela(nombre, self.campana, silencioso=True)
-            total += n
-            n_par += 1
-        if ULTIMO_SYNC.get("estado") != "fallo":
+        try:
+            total, n_par, cancelado = self._recorrer_sincronizando(self._progreso_sync)
+        finally:
+            self._sync_en_curso = False
+        if not cancelado and ULTIMO_SYNC.get("estado") != "fallo":
             sincronizacion.marca_guardar()
 
         def fin():
@@ -402,7 +452,12 @@ class PanelGestionParcelas(ttk.Frame):
             self.btn_sync.config(text="  ↻ Sincronizar ahora  ", state="normal")
             self._actualizar_estado_sync()
             self._refrescar()
-            if ULTIMO_SYNC.get("estado") == "fallo":
+            if cancelado:
+                messagebox.showinfo("Sincronizacion",
+                                    f"Sincronizacion cancelada. Se revisaron {n_par} parcela(s) "
+                                    f"y se anadieron {total} pasada(s); lo demas queda para la "
+                                    "proxima vez.")
+            elif ULTIMO_SYNC.get("estado") == "fallo":
                 messagebox.showerror("Sincronizacion",
                                      f"No se pudo sincronizar con Copernicus:\n\n{ULTIMO_SYNC.get('msg','')}")
             elif total:
@@ -725,6 +780,20 @@ def main(argv=None):
     panel = PanelGestionParcelas(nb)
     nb.add(panel, text="  Gestion de Parcelas  ")
     nb.add(PanelCredenciales(nb, al_cambiar=panel._refrescar), text="  Credenciales  ")
+
+    def al_cerrar():
+        """Al cerrar la ventana: pedir que pare la sincronizacion en curso antes de
+        destruir nada. Los hilos son `daemon`, asi que el proceso no se quedaria
+        colgado, pero cortarlos en seco a mitad de un recorrido de cientos de
+        parcelas deja el trabajo a medias sin motivo: avisando, el recorrido se
+        detiene limpiamente en cuanto acaba la parcela que tuviera entre manos."""
+        try:
+            panel.detener_sincronizacion()
+        except Exception:
+            log.debug("no se pudo detener la sincronizacion al cerrar", exc_info=True)
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", al_cerrar)
 
     root.deiconify()                 # de golpe, sin verla construirse por partes
 

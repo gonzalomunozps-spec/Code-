@@ -73,7 +73,7 @@ Son la base testeable. Ninguno importa a otro.
 | `bitacora.py` | Registro de incidencias a `parcelas.log`. Nunca escribe en consola; si no puede escribir, degrada a `NullHandler`. |
 | `rutas.py` | **Dónde viven los datos**: `GESTOR_PARCELAS_DIR` → `platformdirs` (opcional) → `~/.gestor_parcelas`. También purga los PNG viejos de la caché. |
 | `credenciales.py` | Config y clave de OpenAI. La clave se **cifra en el llavero del SO** (`keyring`, opcional) cuando se puede; si no, respaldo **ofuscado** (base64) en fichero 0600, escritura atómica. La variable `OPENAI_API_KEY` tiene prioridad y no toca disco. |
-| `copias.py` | **Copias de seguridad** de la base. Toda la información vive en un fichero SQLite; este módulo hace copias con fecha (usando el backup online de SQLite, consistente aun con WAL), las **rota** (guarda las N más nuevas), restaura (guardando antes una copia de los datos actuales) y exporta a una ruta cualquiera. Autónomo (no importa `almacen`); **opcional**. La copia automática del arranque (`crear_copia_si_toca`) no se repite si ya hay una reciente. `ui_copias.DialogoCopias` es su ventana; el arranque la llama tras `DB.conectar()`. |
+| `copias.py` | **Copias de seguridad** de la base. Toda la información vive en un fichero SQLite; este módulo hace copias con fecha (usando el backup online de SQLite, consistente aun con WAL), las **rota** (guarda las N más nuevas), restaura (guardando antes una copia de los datos actuales) y exporta a una ruta cualquiera. Autónomo (no importa `almacen`); **opcional**. **Restaurar NO cierra la base**: lo hace `almacen.restaurar_desde`, que vuelca la copia *dentro* de la conexión viva con el backup online. Cerrarla y sustituir el fichero por debajo era una **carrera** con los hilos de fondo (la sincronización automática arranca sola): el hilo se quedaba escribiendo sobre una conexión cerrada (`Cannot operate on a closed database`), o peor, reabría el fichero a medio copiar. Cubierto por prueba de regresión con un hilo escribiendo mientras se restaura. La copia automática del arranque (`crear_copia_si_toca`) no se repite si ya hay una reciente. `ui_copias.DialogoCopias` es su ventana; el arranque la llama tras `DB.conectar()`. |
 | `empaquetar.py` | Script de EMPAQUETADO (aparte del programa): construye un **ejecutable con PyInstaller** para repartirlo a quien no tiene Python. Declara los datos (icono, `MANUAL.md`) y los imports ocultos que el análisis estático no ve. No lo importa nadie. |
 
 ### Capa 2 — Dominio
@@ -509,6 +509,13 @@ sale con el icono por defecto de Tk y no pasa nada más.
 > aparece. Usa `self.master`. Hay una prueba que lo vigila sobre el fuente.
 
 ---
+
+> ⚠️ **La base NO va en una carpeta de red (SMB/NFS).** Se abre con
+> `PRAGMA journal_mode=WAL`, y WAL necesita memoria compartida entre procesos, que
+> los sistemas de ficheros en red no dan: sobre un recurso compartido puede
+> **corromperse**. Para trabajar en equipo, exportar/importar copias, o mover los
+> datos a un servidor de verdad (PostgreSQL). `GESTOR_PARCELAS_DIR` sirve para
+> elegir carpeta, pero debe ser **disco local**.
 
 ## 6. Piezas opcionales (borrar el fichero y listo)
 

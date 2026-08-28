@@ -8,9 +8,10 @@ momento, ver las que hay, restaurar una y exportar una copia a donde el usuario
 quiera (pen-drive, carpeta de red). Se abre desde la barra de la ventana
 principal.
 
-La logica de copiar/rotar/restaurar vive en `copias` (sin Tk, probada aparte);
-aqui solo esta el dialogo. Restaurar CIERRA la base, copia encima y reconecta,
-para que SQLite no tenga la base abierta mientras se sustituye el fichero.
+La logica de copiar/rotar vive en `copias` (sin Tk, probada aparte); aqui solo
+esta el dialogo. Restaurar NO cierra la base: usa `almacen.restaurar_desde`, que
+vuelca la copia por dentro de la conexion viva (backup online de SQLite). Cerrar
+y sustituir el fichero por debajo era una carrera con los hilos de fondo.
 """
 
 from datetime import datetime
@@ -106,10 +107,14 @@ class DialogoCopias(tk.Toplevel):
                 "Se guardara antes una copia de los datos de ahora, por si acaso. "
                 "El programa recargara la lista.\n\n¿Continuar?", parent=self):
             return
-        # cerrar la base ANTES de pisar el fichero, restaurar y reconectar
-        DB.cerrar()
-        ok = copias.restaurar(c["ruta"], DB.RUTA_DB)
-        DB.conectar()
+        # Red de seguridad: los datos de AHORA, con su propio prefijo (no entra en
+        # la lista ni en la rotacion). `maximo=0` para no rotar por esto.
+        copias.crear_copia(DB.RUTA_DB, maximo=0, prefijo=copias.PREFIJO_RESTAURAR)
+        # La restauracion va POR DENTRO de la conexion viva (backup online de
+        # SQLite). NO se cierra la base: cerrarla y sustituir el fichero por debajo
+        # es una carrera con los hilos de fondo -la sincronizacion automatica
+        # arranca sola- que dejaba al hilo escribiendo sobre una conexion cerrada.
+        ok = DB.restaurar_desde(c["ruta"])
         if ok:
             try:
                 self.panel._refrescar()

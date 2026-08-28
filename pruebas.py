@@ -3821,6 +3821,7 @@ def pruebas_copias():
     import copias
     import rutas
     import sqlite3
+    import almacen as DB
 
     d = tempfile.mkdtemp()
     prev = os.environ.get(rutas.VAR_ENTORNO)
@@ -3874,11 +3875,97 @@ def pruebas_copias():
         # una base que no existe no rompe: devuelve None
         check("copias: crear_copia de una base inexistente devuelve None (no rompe)",
               lambda: copias.crear_copia(os.path.join(d, "no_hay.db")), lambda r: r is None)
+
+        # --- RESTAURAR SOBRE LA BASE VIVA, sin cerrarla (evita la carrera con los
+        #     hilos de fondo: antes, cerrar la conexion mientras la sincronizacion
+        #     automatica escribia daba "Cannot operate on a closed database") ---
+        import threading, time
+        DB.conectar(db)
+        DB.guardar_ficha("Viva", {"propietario": "x", "superficie_ha": 1,
+                                  "coordenadas": [[0, 0], [0, 1], [1, 1]]})
+        instantanea = copias.crear_copia(DB.RUTA_DB)      # copia SIN eventos
+        fallos, fin = [], threading.Event()
+
+        def _escritor():
+            for _ in range(4000):
+                try:
+                    DB.registrar_evento("Viva", "2025-2026",
+                                        {"fecha": "2026-01-01", "tipo": "OTRO"})
+                except Exception as e:
+                    fallos.append(f"{type(e).__name__}: {e}")
+                    break
+            fin.set()
+
+        h = threading.Thread(target=_escritor, daemon=True)
+        h.start()
+        time.sleep(0.05)                                   # que le de tiempo a arrancar
+        ok_viva = DB.restaurar_desde(instantanea)          # restaurar MIENTRAS escribe
+        fin.wait(20)
+        check("copias: restaurar sobre la base viva no revienta los hilos que escriben",
+              lambda: (ok_viva, fallos), lambda r: r[0] is True and r[1] == [])
+        check("copias: tras restaurar en vivo la base sigue usable",
+              lambda: DB.nombres(), lambda r: "Viva" in r)
+        check("copias: restaurar_desde de una ruta inexistente devuelve False",
+              lambda: DB.restaurar_desde(os.path.join(d, "no_existe.db")),
+              lambda r: r is False)
     finally:
         if prev is None:
             os.environ.pop(rutas.VAR_ENTORNO, None)
         else:
             os.environ[rutas.VAR_ENTORNO] = prev
+
+
+def pruebas_sync_cancelable():
+    """El recorrido de sincronizacion es CANCELABLE y avisa del progreso.
+
+    Con cientos de parcelas, recorrerlas todas son minutos de red: hay que poder
+    parar. La logica no necesita ventana: se llama al metodo con un `self` minimo."""
+    import threading
+    import panel_gestion_parcelas as P
+    import almacen as DB
+
+    d = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d, "sync.db"))
+    for i in range(5):
+        DB.guardar_ficha(f"S{i}", {"propietario": "x", "superficie_ha": 1,
+                                   "coordenadas": [[0, 0], [0, 1], [1, 1]]})
+
+    class _PanelMinimo:                       # solo lo que usa el recorrido
+        campana = "2025-2026"
+        def __init__(self):
+            self._cancelar_sync = threading.Event()
+
+    visitadas = []
+    real = P.sincronizar_parcela
+    P.sincronizar_parcela = lambda nombre, campana, silencioso=True: (
+        visitadas.append(nombre), (1, "ok"))[1]
+    try:
+        # 1) sin cancelar: las recorre todas
+        f = _PanelMinimo()
+        r = P.PanelGestionParcelas._recorrer_sincronizando(f)
+        check("sync: sin cancelar recorre todas las parcelas",
+              lambda: r, lambda x: x == (5, 5, False))
+
+        # 2) el progreso se notifica parcela a parcela, con el total
+        f2 = _PanelMinimo()
+        pasos = []
+        P.PanelGestionParcelas._recorrer_sincronizando(f2, lambda i, n: pasos.append((i, n)))
+        check("sync: informa del progreso en cada parcela (i de n)",
+              lambda: pasos, lambda x: x == [(1, 5), (2, 5), (3, 5), (4, 5), (5, 5)])
+
+        # 3) al cancelar se para EN CUANTO acaba la parcela en curso
+        f3 = _PanelMinimo()
+        def _prog(i, n):
+            if i == 2:
+                f3._cancelar_sync.set()
+        visitadas.clear()
+        r3 = P.PanelGestionParcelas._recorrer_sincronizando(f3, _prog)
+        check("sync: cancelar detiene el recorrido y lo dice (revisadas=2, cancelado)",
+              lambda: r3, lambda x: x == (2, 2, True))
+        check("sync: tras cancelar no se toca ninguna parcela mas",
+              lambda: len(visitadas), lambda n: n == 2)
+    finally:
+        P.sincronizar_parcela = real
 
 
 def pruebas_empaquetar():
@@ -3929,7 +4016,8 @@ def main():
               pruebas_escala_indices, pruebas_clima, pruebas_repaso,
               pruebas_vista_ficha, pruebas_grados_dia, pruebas_balance_hidrico,
               pruebas_heterogeneidad_espacial, pruebas_validacion,
-              pruebas_observaciones_campo, pruebas_copias, pruebas_instalador,
+              pruebas_observaciones_campo, pruebas_copias, pruebas_sync_cancelable,
+              pruebas_instalador,
               pruebas_empaquetar):
         try:
             f()

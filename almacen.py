@@ -134,7 +134,46 @@ def cerrar():
 
 
 def _c():
-    return _CONN or conectar()
+    """La conexion viva. Se lee DENTRO del lock: sin el, un hilo podia quedarse con
+    una conexion que otro acababa de cerrar (`ProgrammingError: Cannot operate on a
+    closed database`). Ver `restaurar_desde`, que por eso NO cierra la conexion."""
+    with _LOCK:
+        return _CONN or conectar()
+
+
+def restaurar_desde(ruta_copia):
+    """Vuelca el contenido de `ruta_copia` SOBRE la base viva y devuelve True/False.
+
+    NO cierra la conexion, a proposito. Cerrarla y sustituir el fichero por debajo
+    es una carrera con los hilos de fondo (la sincronizacion automatica arranca
+    sola): el hilo se queda con una conexion cerrada -o peor, reabre el fichero a
+    medio copiar-. Con el backup ONLINE de SQLite el contenido se sustituye DENTRO
+    de la misma conexion, en bloque y con el lock cogido: quien este esperando se
+    encuentra la base ya restaurada, sin enterarse del cambio.
+
+    Tras restaurar se aplican las migraciones: la copia puede ser de un esquema
+    mas antiguo que el programa."""
+    if not ruta_copia or not os.path.exists(ruta_copia):
+        return False
+    with _LOCK:
+        destino = _CONN or conectar()
+        origen = None
+        try:
+            origen = sqlite3.connect(ruta_copia)
+            origen.backup(destino)          # sustitucion atomica del contenido
+        except sqlite3.Error:
+            log.warning("no se pudo restaurar la copia %s sobre la base viva",
+                        ruta_copia, exc_info=True)
+            return False
+        finally:
+            if origen is not None:
+                origen.close()
+        try:
+            _migrar_esquema()               # la copia puede traer un esquema viejo
+        except sqlite3.Error:
+            log.warning("copia restaurada, pero fallo la migracion de esquema",
+                        exc_info=True)
+        return True
 
 
 def _crear_tablas():
