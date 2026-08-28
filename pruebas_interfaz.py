@@ -341,11 +341,27 @@ def escenario_fichas(P, DB):
         # desaparecer (antes se empujaba fuera de pantalla y "no aparecia").
         def _interp_visible(f=f):
             root.geometry("980x760"); root.update(); root.update_idletasks()
-            visible = f.txt.master.winfo_ismapped()
+            ci = f.txt.master                 # tarjeta de interpretacion
+            ch = f.lbl_hetero.master          # tarjeta de zonas
+            visible = ci.winfo_ismapped()
+            # COMPLETA, no recortada: la tarjeta debe recibir todo el alto que pide.
+            # Antes compartia fila con la grafica -de altura fija- y el texto y los
+            # botones de validar salian cortados.
+            entera = ci.winfo_height() >= ci.winfo_reqheight()
+            boton = f.btn_val_ok.winfo_ismapped()      # lo ultimo de la tarjeta
+            # y las dos tarjetas de lectura van UNA AL LADO DE LA OTRA, a medias
+            misma_fila = ci.winfo_rooty() == ch.winfo_rooty()
+            anchos = (ci.winfo_width(), ch.winfo_width())
             root.geometry("1440x900"); root.update()
             if not visible:
                 raise AssertionError("el recuadro de interpretacion desaparece en ventana estrecha")
-        _paso(f"{nombre}: la interpretacion sigue visible en ventana estrecha", _interp_visible)
+            if not entera or not boton:
+                raise AssertionError("la interpretacion sale CORTADA (no cabe entera)")
+            if not misma_fila:
+                raise AssertionError("interpretacion y zonas no estan en la misma fila")
+            if abs(anchos[0] - anchos[1]) > 2:
+                raise AssertionError(f"las dos tarjetas no van a medias: {anchos}")
+        _paso(f"{nombre}: interpretacion entera y a la par con zonas", _interp_visible)
         _paso(f"{nombre}: refrescar", lambda f=f: (f.refrescar(), root.update()))
         _paso(f"{nombre}: cambiar de dia", lambda f=f: (
             f.cb_dia.current(0) if f.cb_dia["values"] else None,

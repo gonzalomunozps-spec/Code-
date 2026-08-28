@@ -102,6 +102,22 @@ try:
 except Exception:
     _VAL = None
 
+
+def _ajustar_wrap(contenedor, etiqueta, margen=28):
+    """Hace que el ajuste de linea de una etiqueta siga al ancho REAL de su tarjeta.
+
+    Un `wraplength` fijo no sirve cuando la tarjeta comparte fila con otra: se sale
+    del cuadro en pantallas estrechas y deja media tarjeta vacia en las anchas. Con
+    esto el texto se reajusta al redimensionar la ventana.
+
+    Se ignoran los anchos absurdos (el 1 px del primer dibujado, o lo que quede en
+    negativo tras restar el margen), que dejarian la etiqueta sin poder pintar."""
+    def _al_medir(evento):
+        ancho = evento.width - margen
+        if ancho > 80 and etiqueta.winfo_exists():
+            etiqueta.config(wraplength=ancho)
+    contenedor.bind("<Configure>", _al_medir, add="+")
+
 # Constantes de presentacion y ayudantes sueltos: viven en `ficha_comun` para que
 # los mixins de la ficha los compartan sin crear un ciclo de imports.
 from ficha_comun import (_PIL, _EE, _FMT_DIAS, _FMT_MESES, _NOMBRE_EVENTO,
@@ -449,17 +465,32 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
         self._build_tabla(sup)
         self._build_mapa(sup)
 
+        # La GRAFICA de indices, sola y a todo lo ancho. Necesita altura real (esta
+        # dentro de un marco con scroll), y ahora la aprovecha entera.
         inf = tk.Frame(cuerpo, bg=TEMA["page"], height=esc(320))
         inf.pack(fill="x", pady=(14, 0))
         inf.pack_propagate(False)
         self._build_graficas(inf)
-        self._build_interp(inf)
 
-        # cuadro aparte con la interpretacion de la heterogeneidad (zonas), debajo
-        # de la grafica de evolucion de los indices
-        het = tk.Frame(cuerpo, bg=TEMA["page"])
-        het.pack(fill="x", pady=(14, 0))
-        self._build_hetero(het)
+        # Debajo de la grafica, los DOS cuadros de lectura, uno al lado del otro:
+        # la interpretacion automatica y el analisis de zonas. SIN altura fija a
+        # proposito: antes la interpretacion compartia fila con la grafica y
+        # heredaba su alto recortado, asi que el texto y los botones de validar
+        # salian CORTADOS. Aqui cada tarjeta mide lo que necesita.
+        lectura = tk.Frame(cuerpo, bg=TEMA["page"])
+        lectura.pack(fill="x", pady=(14, 0))
+        # `grid` con `uniform`, no `pack`: pack solo reparte el ESPACIO SOBRANTE, asi
+        # que la tarjeta con el contenido mas ancho se quedaba con casi todo (la
+        # interpretacion a 690 px y las zonas a 150 px en una ventana estrecha).
+        # Con dos columnas uniformes van a medias de verdad.
+        lectura.columnconfigure(0, weight=1, uniform="lectura")
+        lectura.columnconfigure(1, weight=1, uniform="lectura")
+        col_izq = tk.Frame(lectura, bg=TEMA["page"])
+        col_izq.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        col_der = tk.Frame(lectura, bg=TEMA["page"])
+        col_der.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+        self._build_interp(col_izq)
+        self._build_hetero(col_der)
 
         # validacion contra las observaciones de campo (verdad-terreno). Sin altura
         # fija: crece con lo que haya. Solo con el modulo opcional `validacion`.
@@ -597,7 +628,7 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
 
     def _build_tabla(self, parent):
         card = tarjeta(parent, width=560)
-        card.pack(side="left", fill="both", expand=True, padx=(0, 7))
+        card.pack(side="left", fill="both", expand=True)
         self._titulo(card, "Historico de indices (medias Copernicus)")
         cols = ["fecha"] + INDICES_ORDEN
         self.tv = ttk.Treeview(card, columns=cols, show="headings", height=10)
@@ -755,12 +786,16 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
         la lectura clasica (media/dispersion) y, si esta el modulo espacial, el
         analisis por pixel (foco, tamano, persistencia, arbolado). Solo lectura."""
         card = tarjeta(parent)
-        card.pack(fill="x")
+        card.pack(fill="both", expand=True)
         self._titulo(card, "Heterogeneidad de la parcela · zonas")
         self.lbl_hetero = tk.Label(card, text="", bg=TEMA["surface"], fg=TEMA["text_sec"],
                                    font=FUENTES["small"], justify="left", anchor="w",
-                                   wraplength=1180)
+                                   wraplength=520)
         self.lbl_hetero.pack(fill="x", padx=12, pady=(0, 12))
+        # La tarjeta ya no ocupa todo el ancho: el ajuste de linea tiene que seguir
+        # al ancho REAL, o el texto se saldria en pantallas estrechas y quedaria
+        # corto en las anchas. Un `wraplength` fijo no vale para las dos cosas.
+        _ajustar_wrap(card, self.lbl_hetero)
 
     def _pintar_hetero(self, regs):
         """Rellena el cuadro de zonas: lectura agregada + analisis espacial opcional."""
@@ -791,14 +826,15 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
                                "(hacen falta varias pasadas con rejilla de píxeles).")
 
     def _build_interp(self, parent):
-        # `expand=True`: comparte el ancho con la grafica en vez de quedarse en un
-        # ancho fijo. Sin esto, en una ventana estrecha la grafica (que si se
-        # expandia) empujaba esta tarjeta FUERA de la pantalla y la interpretacion
-        # "desaparecia". `pack_propagate(False)` mantiene la ALTURA fija (la del
-        # marco con scroll), no el ancho. `width=360` es solo el minimo de arranque.
-        card = tarjeta(parent, width=360)
-        card.pack(side="right", fill="both", expand=True, padx=(7, 0))
-        card.pack_propagate(False)
+        """Interpretacion automatica: va DEBAJO de la grafica, a la izquierda, con
+        el cuadro de zonas al lado.
+
+        Sin `pack_propagate(False)` y sin altura impuesta por la fila: la tarjeta
+        mide lo que necesita. Antes compartia fila con la grafica -altura fija- y
+        heredaba ese recorte, asi que el texto y los botones de validar salian
+        cortados. `expand=True` reparte el ancho a medias con el cuadro de zonas."""
+        card = tarjeta(parent)
+        card.pack(fill="both", expand=True)
         self._titulo(card, "Interpretacion automatica")
 
         # --- selector de pasada ---------------------------------------------
@@ -822,7 +858,7 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
         fila_h = tk.Frame(card, bg=TEMA["surface"])
         fila_h.pack(fill="x", padx=12, pady=(0, 4))
         self.chk_hetero = ttk.Checkbutton(
-            fila_h, text="Analizar zonas dentro de la parcela (heterogeneidad)",
+            fila_h, text="Analizar zonas (heterogeneidad)",
             variable=self.var_hetero, command=self._cambiar_heterogeneidad)
         self.chk_hetero.pack(anchor="w")
         # Arbolado disperso (dehesa/encinas): solo si el modulo espacial esta. Con la
@@ -830,9 +866,18 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
         if _HE is not None:
             self.var_arbolado = tk.BooleanVar(value=bool((DB.ficha(self.nombre) or {}).get("arbolado")))
             self.chk_arbolado = ttk.Checkbutton(
-                fila_h, text="Arbolado disperso (dehesa/encinas): excluirlo del análisis de zonas",
+                fila_h, text="Arbolado disperso (dehesa/encinas)",
                 variable=self.var_arbolado, command=self._cambiar_arbolado)
             self.chk_arbolado.pack(anchor="w")
+            # el detalle, en una etiqueta que SI ajusta de linea: en un Checkbutton
+            # el texto no se parte y fijaba un ancho minimo enorme a la tarjeta
+            _ayuda = tk.Label(fila_h, text="Excluye las encinas del análisis para "
+                                           "juzgar el cultivo y no los árboles.",
+                              bg=TEMA["surface"], fg=TEMA["text_muted"],
+                              font=FUENTES["small"], justify="left", anchor="w",
+                              wraplength=360)
+            _ayuda.pack(anchor="w", padx=(20, 0))
+            _ajustar_wrap(fila_h, _ayuda, margen=24)
 
         self.txt = tk.Text(card, wrap="word", height=8, bd=0, relief="flat",
                            bg=TEMA["nota_bg"], fg=TEMA["text"], font=FUENTES["body"],
