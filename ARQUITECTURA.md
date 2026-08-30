@@ -24,7 +24,7 @@ siempre sus datos, se arranque desde donde se arranque.
 
 ---
 
-## 2. Mapa de módulos (32 ficheros. ~16.500 líneas)
+## 2. Mapa de módulos (48 ficheros, ~17.100 líneas, sin contar `pruebas*.py`)
 
 El grafo de dependencias **no tiene ciclos**. Las capas van de abajo arriba:
 
@@ -162,30 +162,30 @@ todas las parcelas.
    criterio bueno ya estaba en `registro_parcela.datos_cosecha`, que rechaza un
    rendimiento negativo o una humedad del 200 %; ahora se aplica también al marco
    (`densidad_arboles`) y al fondo medido (`suelo_de_la_parcela`).
-3. **La interfaz solo se toca desde el hilo principal.** El trabajo lento va en
+4. **La interfaz solo se toca desde el hilo principal.** El trabajo lento va en
    hilos y vuelve con `widget.after(...)`. Verificado: no hay ni un acceso directo
    a widgets desde un hilo.
-4. **Los callbacks diferidos comprueban que el widget siga vivo** (`winfo_exists`)
+5. **Los callbacks diferidos comprueban que el widget siga vivo** (`winfo_exists`)
    antes de pintar: una descarga puede terminar después de cerrar la ventana.
-5. **`except ... as e` + lambda diferida:** hay que fijar la excepción como
+6. **`except ... as e` + lambda diferida:** hay que fijar la excepción como
    argumento por defecto (`lambda err=e:`). Python borra `e` al salir del `except`.
-6. **Ninguna ruta de datos es relativa al directorio de trabajo.** Todo se pide a
+7. **Ninguna ruta de datos es relativa al directorio de trabajo.** Todo se pide a
    `rutas.ruta(...)`. Si al arrancar hay un `parcelas.db` en el directorio actual
    y no en el de datos, se traslada una vez y queda anotado en la bitácora.
-7. **Una rejilla que no cuadra con el servidor no se guarda.** Al descargarla se
+8. **Una rejilla que no cuadra con el servidor no se guarda.** Al descargarla se
    pide también la media que calcula Earth Engine sobre la misma geometría, y se
    compara con la media de los píxeles recibidos. Son dos caminos independientes
    al mismo número; si difieren, la rejilla está desplazada o mal enmascarada y
    se descarta. Es la única comprobación que caza eso sin credenciales, y una
    rejilla desplazada no da error: da un mapa de manchas perfectamente creíble.
-8. **El píxel (i,j) de dos fechas es el mismo trozo de terreno, o no se compara.**
+9. **El píxel (i,j) de dos fechas es el mismo trozo de terreno, o no se compara.**
    La rejilla de NDVI se guarda en la **retícula nativa** de Sentinel-2, sin
    reproyectar, con su georreferenciación (`crs`, `escala`, `i0`, `j0`, filas,
    columnas). Al leer se exige que coincidan los seis: si no —una parcela a
    caballo entre dos husos UTM llega en husos distintos según la pasada— la
    comparación se **descarta**, no se hace mal. Y se guarda la máscara de válidos:
    un píxel tapado por nube no es un píxel anómalo.
-9. **En leñosos el juez es el MSAVI, no el NDVI.** El NDVI medio mezcla copa y
+10. **En leñosos el juez es el MSAVI, no el NDVI.** El NDVI medio mezcla copa y
    calle: un olivar puede salir «normal» con la copa floja y la hierba alta. El
    vigor de copa se juzga con MSAVI, y con el percentil 90 cuando el marco da
    para separar líneas. `separacion_copa_cubierta` es la **única** fuente del
@@ -195,11 +195,11 @@ todas las parcelas.
    **no** con el que usa `estadisticas_pasada` para la tabla (`p90`). Se leían con
    el segundo y por eso el camino del p90 estuvo muerto: la confianza salía
    siempre «baja» y la copa se juzgaba con la media, justo lo que se quería evitar.
-10. **El régimen hídrico manda sobre la especie en leñosos.** Un olivar de secano
+11. **El régimen hídrico manda sobre la especie en leñosos.** Un olivar de secano
    en julio está en déficit por diseño. Donde el déficit es normal o buscado
    (secano en verano, viña en envero) el NDMI **no se juzga**: `ndmi_min = None`.
    Un régimen sin declarar cuenta como SECANO, que es el supuesto que no alarma.
-11. **Los umbrales de la bibliografía no se editan.** `fenologia_especies` es la
+12. **Los umbrales de la bibliografía no se editan.** `fenologia_especies` es la
    referencia agronómica. Lo que el usuario valida se guarda aparte y se aplica
    como una capa encima (`calibracion_umbrales`), acotada y reversible. Donde la
    tabla dice `ndmi_min: None` («aquí este índice no significa nada») no se
@@ -212,7 +212,7 @@ todas las parcelas.
    ámbitos amplios, donde el mínimo se junta en una tarde validando varias parcelas
    del mismo municipio. `DESVIACION_MAX` es un freno distinto y sigue igual: limita
    **cuánto** se mueve, no **cuándo**.
-12. **Las bandas se escalan a reflectancia antes de entrar en cualquier fórmula.**
+13. **Las bandas se escalan a reflectancia antes de entrar en cualquier fórmula.**
    `COPERNICUS/S2_SR_HARMONIZED` entrega las bandas espectrales como enteros
    UINT16 con la reflectancia multiplicada por 10.000: un 0,28 llega como 2800.
    `gee_cliente.reflectancia()` deshace ese factor (`ESCALA_SR = 0.0001`) y
@@ -231,17 +231,20 @@ todas las parcelas.
    Fuera de `construir_indice` hay dos sitios que **no** escalan, a propósito: el
    fondo RGB de `descargar_mapa_indice` (pinta la imagen natural, no un índice) y
    el NDVI de la rejilla (normalizado). El radar tampoco: Sentinel-1 llega en dB.
-8. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
+14. **El esquema de la base se versiona** con `PRAGMA user_version`. Para
    cambiarlo hay que subir `ESQUEMA_VERSION` y añadir su migración a
    `_MIGRACIONES` (receta completa en el docstring de `almacen.py`). Va por la
-   **7**: la tabla `clima`.
-   Esa tabla es la **única excepción** al borrado en cascada de `eliminar_parcela`,
+   **11**: la tabla `variedades`, el catálogo de variedades por especie que permite
+   calibrar los umbrales por variedad y no solo por especie. Antes pasó por la
+   **10** (`observaciones_campo`, la verdad-terreno con la que se mide el acierto
+   del sistema) y por la **7**, la tabla `clima`.
+   Esa tabla `clima` es la **única excepción** al borrado en cascada de `eliminar_parcela`,
    y es deliberado: se indexa por **punto de rejilla de ERA5** (11 km de lado), no
    por parcela, porque todas las fincas de una comarca comparten el mismo dato y
    guardarlo por parcela serían veinte copias de una sola medida. A cambio, al
    borrar una parcela se retiran los puntos que ya no usa ninguna
    (`purgar_clima`), para no dejar huérfanos.
-12. **Hasta dónde llega el histórico lo decide el satélite, no el programa.**
+15. **Hasta dónde llega el histórico lo decide el satélite, no el programa.**
    Sentinel-2 L2A empieza en la campaña **2017-2018**, y el catálogo de Earth
    Engine avisa de que su cobertura no es global hasta **2018-2019**; ambas cosas
    están en `campanas.PRIMERA_CAMPANA_S2` y `PRIMERA_CAMPANA_S2_GLOBAL`, no en un
@@ -253,7 +256,7 @@ todas las parcelas.
    lo descargable y lo guardado, y marca cada campaña con lo que se puede hacer
    con ella (`sincronizable`, `tiene_datos`, `solo_archivo`, `parcial`). Es lo
    único que queda de esos años; esconderlas sería perderlas.
-13. **En leñosos, los umbrales de la tabla son de COPA; lo que mide el satélite es
+16. **En leñosos, los umbrales de la tabla son de COPA; lo que mide el satélite es
    la PARCELA. Nunca se comparan sin traducir.** Un olivar tradicional a 12×12
    mide NDVI 0,17 y MSAVI 0,11 con el árbol perfecto, porque cuatro quintas partes
    del píxel de 10 m son calle; el rango de `LENOSO_ESPECIES` («un olivo en julio
@@ -299,24 +302,24 @@ todas las parcelas.
    En el **recuento de evidencias** de ese reparto, el LAI **no** cuenta aparte del
    EVI: el LAI se deriva del EVI (`gee_cliente`), así que sumar «NDVI/EVI» y
    «LAI/NDVI» era contar dos veces la misma señal física. Se cuenta una sola vez.
-9. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
+17. **Los kg/ha no se calculan.** El rendimiento, la humedad del grano, la
    superficie cosechada y el origen del dato se anotan a mano en un evento
    `COSECHA` y se muestran tal cual. El programa no los estima, no los corrige a
    humedad comercial y no predice con ellos. Es el único dato objetivo del
    sistema: viene de la báscula, no de una imagen.
-22. **`filterDate` de Earth Engine EXCLUYE el límite derecho.** `rango_campana`
+18. **`filterDate` de Earth Engine EXCLUYE el límite derecho.** `rango_campana`
    devuelve un fin **inclusivo** («1-sep a 31-ago»), así que hay que pedir hasta el
    día siguiente. Sin eso, el 31 de agosto de cada campaña no se descargaba nunca
    —y al cerrarse la campaña ya no había de dónde sacarlo— y la pasada de hoy no
    aparecía hasta mañana. El módulo ya lo hacía bien en `rellenar_rejillas` y en
    los mapas de un día: era una incoherencia dentro del mismo fichero.
 
-23. **`is None`, nunca un test de verdad, sobre un índice.** `0.0` es un NDVI
+19. **`is None`, nunca un test de verdad, sobre un índice.** `0.0` es un NDVI
    legítimo —suelo desnudo, rastrojo— y `not p.get("ndvi")` lo descartaba como si
    fuera un hueco. Un NDVI negativo (agua, nieve) sí pasaba, así que además era
    incoherente. `rejilla` ya avisaba de este peligro exacto.
 
-24. **Un vacío puede significar dos cosas distintas.** En `guardar_ficha`,
+20. **Un vacío puede significar dos cosas distintas.** En `guardar_ficha`,
    `buffer_m` ausente es «este guardado no sabe del margen, no lo toques» y
    `buffer_m=None` es «vuelve al margen por defecto». `COALESCE` solo ve el valor,
    no si la clave estaba, así que trataba los dos igual y una parcela puesta a 40 m
@@ -325,13 +328,13 @@ todas las parcelas.
    la misma falta un centinela (`_SIN_TOCAR`): la ficha se carga de la base antes
    de actualizarla, así que «si no viene no lo toco» conserva el valor viejo.
 
-25. **`3.500` se rechaza en vez de adivinarlo.** Es lo que imprime `_num_es` en la
+21. **`3.500` se rechaza en vez de adivinarlo.** Es lo que imprime `_num_es` en la
    línea de cosecha, así que el usuario lo tiene delante para copiarlo; leído como
    decimal da 3,5, o sea el rendimiento **dividido por mil**. Y los kg/ha son el
    único dato que no se puede recalcular: sale de la báscula. Con coma («3.500,25»)
    o con dos grupos («1.234.567») no hay ambigüedad y se acepta.
 
-26. **Quien vuelve a evaluar, evalúa con los MISMOS argumentos.**
+22. **Quien vuelve a evaluar, evalúa con los MISMOS argumentos.**
    `texto_interpretacion` rellama a `evaluar_parcela` por dentro; sin `parcela` se
    perdían los umbrales calibrados de esa finca y sin `heterogeneidad_activa` se
    forzaba el análisis de zonas. Resultado: la cabecera podía decir «OK» y el texto
@@ -339,13 +342,13 @@ todas las parcelas.
    parcela con las zonas apagadas recibía igual el aviso de «foco localizado», que
    además se guardaba en la base.
 
-27. **Un parámetro que no se mira es peor que no tenerlo.**
+23. **Un parámetro que no se mira es peor que no tenerlo.**
    `suelo_de_la_parcela` recibía `umbral_copa` y nunca lo leía, mientras sus dos
    llamantes calculaban un valor para tirarlo y su docstring dedicaba dos párrafos
    a la relación entre ambos. Quien lo leyera supondría que participa. Se quitó el
    parámetro y se quedó la explicación.
 
-20. **Un solo selector de campaña, en la barra de abajo.** Había dos a la vez
+24. **Un solo selector de campaña, en la barra de abajo.** Había dos a la vez
    —uno en la cabecera de la ficha y otro en la barra— y podían acabar diciendo
    cosas distintas. Ahora la barra sirve a las dos vistas: en la lista ofrece las
    campañas con datos; con una ficha abierta ofrece las de **esa parcela**, con
@@ -354,13 +357,13 @@ todas las parcelas.
    y `cambiar_a(i)` son la interfaz entre ambos; `_sincronizar_barra` la aplica al
    entrar y salir de la ficha. El botón «Campañas anteriores» sigue en la ficha.
 
-21. **El orden de empaquetado de `PanelGestionParcelas` importa.** `contenedor` se
+25. **El orden de empaquetado de `PanelGestionParcelas` importa.** `contenedor` se
    empaquetaba el primero con `expand=True`, se quedaba con todo el alto y
    empujaba la cabecera **por debajo del contenido**: el título del programa salía
    al pie de la ventana. Primero se reservan los bordes (cabecera arriba, barra
    abajo con `side="bottom"`) y el contenido ocupa lo que queda.
 
-17. **El cromo va en `TEMA`; los colores de datos, no.** Un color de serie
+26. **El cromo va en `TEMA`; los colores de datos, no.** Un color de serie
    identifica un **índice**, no decora la ventana: tiene que sobrevivir al cambio
    de tema en vez de seguirlo. Por eso vive en `PALETA_DATOS`, con una **ranura
    fija por serie** (`RANURA_SERIE`) y un paso propio para cada modo —el oscuro no
@@ -374,7 +377,7 @@ todas las parcelas.
    encima de ocho series se comían el canal de identidad. Van en tinta apagada
    (`TEMA["traza"]`, punteada) y se distinguen por su etiqueta.
 
-18. **El contraste se calcula, no se mira.** Los dos temas se comprueban contra
+27. **El contraste se calcula, no se mira.** Los dos temas se comprueban contra
    22 pares texto/fondo con la fórmula WCAG (4,5:1 para texto, 3:1 para insignias)
    en `pruebas_interfaz.escenario_tema`, que además exige que **ambos temas lleven
    exactamente las mismas claves**: la que falte en uno revienta al pintar, pero
@@ -385,7 +388,7 @@ todas las parcelas.
    **leerse**). En claro coincidían por casualidad; en oscuro se quedaba en 2,72:1.
    Están separados (`tab_sel_fg`).
 
-19. **El tema se elige al arrancar, no en caliente.** Tk no repinta las ventanas ya
+28. **El tema se elige al arrancar, no en caliente.** Tk no repinta las ventanas ya
    creadas: los `tk.Frame`/`tk.Label` llevan su `bg` fijado al construirse. El modo
    se guarda en la configuración (`cfg["tema"]`) y se aplica en el siguiente
    arranque; la pantalla de Credenciales lo dice. `aplicar_tema` rellena `TEMA`
@@ -394,7 +397,7 @@ todas las parcelas.
    problema: había uno (`_SYNC_COLOR`) y ahora guarda el nombre del token, no el
    color.
 
-15. **Filtrar y ordenar no vuelven a evaluar; todo lo demás sí.** Evaluar una
+29. **Filtrar y ordenar no vuelven a evaluar; todo lo demás sí.** Evaluar una
    parcela cuesta traer su serie de pasadas y pasarla entera por
    `evaluar_parcela`. El texto de búsqueda y el criterio de orden **no pueden
    cambiar ningún diagnóstico**, así que se aplican sobre la lista ya evaluada
@@ -412,13 +415,13 @@ todas las parcelas.
    Hay pruebas para las cuatro guardias, y se ha comprobado que **fallan** al
    romper cada una a propósito: una prueba que no muerde es decoración.
 
-16. **La búsqueda repinta tras la última tecla, no en cada una.**
+30. **La búsqueda repinta tras la última tecla, no en cada una.**
    `RETARDO_BUSQUEDA_MS` (180 ms) con `after_cancel` del repintado anterior. De
    los seis repintados que provocaba escribir «Olivar», cinco no los llegaba a
    leer nadie. Ojo al probarlo: hay que dejar vencer el plazo antes de mirar la
    tabla, o se lee la de antes (`_teclear(..., espera_ms=...)` en el arnés).
 
-14. **Toda medida en píxeles pasa por `esc()`.** La aplicación se declara
+31. **Toda medida en píxeles pasa por `esc()`.** La aplicación se declara
    consciente del DPI (`activar_dpi()`, y hay que llamarlo **antes** de crear
    `tk.Tk()`: después Windows ya ha decidido cómo escalarla). A partir de ahí las
    **fuentes** miden sus puntos de verdad y crecen en un monitor al 150 %, pero
@@ -440,7 +443,7 @@ todas las parcelas.
    presentación monta aparte una raíz al 150 % para que el camino escalado no se
    quede sin probar.
 
-10. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
+32. **Las entidades viajan como `dict`**, no como clases. Es deliberado: toleran
    registros antiguos sin campos nuevos. Convertirlas a `dataclass` cambiaría el
    formato de datos.
 
@@ -621,10 +624,3 @@ python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py 
    se presenta un dato agronómico, así que no se tocó.
 
 3. **`descargar_mapa_*` sigue sin cobertura** de pruebas (necesita credenciales).
-2. **Arranque**: resuelto. `matplotlib` ya no se importa al arrancar, sino la
-   primera vez que se dibuja una gráfica (`_matplotlib()`). Lo que lo impedía era
-   que `aplicar_tema()` tocaba sus `rcParams`; ese trozo se separó en
-   `_tema_matplotlib()`, que llama el propio cargador. Importar el panel bajó de
-   ~0,51 s a ~0,15 s medidos, y quien solo consulta la lista no la carga nunca.
-   Queda una vía si hiciera falta más: `tkintermapview` y `PIL` siguen siendo
-   importaciones de arranque.
