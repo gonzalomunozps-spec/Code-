@@ -23,7 +23,6 @@ datos del sistema, ver `rutas.py`). Desinstalar deja los datos intactos.
 """
 
 import json
-import os
 import platform
 import subprocess
 import sys

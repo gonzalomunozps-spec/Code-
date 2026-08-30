@@ -119,9 +119,12 @@ def _argumentos():
 
 
 def main():
-    try:
-        import PyInstaller  # noqa: F401
-    except Exception:
+    # `find_spec` en vez de `import PyInstaller`: aqui solo interesa SI esta, y el
+    # import a secas deja una variable sin usar que el linter marca con razon
+    # (pyflakes no atiende a `# noqa`). Ademas no carga el paquete, que no hace
+    # falta: quien construye de verdad es el subproceso de mas abajo.
+    import importlib.util
+    if importlib.util.find_spec("PyInstaller") is None:
         print("Falta PyInstaller. Instalalo con:\n\n    pip install pyinstaller\n")
         return 1
     if not os.path.exists(ENTRADA):

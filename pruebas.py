@@ -4038,7 +4038,11 @@ def pruebas_observaciones_campo():
                              {"fecha": "2024-07-01", "fuente": "dron", "indice_dron": "NDVI",
                               "valor_dron": 0.44})
     try:
-        import validacion  # el emparejamiento del dron necesita el modulo
+        # el emparejamiento del dron necesita el modulo opcional `validacion`; se
+        # comprueba que ESTA sin importarlo, para no dejar un nombre sin usar
+        import importlib.util
+        if importlib.util.find_spec("validacion") is None:
+            raise ImportError("validacion")
         res2 = VF.resumen_validacion("Obs2")
         check("obs-campo: empareja el dron con la pasada de satelite mas cercana",
               lambda: (res2["informe"] or {}).get("dron") is not None, lambda r: r is True)
