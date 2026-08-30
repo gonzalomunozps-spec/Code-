@@ -3,6 +3,73 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.16.0] — 2026-08
+
+### Cambiado
+- **El cuaderno de campo separa «abono» de «bioestimulante»**. Antes iban en una
+  sola opción («abono / nutrición») y al releer el cuaderno no se sabía cuál de los
+  dos se había aplicado. Son productos distintos: el abono aporta unidades
+  fertilizantes y como tal se declara; el bioestimulante no aporta nutrientes,
+  actúa sobre la fisiología de la planta y en la normativa europea de productos
+  fertilizantes es otra categoría.
+  - **La medida del efecto no cambia**: ninguno de los dos es herbicida, así que los
+    dos pasan por la misma rama de `efecto_producto`. Es una separación de
+    **registro**, no de cálculo: no se toca ningún umbral.
+  - Las intervenciones ya anotadas conservan su texto («abono / nutrición») y se
+    siguen leyendo y midiendo igual; esa opción sencillamente ya no se ofrece para
+    las nuevas.
+
+## [1.15.0] — 2026-08
+
+### Corregido
+- **La interpretación de los índices ya no sale cortada.** Compartía una fila de
+  altura fija con la gráfica, y heredaba el recorte. Ahora la gráfica va sola y a
+  todo lo ancho, y debajo van interpretación y análisis de zonas **uno al lado del
+  otro**, repartidos a medias, en una fila que crece con su contenido.
+
+## [1.14.0] — 2026-08
+
+### Añadido
+- **Variedad por parcela**: catálogo propio por especie (empieza vacío, con «+ Nueva»),
+  gobernado por las reglas de la especie. Las validaciones ajustan índices y umbrales
+  **por variedad**.
+- **PRADERA** como cultivo de extensivo de siega en verde, tratado como asociación de
+  especies y reutilizando el calendario de cortes existente.
+
+### Corregido
+- Menos falsos positivos del antivirus en el instalador (sin compresión UPX y con
+  metadatos de versión y fabricante en el ejecutable).
+
+## [1.13.0] — 2026-08
+
+### Corregido
+- **Carrera al restaurar una copia de seguridad**: un hilo podía quedarse con una
+  conexión que otro acababa de cerrar (`Cannot operate on a closed database`). La
+  conexión se lee dentro del cerrojo y la restauración vuelca sobre la base viva
+  sin cerrarla.
+
+### Añadido
+- **Sincronización cancelable**, con progreso parcela a parcela y cierre limpio a
+  media sincronización.
+
+## [1.12.0] — 2026-08
+
+### Añadido
+- **Copias de seguridad automáticas** con rotación, exportación y restauración.
+- **Manual de usuario** accesible desde el panel.
+- **Ejecutable sin Python** (PyInstaller) e **instalador de Windows** de un clic
+  (Inno Setup), construido y publicado desde GitHub Actions.
+- **Mensajes de error claros** de Earth Engine (red, credenciales, cuota, tiempo de espera).
+
+## [1.9.0] — 2026-08
+
+### Añadido
+- **Observaciones de campo**: verdad-terreno anotable desde cada ficha (fase, rendimiento,
+  humedad de sonda, dato de dron), **en cualquier momento y también de campañas
+  anteriores**, archivada por la fecha del dato.
+- **`validacion.py`**: matriz de fases con kappa, RMSE, MAE, sesgo y regresión, para
+  **medir** cuánto acierta el sistema en vez de suponerlo.
+
 ## [1.8.0] — 2026-08
 
 ### Añadido

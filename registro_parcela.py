@@ -7,8 +7,8 @@ Dos funcionalidades que se apoyan en el diagnostico existente:
 
 1. CUADERNO DE CAMPO (eventos)
    Permite anotar intervenciones que el satelite NO detecta con fiabilidad por si
-   solo: aplicacion de un producto (fitosanitario, abono, herbicida), siega,
-   cosecha, riego, laboreo, siembra... Estos eventos:
+   solo: aplicacion de un producto (fitosanitario, abono, bioestimulante,
+   herbicida), siega, cosecha, riego, laboreo, siembra... Estos eventos:
      - Retroalimentan el diagnostico: una siega o cosecha REGISTRADA explica una
        caida brusca de NDVI (deja de ser falsa alarma).
      - Permiten medir la RESPUESTA del cultivo tras un producto (correlacion, no
@@ -36,8 +36,24 @@ def _dias(f1, f2):
 # =====================================================================
 # Tipos de evento y, para PRODUCTO, objetivos posibles.
 TIPOS_EVENTO = ["PRODUCTO", "SIEGA", "COSECHA", "RIEGO", "LABOREO", "SIEMBRA", "OTRO"]
+
+# ABONO y BIOESTIMULANTE van SEPARADOS aunque el programa los trate igual: son
+# productos distintos. El abono aporta unidades fertilizantes (N-P-K) y como tal
+# se declara; un bioestimulante no aporta nutrientes, actua sobre la fisiologia
+# de la planta y en la normativa europea de productos fertilizantes es otra
+# categoria. Mezclarlos en una sola linea impedia saber, al releer el cuaderno,
+# que se habia echado de verdad.
+#
+# Al MEDIR el efecto se comportan igual porque no son herbicidas: `efecto_producto`
+# solo distingue el herbicida (donde el exito es que BAJE el verdor); todo lo demas
+# pasa por la misma rama. Separarlos aqui es una cuestion de registro, no de calculo,
+# y por eso no cambia ningun umbral.
+#
+# Los eventos ya anotados guardan su texto literal ("abono / nutricion"): siguen
+# leyendose y midiendose igual, solo que esa opcion ya no se ofrece para nuevos.
 OBJETIVOS_PRODUCTO = ["fitosanitario (plaga)", "fungicida (enfermedad)",
-                      "herbicida (malas hierbas)", "abono / nutricion", "otro"]
+                      "herbicida (malas hierbas)", "abono / fertilizante",
+                      "bioestimulante", "otro"]
 
 # =====================================================================
 # COSECHA: el unico dato OBJETIVO del sistema

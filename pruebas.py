@@ -433,6 +433,24 @@ def pruebas_cuaderno():
     serie_hn = [{"fecha": "2026-04-01", "ndvi": 0.5, "lai": 2.0}, {"fecha": "2026-04-25", "ndvi": 0.55, "lai": 2.4}]
     check("efecto herbicida: LAI sube -> sin efecto visible",
           lambda: REG.efecto_producto(serie_hn, ev_h)["verdicto"], lambda r: "sin efecto" in r)
+
+    # ABONO y BIOESTIMULANTE: dos opciones distintas en el cuaderno (son productos
+    # distintos y hay que poder saber cual se echo), pero MISMA medida del efecto.
+    check("cuaderno: abono y bioestimulante son opciones separadas",
+          lambda: REG.OBJETIVOS_PRODUCTO,
+          lambda r: "abono / fertilizante" in r and "bioestimulante" in r
+                    and "abono / nutricion" not in r)
+    serie_ab = [{"fecha": "2026-04-01", "ndvi": 0.40}, {"fecha": "2026-04-25", "ndvi": 0.52}]
+    _ef = lambda obj: REG.efecto_producto(
+        serie_ab, {"fecha": "2026-04-05", "tipo": "PRODUCTO", "objetivo": obj})
+    check("abono y bioestimulante: mismo verdicto (ninguno es herbicida)",
+          lambda: (_ef("abono / fertilizante"), _ef("bioestimulante")),
+          lambda r: (r[0]["verdicto"] == r[1]["verdicto"]
+                     and not r[0]["es_herbicida"] and not r[1]["es_herbicida"]))
+    # los eventos anotados ANTES del cambio guardan el texto viejo: se siguen midiendo
+    check("cuaderno: el objetivo antiguo 'abono / nutricion' se sigue midiendo",
+          lambda: _ef("abono / nutricion"),
+          lambda r: r["disponible"] and r["verdicto"] == _ef("abono / fertilizante")["verdicto"])
     # LAI CONSTANTE: la desambiguacion vive en el modulo OPCIONAL herbicida_contexto.
     # Estas dos comprobaciones solo se ejecutan si el modulo esta presente (si se
     # borra el fichero, se omiten y la suite sigue verde -> parte extraible limpia).
