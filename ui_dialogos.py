@@ -247,7 +247,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
     def __init__(self, master, panel, nombre, campana_ficha):
         super().__init__(master)
         self.panel, self.nombre = panel, nombre
-        self.title("Sincronizar campanas anteriores")
+        self.title("Sincronizar campañas anteriores")
         self.configure(bg=TEMA["surface"])
         self.resizable(False, False)
         self.transient(master.winfo_toplevel())
@@ -264,7 +264,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
 
         tk.Label(self, text=f"Parcela: {nombre.replace('_', ' ')}", bg=TEMA["surface"],
                  fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
-        tk.Label(self, text=f"Copernicus llega hasta la campana {PRIMERA_CAMPANA_S2} "
+        tk.Label(self, text=f"Copernicus llega hasta la campaña {PRIMERA_CAMPANA_S2} "
                             f"(cobertura completa desde {PRIMERA_CAMPANA_S2_GLOBAL}).\n"
                             "Marca las que quieras descargar (incremental, no repite). Si una campana\n"
                             "no tiene datos de satelite, se avisara al sincronizar. Para VER una,\n"
@@ -304,7 +304,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
             return messagebox.showwarning("GEE", "earthengine-api no disponible.", parent=self)
         sel = [c for c, v in self.vars.items() if v.get()]
         if not sel:
-            return messagebox.showinfo("Sincronizar", "No has marcado ninguna campana.", parent=self)
+            return messagebox.showinfo("Sincronizar", "No has marcado ninguna campaña.", parent=self)
         self.btn.config(state="disabled")
         threading.Thread(target=self._worker, args=(sel,), daemon=True).start()
 
@@ -320,7 +320,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
                 n, msg = 0, f"error: {e}"
             total += n
             if n == 0 and not tenia and DB.ultima_fecha(self.nombre, camp) is None:
-                lineas.append(f"{camp}: NO hay datos de Copernicus para esa campana")
+                lineas.append(f"{camp}: NO hay datos de Copernicus para esa campaña")
             else:
                 lineas.append(f"{camp}: {msg}")
         if ULTIMO_SYNC.get("estado") != "fallo":
@@ -334,7 +334,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
             self.panel.cb_campana["values"] = self.panel._campanas()
             self.panel._actualizar_estado_sync()
             self.panel._refrescar()
-            messagebox.showinfo("Sincronizacion de campanas", "\n".join(lineas), parent=self)
+            messagebox.showinfo("Sincronización de campañas", "\n".join(lineas), parent=self)
         self.after(0, fin)
 
     def _prog(self, texto):
@@ -453,7 +453,7 @@ class DialogoBorrarCampana(tk.Toplevel):
     def __init__(self, master, nombre, campana, al_terminar=None):
         super().__init__(master)
         self.nombre, self.campana, self.al_terminar = nombre, campana, al_terminar
-        self.title("Borrar campana")
+        self.title("Borrar campaña")
         self.configure(bg=TEMA["surface"])
         self.resizable(False, False)
         self.transient(master.winfo_toplevel())
@@ -465,14 +465,14 @@ class DialogoBorrarCampana(tk.Toplevel):
         n_pas = len(DB.pasadas(nombre, campana))
         n_ev = len(DB.eventos_de(nombre, campana)) if hasattr(DB, "eventos_de") else 0
 
-        tk.Label(self, text=f"Borrar la campana {campana}", bg=TEMA["surface"],
+        tk.Label(self, text=f"Borrar la campaña {campana}", bg=TEMA["surface"],
                  fg=TEMA["danger_fg"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 2))
         tk.Label(self, text=f"Parcela: {nombre.replace('_', ' ')}", bg=TEMA["surface"],
                  fg=TEMA["text_sec"], font=FUENTES["small"]).pack(anchor="w", padx=16)
-        det = (f"Se borrara TODO lo de esta campana:\n"
-               f"   • {n_pas} pasada(s) de satelite y sus mapas\n"
+        det = (f"Se borrará TODO lo de esta campaña:\n"
+               f"   • {n_pas} pasada(s) de satélite y sus mapas\n"
                f"   • {n_ev} evento(s) del cuaderno de campo\n"
-               f"   • el cultivo asignado y las validaciones de este ano\n\n"
+               f"   • el cultivo asignado y las validaciones de este año\n\n"
                f"La parcela y sus OTRAS campanas NO se tocan.\n"
                f"Esto es IRREVERSIBLE: no hay deshacer.")
         tk.Label(self, text=det, bg=TEMA["surface"], fg=TEMA["text"], font=FUENTES["body"],
@@ -503,7 +503,7 @@ class DialogoBorrarCampana(tk.Toplevel):
         n = DB.eliminar_campana(self.nombre, self.campana)
         self.destroy()
         messagebox.showinfo("Campana borrada",
-                            f"Borrada la campana {self.campana} de "
+                            f"Borrada la campaña {self.campana} de "
                             f"{self.nombre.replace('_', ' ')} ({n} pasada(s)).",
                             parent=self.master)
         if callable(self.al_terminar):
@@ -551,7 +551,7 @@ class DialogoObservacionCampo(tk.Toplevel):
         self.after(0, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
-        cab = f"{ficha.nombre.replace('_', ' ')}  ·  campana {ficha.campana}"
+        cab = f"{ficha.nombre.replace('_', ' ')}  ·  campaña {ficha.campana}"
         tk.Label(self, text=cab, bg=TEMA["surface"], fg=TEMA["text"],
                  font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 0))
         tk.Label(self, text="Anota lo que observaste de verdad. Se guarda como dato medido "

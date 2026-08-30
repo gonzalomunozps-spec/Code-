@@ -118,7 +118,7 @@ class ClimaGddMixin:
                 "para comparar una finca con su vecina. Va con unos 8 dias de retraso.")
         else:
             self.lbl_clima.config(
-                text="Sin datos de clima para esta campana. Pulsa «Descargar clima» "
+                text="Sin datos de clima para esta campaña. Pulsa «Descargar clima» "
                      "(hace falta Earth Engine). El dato es de comarca, no de parcela: "
                      "el pixel de ERA5-Land son 11 km de lado.")
         self._pintar_balance(dias)

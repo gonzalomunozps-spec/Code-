@@ -448,7 +448,7 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
                    command=self._observacion_campo).pack(side="right", padx=(0, 4), pady=10)
         ttk.Button(cab, text="  \u270E Editar parcela  ", style="Ghost.TButton",
                    command=self._editar).pack(side="right", padx=(0, 4), pady=10)
-        ttk.Button(cab, text="  \U0001F5D1 Borrar campana  ", style="Ghost.TButton",
+        ttk.Button(cab, text="  \U0001F5D1 Borrar campaña  ", style="Ghost.TButton",
                    command=self._borrar_campana).pack(side="right", padx=(0, 4), pady=10)
 
         cont, scroll = marco_scroll(master, bg=TEMA["page"])
@@ -577,7 +577,7 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
         # Si se dice que no, se abre igual (vacia): elegir una campana no puede
         # quedarse a medias porque no haya red.
         if not elegida["tiene_datos"] and elegida["sincronizable"] and _EE:
-            aviso = (f"La campana {camp} no esta descargada.\n\n¿La descargo ahora "
+            aviso = (f"La campaña {camp} no está descargada.\n\n¿La descargo ahora "
                      f"de Copernicus?")
             if elegida["parcial"]:
                 aviso += (f"\n\nAviso: en {PRIMERA_CAMPANA_S2} la cobertura de "
@@ -758,7 +758,7 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
     def _build_graficas(self, parent):
         card = tarjeta(parent, width=560)
         card.pack(side="left", fill="both", expand=True, padx=(0, 7))
-        self._titulo(card, "Evolucion en la campana")
+        self._titulo(card, "Evolución en la campaña")
         # selector de indices a mostrar en la grafica
         ctrl = tk.Frame(card, bg=TEMA["surface"])
         ctrl.pack(fill="x", padx=12, pady=(0, 2))

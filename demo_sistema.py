@@ -282,7 +282,7 @@ def informe(escen):
                   f"   |   NDVI de juicio: {diag.get('ndvi_juicio')}")
         c = diag.get("cubierta")
         if c and c.get("señales", 0) >= 2:
-            print(f"   Cubierta: {c['hipotesis_preliminar']} ({c['señales']}/4 senales)")
+            print(f"   Cubierta: {c['hipotesis_preliminar']} ({c['señales']}/4 señales)")
         het = diag.get("heterogeneidad")
         if het and het.get("patron"):
             print(f"   Heterogeneidad: {het['patron']}")

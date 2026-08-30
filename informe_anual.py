@@ -436,7 +436,7 @@ def texto_progresion_estado(recorrido, alertas_vigentes):
 
     frases = [f"A lo largo de {n} pasada(s), la parcela estuvo en un estado sin "
               f"incidencias el {pct_verde}% del seguimiento."]
-    frases.append(f"Arranco la campana en «{ini.get('estado','-')}» "
+    frases.append(f"Arrancó la campaña en «{ini.get('estado','-')}» "
                   f"(fase de {ini.get('fase','-')}) y la cerro en "
                   f"«{fin.get('estado','-')}» (fase de {fin.get('fase','-')}).")
 
@@ -451,7 +451,7 @@ def texto_progresion_estado(recorrido, alertas_vigentes):
         for r in avisos:
             por_fase[r.get("fase", "-")] = por_fase.get(r.get("fase", "-"), 0) + 1
         detalle = ", ".join(f"{c} en {f}" for f, c in por_fase.items())
-        frases.append(f"Se registraron {len(avisos)} aviso(s) durante el ano ({detalle}).")
+        frases.append(f"Se registraron {len(avisos)} aviso(s) durante el año ({detalle}).")
         if alertas_vigentes:
             frases.append(f"De ellos, {len(alertas_vigentes)} seguian vigentes al cierre; "
                           f"el resto se reencuadro en la fenologia en pasadas posteriores.")
@@ -465,7 +465,7 @@ def _preparar(serie, radar, eventos, ruta_salida, ext, nombre, campana):
     """Validacion y normalizacion comun de entradas para todos los formatos."""
     serie = sorted([r for r in (serie or []) if r.get("fecha")], key=lambda r: r["fecha"])
     if not serie:
-        raise RuntimeError("La parcela no tiene pasadas de satelite: no hay campana que resumir.")
+        raise RuntimeError("La parcela no tiene pasadas de satélite: no hay campaña que resumir.")
     radar = sorted([r for r in (radar or []) if r.get("fecha")], key=lambda r: r["fecha"])
     eventos = eventos or []
     if not ruta_salida:
@@ -688,7 +688,7 @@ def _construir_pdf(ruta, ctx, secciones=None):
     story.append(Spacer(1, 6))
 
     # ---- resumen narrativo (data-driven) ----
-    frases = [f"A lo largo de la campana {esc(campana)}, la parcela {esc(nombre.replace('_', ' '))} "
+    frases = [f"A lo largo de la campaña {esc(campana)}, la parcela {esc(nombre.replace('_', ' '))} "
               f"({esc(especie)}) fue seguida en {len(serie)} pasadas de satelite entre el "
               f"{_fnat(inicio['fecha'])} y el {_fnat(fin['fecha'])}."]
     if pico_ndvi and inicio.get("ndvi") is not None:
@@ -932,7 +932,7 @@ def _construir_pdf(ruta, ctx, secciones=None):
 
     doc = SimpleDocTemplate(ruta, pagesize=A4, topMargin=16 * mm, bottomMargin=18 * mm,
                             leftMargin=20 * mm, rightMargin=20 * mm,
-                            title=f"Balance de campana - {nombre}")
+                            title=f"Balance de campaña - {nombre}")
     doc.build(story, onFirstPage=encpie, onLaterPages=encpie)
 
 

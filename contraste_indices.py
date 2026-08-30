@@ -231,7 +231,7 @@ def separacion_copa_cubierta(serie, fase_esp, reg=None):
     ne = c.get("ndvi_evi")
     if ne is not None and ne > 2.2:
         ev_cubierta.append(f"NDVI/EVI={ne}: el NDVI va muy por delante del EVI, "
-                           f"senal de fondo")
+                           f"señal de fondo")
     # OJO: el LAI de este programa es una RECTA sobre el EVI (LAI = 3.618*EVI -
     # 0.118, ver gee_cliente), asi que LAI/NDVI y NDVI/EVI son el MISMO hecho
     # fisico -la relacion EVI/NDVI- contado dos veces. Cuando el EVI va bajo
@@ -275,13 +275,13 @@ def separacion_copa_cubierta(serie, fase_esp, reg=None):
 
     n_cub, n_copa = len(ev_cubierta), len(ev_copa)
     if fase_esp.get("sin_hoja") or fase_esp.get("invierno_sin_hoja"):
-        veredicto, domina = "el arbol esta sin hoja: todo el verde es cubierta o suelo", True
+        veredicto, domina = "el árbol está sin hoja: todo el verde es cubierta o suelo", True
     elif n_cub >= 3 and n_cub > n_copa:
-        veredicto, domina = "cubierta vegetal dominando la senal", True
+        veredicto, domina = "cubierta vegetal dominando la señal", True
     elif n_cub > n_copa:
         veredicto, domina = "posible aporte de cubierta", False
     else:
-        veredicto, domina = "senal atribuible a la copa", False
+        veredicto, domina = "señal atribuible a la copa", False
 
     # bandera explicita: quien consume NO debe buscar la palabra "cubierta" dentro
     # del texto. Se hacia asi y bastaba cambiar una frase para alterar el juicio.
@@ -354,11 +354,11 @@ def diagnostico_lenoso(serie, fecha_iso, subtipo=""):
 
     n_ev, n_ec = len(ev), len(ec)
     if n_ev >= 3 and n_ev > n_ec:
-        veredicto = "cubierta vegetal dominando la senal"
+        veredicto = "cubierta vegetal dominando la señal"
     elif n_ev > n_ec:
         veredicto = "posible aporte de cubierta"
     else:
-        veredicto = "senal atribuible a la copa"
+        veredicto = "señal atribuible a la copa"
 
     # vigor de copa CUALITATIVO: se usan los indices que MENOS ven el suelo
     msavi = _g(serie[-1], "msavi")

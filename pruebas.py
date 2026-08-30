@@ -664,7 +664,7 @@ def pruebas_umbrales():
                                spec={"especie": especie, "fecha_siembra": siembra})
     check("umbrales: maiz en floracion con NDMI 0.05 -> avisa (umbral 0.22)",
           lambda: _ndmi_por_fase("MAIZ", "2026-04-01", "2026-06-05"),
-          lambda d: "hidrico" in d["motivo"] and "floracion" in d["fase"])
+          lambda d: "hídrico" in d["motivo"] and "floracion" in d["fase"])
     check("umbrales: fase critica, se dice que lo es",
           lambda: _ndmi_por_fase("MAIZ", "2026-04-01", "2026-06-05")["motivo"],
           lambda t: "se lleva por delante el rendimiento" in t)
@@ -672,11 +672,11 @@ def pruebas_umbrales():
           lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
                                   [{"fecha": "2026-08-01", "ndvi": 0.10, "ndmi": -0.30, "lai": 0.3}],
                                   spec={"especie": "TRIGO", "fecha_siembra": "2025-10-15"}),
-          lambda d: "hidrico" not in d["motivo"])
+          lambda d: "hídrico" not in d["motivo"])
     check("umbrales: en barbecho el NDMI no se juzga",
           lambda: evaluar_parcela("BARBECHO", "",
                                   [{"fecha": "2026-05-01", "ndvi": 0.10, "ndmi": -0.4}]),
-          lambda d: "hidrico" not in d["motivo"])
+          lambda d: "hídrico" not in d["motivo"])
 
     # --- calibracion (modulo OPCIONAL: si se borra, estas se omiten)
     try:
@@ -1167,9 +1167,9 @@ def pruebas_lenosos():
           lambda r: any("calle esta verde" in e for e in r))
     check("copa/cubierta: un solo veredicto, no dos vocabularios",
           lambda: _sep(14.0, True)["veredicto"],
-          lambda r: r in ("cubierta vegetal dominando la senal", "posible aporte de cubierta",
-                          "senal atribuible a la copa",
-                          "el arbol esta sin hoja: todo el verde es cubierta o suelo"))
+          lambda r: r in ("cubierta vegetal dominando la señal", "posible aporte de cubierta",
+                          "señal atribuible a la copa",
+                          "el árbol está sin hoja: todo el verde es cubierta o suelo"))
     # antes habia DOS heuristicas: la cabecera podia decir "cubierta probable"
     # mientras el juicio iba por la copa. Ahora el veredicto que se ensena es el
     # mismo que decide con que indice se juzga.

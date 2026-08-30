@@ -556,8 +556,8 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
                        f"({de_donde}) frente a {msavi_min:.2f} en {fase} de "
                        f"{umbrales.get('regimen', 'SECANO').lower()}.")
             if umbrales.get("critica"):
-                motivo += (" Es ademas una fase critica: lo que pase aqui se nota en la "
-                           "cosecha" + (" del ano que viene." if "postcosecha" in fase
+                motivo += (" Es además una fase crítica: lo que pase aquí se nota en la "
+                           "cosecha" + (" del año que viene." if "postcosecha" in fase
                                         else "."))
         if separacion["confianza"] != "alta":
             motivo += (" [Copa y calle no se separan bien con este marco: el juicio de "
@@ -608,9 +608,9 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
             clave, estado = "Revisar", "Revisar"
             motivo += f" El NDMI {como} agrava el diagnostico."
         else:
-            motivo += f" NDMI {como}: estres hidrico asociado."
+            motivo += f" NDMI {como}: estrés hídrico asociado."
         if umbrales.get("critica"):
-            motivo += (" Es ademas la fase en la que la falta de agua mas se lleva "
+            motivo += (" Es además la fase en la que la falta de agua más se lleva "
                        "por delante el rendimiento.")
     # el contexto de sequia comarcal se anade siempre que exista: si suprimio el
     # escalado, EXPLICA por que el NDMI bajo no ha subido la alerta; si no lo
@@ -673,10 +673,10 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         # que el problema sea visible en el promedio.
         senales = []
         if hetero.get("patron") == "heterogeneidad creciente":
-            senales.append(f"la dispersion interna crece (std {hetero['d_std']:+.3f}) "
+            senales.append(f"la dispersión interna crece (std {hetero['d_std']:+.3f}) "
                            "aunque la media aguanta")
         if hetero.get("rodal_sospechoso"):
-            senales.append(f"el 10 % peor esta {hetero['hundimiento']:.2f} puntos por debajo "
+            senales.append(f"el 10 % peor está {hetero['hundimiento']:.2f} puntos por debajo "
                            "de la mediana (rodal hundido)")
         motivo += (" [AVISO TEMPRANO: " + " y ".join(senales) + ". Puede ser el INICIO de un "
                    "foco localizado, antes de que se note en el promedio. Conviene mirar el "
@@ -794,8 +794,8 @@ def _ajuste_en_ambito(cultivo, fase, estado_sistema, validaciones):
     if not correcciones:
         if confirmaciones:
             return {"corregido": None, "votos": confirmaciones,
-                    "nota": f"Validaste este diagnostico como correcto en {confirmaciones} "
-                            f"pasada(s) similar(es) de campanas anteriores."}
+                    "nota": f"Validaste este diagnóstico como correcto en {confirmaciones} "
+                            f"pasada(s) similar(es) de campañas anteriores."}
         return {}
 
     real, n = max(correcciones.items(), key=lambda kv: kv[1])
@@ -923,5 +923,5 @@ def _texto_reglas(diag):
     if c and c["señales"] >= 2:
         txt += (f" Cubierta vegetal: {c['hipotesis_preliminar']} "
                 f"(brecha NDVI-MSAVI={c['brecha_suelo_ndvi_msavi']}, "
-                f"{c['señales']}/{TOTAL_SENALES_CUBIERTA} senales).")
+                f"{c['señales']}/{TOTAL_SENALES_CUBIERTA} señales).")
     return txt

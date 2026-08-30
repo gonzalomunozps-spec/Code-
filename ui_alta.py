@@ -799,7 +799,7 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.panel = panel
         self.pendientes = list(pendientes)
         self.idx = 0
-        self.title("Nueva campana - Asignacion de cultivos")
+        self.title("Nueva campaña · Asignación de cultivos")
         self.geometry(geom(440, 300))
         self.configure(bg=TEMA["page"])
         self.transient(panel.winfo_toplevel())   # siempre por encima de la principal
@@ -812,7 +812,7 @@ class DialogoRelevoCampana(tk.Toplevel):
         cab.pack(fill="x")
         tk.Label(cab, text=f"Campana {panel.campana}", bg=TEMA["header_bg"], fg=TEMA["text_inv"],
                  font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=8)
-        tk.Label(cab, text="Indica el cultivo de cada parcela para la nueva campana.",
+        tk.Label(cab, text="Indica el cultivo de cada parcela para la nueva campaña.",
                  bg=TEMA["header_bg"], fg=TEMA["header_sub"],
                  font=FUENTES["small"]).pack(anchor="w", padx=16, pady=(0, 8))
 
@@ -990,7 +990,7 @@ class DialogoRelevoCampana(tk.Toplevel):
             self._mostrar()
         else:
             self.destroy()
-            if messagebox.askyesno("Nueva campana",
+            if messagebox.askyesno("Nueva campaña",
                                    "Cultivos asignados. Deseas anadir alguna parcela mas?",
                                    parent=self.panel.winfo_toplevel()):
                 self.panel.abrir_alta_parcela()

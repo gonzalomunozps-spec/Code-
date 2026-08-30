@@ -118,7 +118,7 @@ class CuadernoMixin:
         # Historico de cosecha: lo unico medido en bascula, no interpretado.
         # Se listan TODAS las campanas, no solo la que se esta viendo.
         tk.Label(card, text="Rendimientos registrados  ·  se anotan con un evento COSECHA (grano) "
-                           "o SIEGA (forraje), que admite fechas de campanas anteriores",
+                           "o SIEGA (forraje), que admite fechas de campañas anteriores",
                  bg=TEMA["surface"], fg=TEMA["text_sec"],
                  font=FUENTES["small"]).pack(anchor="w", padx=12)
         # Lista ACOTADA (ALTO_RENDIMIENTOS filas) con su propia barra: el historico
@@ -214,9 +214,9 @@ class CuadernoMixin:
             self.ev_fuente.set("")
         if campana != self.campana:
             _q = "Siega" if ev["tipo"] == "SIEGA" else "Cosecha"
-            messagebox.showinfo(_q, f"Anotada en la campana {campana}. Queda en el "
-                                "historico de rendimientos; para ver el evento, cambia a esa "
-                                "campana.", parent=self.master)
+            messagebox.showinfo(_q, f"Anotada en la campaña {campana}. Queda en el "
+                                "histórico de rendimientos; para ver el evento, cambia a esa "
+                                "campaña.", parent=self.master)
         self._refrescar_eventos()
         self._pintar_graficas(sorted(self.panel._historico(self.nombre),
                                      key=lambda r: r.get("fecha", "")))
