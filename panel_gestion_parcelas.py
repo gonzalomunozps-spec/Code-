@@ -159,7 +159,11 @@ DB.al_eliminar_parcela(_datos_cambiaron)
 def _colores_estado(clave):
     return {"OK": (TEMA["ok_fg"], TEMA["ok_bg"]),
             "Vigilar": (TEMA["warn_fg"], TEMA["warn_bg"]),
-            "Revisar": (TEMA["danger_fg"], TEMA["danger_bg"])}.get(
+            "Revisar": (TEMA["danger_fg"], TEMA["danger_bg"]),
+            # «Revisar datos» NO es rojo: el cultivo puede estar perfectamente. Lo
+            # que falla es lo declarado, asi que va con el color de aviso, no con
+            # el de alarma. Ningun color nuevo: se reutiliza la paleta del tema.
+            "Revisar datos": (TEMA["warn_fg"], TEMA["warn_bg"])}.get(
         clave, (TEMA["muted_fg"], TEMA["muted_bg"]))
 
 
@@ -546,8 +550,11 @@ class PanelGestionParcelas(ttk.Frame):
         self._refrescar()
 
     # Orden de gravedad para ordenar por estado: lo que hay que mirar, arriba.
-    SEVERIDAD = {"Revisar": 0, "Vigilar": 1, "OK": 2, "Segado": 2,
-                 "Sin dato": 3, "N.A.": 4, "Sin asignar": 5}
+    # «Revisar datos» va justo detras de «Revisar»: hay que mirarlo pronto -el
+    # diagnostico de esa parcela no vale mientras el dato no cuadre-, pero no es una
+    # urgencia agronomica como un cultivo que se esta perdiendo.
+    SEVERIDAD = {"Revisar": 0, "Revisar datos": 1, "Vigilar": 2, "OK": 3, "Segado": 3,
+                 "Sin dato": 4, "N.A.": 5, "Sin asignar": 6}
 
     def _refrescar(self, recargar=True):
         """Repinta la lista. Con `recargar=False` reutiliza lo ya evaluado.

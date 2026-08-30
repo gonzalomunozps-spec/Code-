@@ -4416,6 +4416,98 @@ def pruebas_empaquetar():
 
 # =====================================================================
 # =====================================================================
+# 38. PLAUSIBILIDAD DEL DATO DECLARADO («Revisar datos»)
+# =====================================================================
+def pruebas_plausibilidad():
+    """«Esto no se parece a lo que me has dicho que es.»
+
+    Dos niveles, y ninguno lleva un factor inventado: los dos salen de las tablas.
+      - IMPOSIBLE (por encima del maximo de TODO el ciclo) -> estado propio.
+      - OTRA FASE (fuera de la fase declarada y sus contiguas) -> solo una nota."""
+    import interpretacion_fenologica as IF
+    import fenologia_especies as FEN
+    from datetime import datetime, timedelta
+
+    SI = "2025-10-15"
+    SP = {"especie": "TRIGO", "fecha_siembra": SI}
+    MAX_TRIGO = max(x[4] for x in FEN.EXTENSIVO_ESPECIES["TRIGO"]["fases"])
+
+    def f(das):
+        return (datetime.strptime(SI, "%Y-%m-%d") + timedelta(days=das)).strftime("%Y-%m-%d")
+
+    def d(das, ndvi, **kw):
+        return IF.evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
+                                  [{"fecha": f(das), "ndvi": ndvi, "ndmi": 0.30, "lai": 2.5}],
+                                  spec=kw.pop("spec", SP), **kw)
+
+    # --- el hueco que se tapa -------------------------------------------
+    check("plausibilidad: el maximo del ciclo del trigo sale de la tabla, no a mano",
+          lambda: MAX_TRIGO, lambda r: r == 0.92)
+    check("plausibilidad: NDVI imposible en nascencia -> estado propio",
+          lambda: d(15, 0.95)["estado"], lambda r: r == "Revisar datos")
+    check("plausibilidad: y el estado NO es «Revisar» (el cultivo puede estar bien)",
+          lambda: (d(15, 0.95)["estado"], IF.ESTADO_DATOS),
+          lambda r: r[0] == r[1] and r[0] != "Revisar")
+    check("plausibilidad: el mensaje dice las CUATRO cosas que hay que revisar",
+          lambda: d(15, 0.95)["motivo"],
+          lambda t: all(x in t for x in ("fecha de siembra", "especie declarada",
+                                         "geometria", "malas hierbas")))
+    check("plausibilidad: justo por debajo del maximo NO salta",
+          lambda: d(15, MAX_TRIGO - 0.001)["estado"], lambda r: r != "Revisar datos")
+    check("plausibilidad: en la fase de TECHO no se aplica (ahi el cultivo esta en su tope)",
+          lambda: d(155, 0.95)["estado"],       # espigado: hi == max del ciclo
+          lambda r: r != "Revisar datos")
+    # --- el segundo nivel: solo NOTA ------------------------------------
+    check("plausibilidad: verdor de otra fase -> nota, y el semaforo NO se toca",
+          lambda: d(15, 0.70),
+          lambda r: r["estado"] == "OK" and "fase distinta" in r["motivo"])
+    check("plausibilidad: dentro de la fase contigua no dice nada (un cultivo puede ir adelantado)",
+          lambda: d(15, 0.50)["motivo"], lambda t: "fase distinta" not in t)
+    check("plausibilidad: lo normal sigue sin nota ninguna",
+          lambda: d(15, 0.30)["motivo"], lambda t: "fase distinta" not in t
+                                                   and "no cuadra" not in t)
+    # --- donde NO debe aplicarse ----------------------------------------
+    check("plausibilidad: en barbecho no aplica",
+          lambda: IF.evaluar_parcela("BARBECHO", "", [{"fecha": f(15), "ndvi": 0.99}],
+                                     spec=SP)["estado"], lambda r: r == "N.A.")
+    check("plausibilidad: sin NDVI no hay nada que juzgar",
+          lambda: d(15, None)["estado"], lambda r: r == "Sin dato")
+    check("plausibilidad: con una especie que no esta en la tabla, no se inventa nada",
+          lambda: d(15, 0.99, spec={"especie": "QUINOA", "fecha_siembra": SI})["estado"],
+          lambda r: r != "Revisar datos")
+    check("plausibilidad: en lenosos no se aplica (el juicio va por MSAVI y otra escala)",
+          lambda: IF.evaluar_parcela("LENOSO", "TRADICIONAL",
+                                     [{"fecha": "2026-06-15", "ndvi": 0.99, "msavi": 0.9,
+                                       "ndmi": 0.3, "lai": 3.0}],
+                                     spec={"especie": "OLIVO", "marco_calle": 10,
+                                           "marco_pie": 10})["estado"],
+          lambda r: r != "Revisar datos")
+    # --- el nucleo puro, por separado -----------------------------------
+    check("plausibilidad: el nucleo distingue los dos niveles",
+          lambda: (IF._plausibilidad_extensivo("TRIGO", "nascencia", 0.95)[0],
+                   IF._plausibilidad_extensivo("TRIGO", "nascencia", 0.70)[0],
+                   IF._plausibilidad_extensivo("TRIGO", "nascencia", 0.30)[0]),
+          lambda r: r == ("imposible", "otra_fase", None))
+    check("plausibilidad: fase desconocida -> no se juzga",
+          lambda: IF._plausibilidad_extensivo("TRIGO", "inventada", 0.99),
+          lambda r: r == (None, None))
+    # --- consumidores ----------------------------------------------------
+    check("consumidor: «Revisar datos» NO se ofrece para validar (no es juicio agronomico)",
+          lambda: IF.ESTADOS_VALIDABLES, lambda r: IF.ESTADO_DATOS not in r)
+    check("consumidor: el panel le da color de AVISO, no de alarma, y sin inventar colores",
+          lambda: __import__("panel_gestion_parcelas")._colores_estado("Revisar datos"),
+          lambda r: r == __import__("panel_gestion_parcelas")._colores_estado("Vigilar"))
+    check("consumidor: en la lista se ordena justo detras de «Revisar»",
+          lambda: __import__("panel_gestion_parcelas").PanelGestionParcelas.SEVERIDAD,
+          lambda s: s["Revisar"] < s["Revisar datos"] < s["Vigilar"] < s["OK"])
+    check("consumidor: el aprendizaje se salta un «Revisar datos»",
+          lambda: __import__("inspect").getsource(__import__("vista_ficha")),
+          lambda src: "revisar_datos = (estado_bruto == _ED)" in src
+                      and "aj = {} if revisar_datos" in src
+                      and "val_ctx = None if revisar_datos" in src)
+
+
+# =====================================================================
 # 38. PERSISTENCIA DEL SEMAFORO (no cambia con una sola pasada)
 # =====================================================================
 def pruebas_persistencia_semaforo():
@@ -4830,7 +4922,7 @@ def pruebas_reglas_motor():
           lambda: [n for n, _f in IF.REGLAS],
           lambda r: r == ["traza_indice", "lenoso_sin_hoja", "vigor_copa",
                           "falta_de_agua", "eventos_cuaderno", "zonas",
-                          "nota_calibracion"])
+                          "plausibilidad", "nota_calibracion"])
     check("tuberia: toda regla devuelve None o un _Efecto, nunca otra cosa",
           lambda: {type(f(ctx(), diag())).__name__ for _n, f in IF.REGLAS},
           lambda r: r <= {"NoneType", "_Efecto"})
@@ -4897,6 +4989,7 @@ def main():
               pruebas_pradera, pruebas_sync_cancelable,
               pruebas_instalador,
               pruebas_empaquetar, pruebas_medir_ruido, pruebas_persistencia_semaforo,
+              pruebas_plausibilidad,
               pruebas_reglas_motor,
               pruebas_oro_motor):
         try:

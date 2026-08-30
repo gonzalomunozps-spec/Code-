@@ -105,7 +105,7 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 920 pruebas sin pantalla ni red. |
+| `pruebas.py` | 939 pruebas sin pantalla ni red. |
 | `medir_ruido.py` | **Herramienta de diagnóstico**, no parte del programa: estima el ruido del NDVI de tus parcelas con la segunda diferencia de tripletes de pasadas, y cuenta cuántos cambios del semáforo ocurrieron pegados a un umbral. **Borrable**: no la importa nadie. |
 | `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.499 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
@@ -546,6 +546,57 @@ a una explicada por un evento.
 
 ---
 
+## 4d. «Esto no se parece a lo que me has dicho que es» (plausibilidad)
+
+El motor sabía detectar «hay menos verde del que debería» y **nunca lo contrario**.
+Medido: el juicio no comparaba **ni una vez** contra el techo de la fase, así que un
+NDVI de 1,00 quince días después de sembrar daba `OK`. El `hi` de la tabla sólo se
+imprimía.
+
+**Dos niveles**, y ninguno lleva un factor inventado: los dos salen de las tablas de
+`fenologia_especies`.
+
+| Nivel | Cuándo | Qué hace |
+|---|---|---|
+| **Imposible** | el valor supera lo que la especie alcanza en su **mejor momento de todo el ciclo** | estado propio **`Revisar datos`** y motivo nuevo |
+| **Otra fase** | el valor cae fuera de la fase declarada **y de sus contiguas** | **sólo una nota**; el semáforo no se toca |
+
+Por qué esa tolerancia de una fase no es un número elegido: es exactamente el
+desfase que este programa ya da por normal, y **por eso existe el ajuste por
+grados-día** (el calendario se corre del orden de una fase en un año cálido o frío).
+Dos fases ya no es adelanto.
+
+El nivel «imposible» **no se aplica en la fase de techo** (donde `hi` *es* el máximo
+del ciclo): allí el cultivo está legítimamente en su tope y un exceso no se distingue
+del ruido de la medida.
+
+**Qué revisar, y son cuatro cosas**: la fecha de siembra, la especie declarada, la
+geometría de la parcela, o que lo que domina el píxel no sea el cultivo —una cubierta
+de malas hierbas puede estar más verde que el propio cereal, y el motor sólo trata la
+cubierta en leñosos—. En los cuatro casos lo honesto es lo mismo: lo que hay en el
+suelo no es lo que consta.
+
+**Consumidores, repasados uno a uno:**
+- **No está en `ESTADOS_VALIDABLES`**: no es un juicio agronómico, así que no se
+  ofrece para validar.
+- **No entra en el aprendizaje ni en la calibración** (`vista_ficha`): pedirle al
+  usuario que valide como «correcto o incorrecto» un aviso sobre sus propios datos
+  no tiene sentido, y aprender umbrales de una parcela mal declarada sería peor.
+- **Color de aviso, no de alarma**, reutilizando la paleta del tema: el cultivo puede
+  estar perfectamente; lo que falla es lo declarado.
+- **Orden de la lista**: justo detrás de `Revisar`. Hay que mirarlo pronto —el
+  diagnóstico de esa parcela no vale mientras el dato no cuadre— pero no es una
+  urgencia agronómica.
+- **Informe**: no cuenta como aviso sobre el cultivo.
+
+**Impacto medido** sobre las 3.499 entradas del barrido: **44 pasan a `Revisar datos`**
+(22 desde `OK` y 22 desde `Vigilar` — estos últimos venían de un NDMI bajo, y sobre un
+NDVI imposible ese diagnóstico de estrés hídrico no se sostiene) y **67 reciben sólo la
+nota, sin que cambie ningún estado**. Auditado antes de regenerar el oro: los 44
+cumplen la regla y los 67 no mueven el semáforo.
+
+---
+
 ## 5. La interfaz: dónde está cada cosa
 
 Era un monolito de **4.313 líneas** —la deuda técnica número uno— y está partido en
@@ -670,7 +721,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 920 pruebas, sin pantalla ni red (incluye el fichero de oro)
+python pruebas.py          # 939 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db

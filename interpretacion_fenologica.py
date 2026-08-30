@@ -240,6 +240,12 @@ def detectar_cubierta(tipo, subtipo, serie, fecha_iso):
 # por eso el dialogo de correccion importaba la ficha entera para leer una lista.
 ESTADOS_VALIDABLES = ["OK", "Vigilar", "Revisar", "Segado", "N.A."]
 
+# ESTADO APARTE: el problema no esta en el cultivo, esta en lo que se ha declarado.
+# Deliberadamente NO entra en ESTADOS_VALIDABLES: no es un juicio agronomico, asi
+# que no se ofrece para validar ni alimenta el aprendizaje por validaciones. Ver
+# `_regla_plausibilidad`.
+ESTADO_DATOS = "Revisar datos"
+
 
 def _resolver_fase(tipo, subtipo, spec, fecha, act, parcela):
     """Resuelve (fase, lo, hi, caida_ok, fase_esp, siega_verde) de la pasada.
@@ -797,6 +803,84 @@ def _regla_zonas(ctx, diag):
     return None
 
 
+def _plausibilidad_extensivo(especie, fase, valor):
+    """(nivel, techo) de plausibilidad de `valor` para esa especie y fase.
+
+    Dos listones, y NINGUNO lleva un factor inventado: los dos salen de las propias
+    tablas de `fenologia_especies`.
+
+      "imposible" -> el valor supera lo que la especie alcanza en su MEJOR momento
+          de TODO el ciclo. Sea cual sea la fase, eso no lo da el cultivo declarado.
+          No se aplica en la fase de techo (donde `hi` ES el maximo del ciclo):
+          alli el cultivo esta legitimamente en su tope y un exceso no se distingue
+          del ruido de la medida.
+
+      "otra_fase" -> el valor cae fuera del rango de la fase declarada Y de sus
+          fases contiguas. La tolerancia de UNA fase no es un numero elegido: es
+          exactamente el desfase que este programa ya da por normal, y por eso
+          existe el ajuste por grados-dia (el calendario se corre del orden de una
+          fase en un ano calido o frio). Dos fases ya no es adelanto.
+
+    Devuelve (None, None) si no se puede juzgar."""
+    info = FEN.EXTENSIVO_ESPECIES.get(especie)
+    if not info or valor is None:
+        return None, None
+    fases = info["fases"]
+    maximo = max(x[4] for x in fases)
+    idx = next((i for i, x in enumerate(fases) if x[2] == fase), None)
+    if idx is None:
+        return None, None
+    es_techo = abs(fases[idx][4] - maximo) < 1e-9
+    if valor > maximo and not es_techo:
+        return "imposible", maximo
+    vecino_hi = max(fases[j][4] for j in range(max(0, idx - 1), min(len(fases), idx + 2)))
+    if valor > vecino_hi:
+        return "otra_fase", vecino_hi
+    return None, None
+
+
+def _regla_plausibilidad(ctx, diag):
+    """«Esto no se parece a lo que me has dicho que es.»
+
+    El motor sabia detectar «hay menos verde del que deberia», pero no lo contrario:
+    medido, un NDVI de 1.00 quince dias despues de sembrar daba OK, porque el techo
+    de la fase solo se IMPRIMIA y nunca se juzgaba.
+
+    Dos niveles, por decision explicita:
+      - IMPOSIBLE -> estado propio `Revisar datos` y motivo nuevo. El veredicto
+        agronomico anterior no vale de nada si el dato no cuadra con lo declarado.
+      - OTRA FASE -> solo una NOTA. El semaforo no se toca: un cultivo puede ir
+        adelantado, y marcarlo en rojo por eso seria peor que callarse.
+
+    Que revisar, y son cuatro cosas, no una: la fecha de siembra, la especie, la
+    geometria de la parcela, o que lo que domina el pixel no sea el cultivo (una
+    cubierta de malas hierbas puede estar mas verde que el propio cereal; el motor
+    solo trata la cubierta en lenosos). En los cuatro casos lo honesto es lo mismo:
+    lo que hay en el suelo no es lo que consta.
+    """
+    if ctx.tipo != "EXTENSIVO" or ctx.indice_juicio != "NDVI":
+        return None
+    especie = (ctx.spec or {}).get("especie")
+    nivel, techo = _plausibilidad_extensivo(especie, ctx.fase, ctx.ndvi_juicio)
+    if nivel is None:
+        return None
+    if nivel == "imposible":
+        return _Efecto(
+            estado=ESTADO_DATOS, esperado=False, reemplaza=True,
+            texto=(f"NDVI {ctx.ndvi_juicio:.3f} por encima de lo que {especie.lower()} "
+                   f"alcanza en su mejor momento de todo el ciclo ({techo:.2f}). El dato "
+                   f"no cuadra con el cultivo declarado, asi que el diagnostico "
+                   f"agronomico no se puede sostener. Revisa, por este orden: la fecha "
+                   f"de siembra, la especie declarada, la geometria de la parcela, y si "
+                   f"lo que se ve puede ser una cubierta de malas hierbas mas verde que "
+                   f"el cultivo."))
+    return _Efecto(texto=(
+        f" [El verdor observado ({ctx.ndvi_juicio:.3f}) es propio de una fase distinta "
+        f"de la declarada: en {ctx.fase} y sus fases contiguas no pasa de {techo:.2f}. "
+        f"El semaforo no se toca -un cultivo puede ir adelantado-, pero conviene "
+        f"revisar la fecha de siembra.]"))
+
+
 def _regla_nota_calibracion(ctx, diag):
     """Si algun umbral viene de TUS validaciones y no de la tabla, se dice.
 
@@ -817,7 +901,9 @@ def _regla_nota_calibracion(ctx, diag):
 #   4. un evento del cuaderno PISA todo lo anterior: lo apuntado por el agricultor
 #      manda sobre lo deducido;
 #   5. el aviso de zonas, que se calla si el evento ya lo explico;
-#   6. y la nota de calibracion, que cierra.
+#   6. la plausibilidad del dato, que va casi al final porque si lo declarado no
+#      cuadra con lo observado, el veredicto agronomico anterior ya no sostiene;
+#   7. y la nota de calibracion, que cierra.
 REGLAS = [
     ("traza_indice", _regla_traza_indice),
     ("lenoso_sin_hoja", _regla_lenoso_sin_hoja),
@@ -825,6 +911,7 @@ REGLAS = [
     ("falta_de_agua", _regla_falta_de_agua),
     ("eventos_cuaderno", _regla_eventos_cuaderno),
     ("zonas", _regla_zonas),
+    ("plausibilidad", _regla_plausibilidad),
     ("nota_calibracion", _regla_nota_calibracion),
 ]
 

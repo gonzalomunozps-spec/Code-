@@ -82,10 +82,17 @@ def preparar_interpretacion(nombre, campana, regs, idx):
     estado_bruto = diag.get("estado_crudo", diag["estado"])
     cultivo_id = f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")
 
+    # «Revisar datos» NO es un juicio agronomico: dice que lo declarado no cuadra
+    # con lo observado. Dejarlo entrar en el aprendizaje seria pedirle al usuario
+    # que valide como "correcto o incorrecto" un aviso sobre SUS PROPIOS datos, y
+    # ensenarle al motor umbrales a partir de una parcela mal declarada.
+    from interpretacion_fenologica import ESTADO_DATOS as _ED
+    revisar_datos = (estado_bruto == _ED)
+
     historial = DB.validaciones_recientes(limite=300)
     # aprendizaje de campanas anteriores: lo de ESTA parcela manda; si no, el cultivo
-    aj = ajuste_por_validaciones(cultivo_id, diag.get("fase"), estado_bruto, historial,
-                                 parcela=nombre)
+    aj = {} if revisar_datos else ajuste_por_validaciones(
+        cultivo_id, diag.get("fase"), estado_bruto, historial, parcela=nombre)
     if aj.get("corregido"):
         diag["estado"] = aj["corregido"]
 
@@ -112,10 +119,12 @@ def preparar_interpretacion(nombre, campana, regs, idx):
         if obs_txt:
             nota_usuario = (nota_usuario or "") + f"  Tu observacion: “{obs_txt}”."
 
-    val_ctx = {"fecha": actual.get("fecha"), "fase": fase_sistema,
-               "estado": estado_bruto, "cultivo": cultivo_id}
+    # sin contexto de validacion: no se ofrece validar un aviso de datos
+    val_ctx = None if revisar_datos else {
+        "fecha": actual.get("fecha"), "fase": fase_sistema,
+        "estado": estado_bruto, "cultivo": cultivo_id}
     idx_ctx = None
-    if _CALIB is not None:
+    if _CALIB is not None and not revisar_datos:
         idx_ctx = {
             "fecha": actual.get("fecha"), "fase": diag.get("fase"),
             "especie": (spec or {}).get("especie", ""),

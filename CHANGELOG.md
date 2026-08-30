@@ -3,6 +3,23 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.20.0] — 2026-08
+
+### Añadido
+- **El sistema detecta ahora datos que no cuadran con lo declarado.** Antes sólo sabía
+  ver «hay menos verde del que debería»; medido, el techo de la fase no se comparaba
+  **ni una vez**, así que un NDVI de 1,00 quince días después de sembrar daba «OK».
+  - **Estado nuevo «Revisar datos»** cuando el verdor supera lo que la especie declarada
+    alcanza en su mejor momento de todo el ciclo. El mensaje dice qué mirar: fecha de
+    siembra, especie, geometría, o una cubierta de malas hierbas más verde que el cultivo.
+  - **Nota, sin tocar el semáforo**, cuando el verdor corresponde a una fase distinta de
+    la declarada y de sus contiguas. Un cultivo puede ir adelantado: eso se dice, no se
+    marca en rojo.
+  - Ninguno de los dos listones lleva un factor inventado: salen de las tablas de fases.
+  - «Revisar datos» **no entra en el aprendizaje ni en la calibración** y no se ofrece
+    para validar: no es un juicio agronómico. En la lista va con color de aviso —el
+    cultivo puede estar perfectamente— y justo detrás de «Revisar».
+
 ## [1.19.0] — 2026-08
 
 ### Cambiado

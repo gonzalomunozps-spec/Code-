@@ -359,6 +359,8 @@ def _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos):
         recorrido.append({"fecha": serie[i]["fecha"], "fase": d.get("fase", "-"),
                           "estado": d.get("estado", "-"), "esperado": d.get("esperado", False),
                           "ndvi": serie[i].get("ndvi"), "lai": serie[i].get("lai")})
+        # «Revisar datos» no entra: no es un aviso sobre el cultivo, es que lo
+        # declarado no cuadra con lo observado. Se cuenta aparte, mas abajo.
         if d.get("estado") in ("Revisar", "Vigilar") and not d.get("esperado"):
             avisos.append((i, serie[i]["fecha"], d.get("estado"), d.get("fase")))
 
