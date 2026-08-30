@@ -599,6 +599,11 @@ class PanelGestionParcelas(ttk.Frame):
                 diag = evaluar_parcela(cult.get("tipo"), cult.get("subtipo", ""), serie,
                                        spec=spec_de(cult))
                 clave, txt = diag["clave"], diag["estado"]
+                # Veredicto decidido por poco: en la ficha se explica por que, dentro
+                # del motivo; aqui solo cabe una marca. Un asterisco, no un color:
+                # el estado es el que es, lo que se avisa es que esta ajustado.
+                if diag.get("ajustado"):
+                    txt += " *"
             propietario = ficha.get("propietario", "")
             filas.append({"nombre": nombre.replace("_", " "),
                           "cultivo": NOMBRE_CULTIVO.get(cc, "Sin asignar" if cc == "SIN_ASIGNAR"
@@ -620,7 +625,9 @@ class PanelGestionParcelas(ttk.Frame):
 
         keys = {"superficie": lambda r: -r["_sup"],
                 "propietario": lambda r: r["propietario"].lower(),
-                "estado": lambda r: self.SEVERIDAD.get(r["estado"], 9),
+                # `.rstrip(" *")`: el texto puede llevar la marca de "ajustado", y
+                # sin quitarla la fila caia al final del orden por gravedad
+                "estado": lambda r: self.SEVERIDAD.get(r["estado"].rstrip(" *"), 9),
                 "nombre": lambda r: r["nombre"].lower()}
         filas.sort(key=keys.get(orden, keys["nombre"]))
 

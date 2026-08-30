@@ -105,7 +105,7 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 939 pruebas sin pantalla ni red. |
+| `pruebas.py` | 956 pruebas sin pantalla ni red. |
 | `medir_ruido.py` | **Herramienta de diagnóstico**, no parte del programa: estima el ruido del NDVI de tus parcelas con la segunda diferencia de tripletes de pasadas, y cuenta cuántos cambios del semáforo ocurrieron pegados a un umbral. **Borrable**: no la importa nadie. |
 | `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.499 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
@@ -597,6 +597,46 @@ cumplen la regla y los 67 no mueven el semáforo.
 
 ---
 
+## 4e. Cuándo un veredicto se ha decidido por poco (fiabilidad)
+
+**Medido** sobre el barrido: **uno de cada cuatro** veredictos cambia si el NDVI se
+mueve ±0,03 (32 % en el barrido completo; 25 % quitando los bloques hechos a
+propósito para pegarse a los umbrales). Hasta ahora todos se presentaban con la
+misma rotundidad: el que está a 0,005 del corte y el que está a 0,15.
+
+La persistencia (§4c) ya **actúa** sobre eso —retiene los frágiles hasta que se
+confirman—; lo que faltaba era **decirlo**.
+
+**Se dice sólo lo que no se decía ya.** Auditado: de las señales candidatas, la
+separación copa/calle y el umbral calibrado **ya salen en el motivo** por sus propias
+reglas, así que repetirlas sería ruido. Se añaden las dos que faltaban:
+
+- **la distancia al corte que decide el veredicto** (los dos del índice, `lo` y
+  `lo*0.8`, y el del NDMI), cuando es menor que `MARGEN_FILO`;
+- **si la fase pudo cambiar entre esta pasada y la anterior** — y aquí no hay número
+  inventado: la ventana es el hueco real entre las dos pasadas. Si el límite de fase
+  cae dentro de ese hueco, no se sabe de qué lado estaba el cultivo.
+
+`MARGEN_FILO = 0,03` es **una heurística de presentación**, y está como constante a la
+vista precisamente por eso: no mueve ni un veredicto, y el ruido real de cada
+instalación se mide con `medir_ruido.py`.
+
+**Comprobado que el aviso acierta**: contra la prueba empírica de mover el valor y ver
+si el estado cambia, **98 % de sensibilidad y 93 % de precisión** sobre 3.309 casos.
+Se escapa un 2 %: veredictos que cambian por la copa o por el análisis de zonas, que
+no son cortes de índice. Es un límite consciente.
+
+**Restricción dura, verificada**: de los 1.343 casos del oro que cambian, **cambia el
+`motivo` y nada más** — ni un `estado`, `clave`, `fase`, `rango_fase`, `ndvi_juicio` ni
+`umbrales`.
+
+En la **lista** el estado lleva un `*` cuando el veredicto está ajustado: allí no cabe
+el motivo, y poder distinguir de un vistazo los rojos sólidos de los que están en el
+filo es lo único que el texto no puede dar. No se inventa ningún color: el estado
+conserva el suyo.
+
+---
+
 ## 5. La interfaz: dónde está cada cosa
 
 Era un monolito de **4.313 líneas** —la deuda técnica número uno— y está partido en
@@ -721,7 +761,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 939 pruebas, sin pantalla ni red (incluye el fichero de oro)
+python pruebas.py          # 956 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db

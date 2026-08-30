@@ -881,6 +881,90 @@ def _regla_plausibilidad(ctx, diag):
         f"revisar la fecha de siembra.]"))
 
 
+# Margen para decir que un veredicto esta "en el filo". Es una heuristica de
+# PRESENTACION: no mueve ni un veredicto, solo avisa de cuales se deciden por poco.
+# El valor sale de lo medido en la fase 3 (con ruido de +-0.03 oscila el 45 % de las
+# combinaciones pegadas a un umbral), pero el ruido REAL depende de la instalacion y
+# se mide con `medir_ruido.py`. Por eso es una constante a la vista y no un numero
+# escondido en una comparacion.
+MARGEN_FILO = 0.03
+
+# Estados donde "estar en el filo" no significa nada: no se han decidido comparando
+# un indice contra un umbral.
+_SIN_FILO = ("Sin dato", "N.A.", "Segado", ESTADO_DATOS)
+
+
+def _distancia_al_corte(valor, lo):
+    """Lo que le sobra al valor para caer del otro lado del corte mas cercano.
+
+    El juicio del nivel tiene DOS cortes: `lo` (dentro/algo por debajo) y `lo*0.8`
+    (algo/muy por debajo). Se mira el mas cercano de los dos, que es el que decide.
+    None si no se puede calcular."""
+    if valor is None or lo is None:
+        return None
+    return min(abs(valor - lo), abs(valor - lo * 0.8))
+
+
+def _fase_en_duda(ctx):
+    """True si la fase pudo cambiar ENTRE esta pasada y la anterior.
+
+    Sin numeros inventados: la ventana es la que hay entre las dos pasadas. Si el
+    limite de la fase cae dentro de ese hueco, no se sabe de que lado estaba el
+    cultivo cuando se tomo el dato, y el liston con el que se le juzga es discutible.
+    """
+    fe = ctx.fase_esp or {}
+    das = fe.get("das")
+    if das is None or not ctx.prev:
+        return False
+    try:
+        hueco = (datetime.strptime(ctx.act.get("fecha"), "%Y-%m-%d")
+                 - datetime.strptime(ctx.prev.get("fecha"), "%Y-%m-%d")).days
+    except (TypeError, ValueError):
+        return False
+    if hueco <= 0:
+        return False
+    especie = (ctx.spec or {}).get("especie")
+    info = FEN.EXTENSIVO_ESPECIES.get(especie)
+    if not info:
+        return False
+    limites = [f[0] for f in info["fases"]] + [info["fases"][-1][1]]
+    return any(das - hueco < L <= das for L in limites)
+
+
+def _regla_fiabilidad(ctx, diag):
+    """Dice CUANDO un veredicto se ha decidido por poco, y por que.
+
+    Medido sobre el barrido: uno de cada cuatro diagnosticos cambia si el NDVI se
+    mueve +-0.03, y hasta ahora todos se presentaban con la misma rotundidad. Esto
+    no cambia el veredicto -de eso se encarga la persistencia, que ya retiene los
+    fragiles-: lo que hace es DECIRLO.
+
+    Deliberadamente NO repite lo que ya se dice en otro sitio (que copa y calle no
+    se separan, o que el umbral viene de tus validaciones): eso ya sale en el motivo
+    por sus propias reglas, y duplicarlo seria ruido.
+    """
+    if diag.estado in _SIN_FILO:
+        return None
+    razones = []
+    d = _distancia_al_corte(ctx.ndvi_juicio, ctx.lo)
+    if d is not None and d < MARGEN_FILO:
+        razones.append(f"el {ctx.indice_juicio} esta a {d:.3f} del corte que decide "
+                       f"este veredicto")
+    # el NDMI tiene su propio corte, y tambien sube el nivel de alerta al cruzarlo.
+    # Sin esto se escapaba el 3 % de los veredictos que cambiarian (medido).
+    nm = ctx.umbrales.get("ndmi_min")
+    if (ctx.ndmi is not None and nm is not None
+            and abs(ctx.ndmi - nm) < MARGEN_FILO):
+        razones.append(f"el NDMI esta a {abs(ctx.ndmi - nm):.3f} de su minimo de fase")
+    if _fase_en_duda(ctx):
+        razones.append("la fase pudo cambiar entre esta pasada y la anterior, asi que "
+                       "el liston con el que se juzga es discutible")
+    if not razones:
+        return None
+    return _Efecto(texto=" [Veredicto AJUSTADO: " + "; ".join(razones) +
+                   ". Conviene esperar a la siguiente pasada antes de actuar.]")
+
+
 def _regla_nota_calibracion(ctx, diag):
     """Si algun umbral viene de TUS validaciones y no de la tabla, se dice.
 
@@ -903,7 +987,8 @@ def _regla_nota_calibracion(ctx, diag):
 #   5. el aviso de zonas, que se calla si el evento ya lo explico;
 #   6. la plausibilidad del dato, que va casi al final porque si lo declarado no
 #      cuadra con lo observado, el veredicto agronomico anterior ya no sostiene;
-#   7. y la nota de calibracion, que cierra.
+#   7. si el veredicto se ha decidido por poco, se dice (no lo cambia: lo matiza);
+#   8. y la nota de calibracion, que cierra.
 REGLAS = [
     ("traza_indice", _regla_traza_indice),
     ("lenoso_sin_hoja", _regla_lenoso_sin_hoja),
@@ -912,6 +997,7 @@ REGLAS = [
     ("eventos_cuaderno", _regla_eventos_cuaderno),
     ("zonas", _regla_zonas),
     ("plausibilidad", _regla_plausibilidad),
+    ("fiabilidad", _regla_fiabilidad),
     ("nota_calibracion", _regla_nota_calibracion),
 ]
 
@@ -959,19 +1045,25 @@ def _diagnostico_crudo(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None,
         return {"estado": "N.A.", "clave": "NA", "fase": "barbecho",
                 "motivo": "Parcela en barbecho: no se evalua el vigor del cultivo.",
                 "deltas": {}, "cubierta": None, "esperado": True,
-                "estado_crudo": "N.A.", "clave_cruda": "NA", "confirmando": False}
+                "estado_crudo": "N.A.", "clave_cruda": "NA", "confirmando": False,
+                "ajustado": False}
 
     if not serie:
         return {"estado": "Sin dato", "clave": "Sin", "fase": "-",
                 "motivo": "Sin pasadas validas de satelite.", "deltas": {},
                 "cubierta": None, "esperado": False,
-                "estado_crudo": "Sin dato", "clave_cruda": "Sin", "confirmando": False}
+                "estado_crudo": "Sin dato", "clave_cruda": "Sin", "confirmando": False,
+                "ajustado": False}
 
     ctx = _preparar_contexto(tipo, subtipo, serie, fecha_iso, eventos_cerca, spec,
                              parcela, heterogeneidad_activa, arbolado)
     diag = _juicio_base(ctx)
+    disparadas = []
     for nombre, regla in REGLAS:
-        diag = _aplicar(diag, regla(ctx, diag), nombre)
+        efecto = regla(ctx, diag)
+        if efecto is not None:
+            disparadas.append(nombre)
+        diag = _aplicar(diag, efecto, nombre)
 
     return {"estado": diag.estado, "clave": diag.clave, "fase": ctx.fase,
             "rango_fase": (ctx.lo, ctx.hi), "motivo": diag.motivo, "deltas": ctx.deltas,
@@ -981,7 +1073,10 @@ def _diagnostico_crudo(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None,
             # sin filtrar: `evaluar_parcela` puede retener el estado una pasada,
             # pero el juicio agronomico es este y es el que aprende la calibracion
             "estado_crudo": diag.estado, "clave_cruda": diag.clave,
-            "confirmando": False}
+            "confirmando": False,
+            # el veredicto se ha decidido por poco. Es para que la LISTA lo pueda
+            # marcar: en la ficha ya se explica por que, dentro del motivo.
+            "ajustado": "fiabilidad" in disparadas}
 
 
 # =====================================================================

@@ -4416,6 +4416,86 @@ def pruebas_empaquetar():
 
 # =====================================================================
 # =====================================================================
+# 38. FIABILIDAD: decir cuando un veredicto se ha decidido por poco
+# =====================================================================
+def pruebas_fiabilidad():
+    """Medido: uno de cada cuatro veredictos cambia si el NDVI se mueve 0,03, y
+    todos se presentaban con la misma rotundidad. Esto lo DICE; no cambia ninguno."""
+    import interpretacion_fenologica as IF
+    from datetime import datetime, timedelta
+
+    SI = "2025-10-15"
+    SP = {"especie": "TRIGO", "fecha_siembra": SI}
+
+    def f(das):
+        return (datetime.strptime(SI, "%Y-%m-%d") + timedelta(days=das)).strftime("%Y-%m-%d")
+
+    def d(das, ndvi, ndmi=0.30, **kw):
+        return IF._diagnostico_crudo(
+            "EXTENSIVO", "COSECHA_GRANO",
+            kw.pop("serie", [{"fecha": f(das), "ndvi": ndvi, "ndmi": ndmi, "lai": 2.5}]),
+            spec=SP, **kw)
+
+    check("fiabilidad: el margen es una constante a la vista, no un numero escondido",
+          lambda: IF.MARGEN_FILO, lambda r: r == 0.03)
+    check("fiabilidad: un veredicto holgado no lleva aviso",
+          lambda: d(120, 0.70)["motivo"], lambda t: "AJUSTADO" not in t)
+    check("fiabilidad: pegado al corte, se dice y se da la distancia",
+          lambda: d(120, 0.56)["motivo"],
+          lambda t: "AJUSTADO" in t and "0.010 del corte" in t)
+    check("fiabilidad: justo EN el corte tambien",
+          lambda: d(120, 0.55)["motivo"], lambda t: "0.000 del corte" in t)
+    check("fiabilidad: tambien vale el corte de abajo (lo*0.8)",
+          lambda: d(120, 0.44)["motivo"],   # lo*0.8 = 0.44
+          lambda t: "AJUSTADO" in t)
+    check("fiabilidad: el NDMI tiene su propio corte y tambien cuenta",
+          lambda: d(120, 0.70, ndmi=0.08)["motivo"],   # ndmi_min de encanado = 0.08
+          lambda t: "NDMI esta a" in t)
+    check("fiabilidad: la bandera para la LISTA acompana al texto",
+          lambda: (d(120, 0.56)["ajustado"], d(120, 0.70)["ajustado"]),
+          lambda r: r == (True, False))
+    # NO se aplica donde no significa nada
+    for est, kw in (("Sin dato", dict(das=120, ndvi=None)),
+                    ("Revisar datos", dict(das=15, ndvi=0.95))):
+        check(f"fiabilidad: no se aplica a «{est}» (no se decidio comparando un indice)",
+              lambda kw=kw: d(**kw), lambda r: "AJUSTADO" not in r["motivo"])
+    check("fiabilidad: en barbecho tampoco",
+          lambda: IF.evaluar_parcela("BARBECHO", "", [{"fecha": f(15), "ndvi": 0.5}]),
+          lambda r: r["ajustado"] is False and "AJUSTADO" not in r["motivo"])
+    # la fase en duda: sin numeros inventados, la ventana es el hueco entre pasadas
+    check("fiabilidad: si la fase pudo cambiar entre las dos pasadas, se dice",
+          lambda: d(0, 0, serie=[{"fecha": f(80), "ndvi": 0.70, "ndmi": 0.3, "lai": 2.5},
+                                 {"fecha": f(100), "ndvi": 0.70, "ndmi": 0.3, "lai": 2.5}]),
+          lambda r: "la fase pudo cambiar" in r["motivo"])
+    check("fiabilidad: con las dos pasadas dentro de la misma fase, no",
+          lambda: d(0, 0, serie=[{"fecha": f(110), "ndvi": 0.70, "ndmi": 0.3, "lai": 2.5},
+                                 {"fecha": f(120), "ndvi": 0.70, "ndmi": 0.3, "lai": 2.5}]),
+          lambda r: "la fase pudo cambiar" not in r["motivo"])
+    check("fiabilidad: con una sola pasada no se puede saber, y no se dice",
+          lambda: d(120, 0.70)["motivo"], lambda t: "la fase pudo cambiar" not in t)
+    # LA RESTRICCION DURA: no cambia ningun veredicto
+    # LA RESTRICCION DURA de esta fase: el aviso no mueve ni un veredicto. Los
+    # estados de abajo son los MEDIDOS antes de tocar nada.
+    # (0.44 sale "Revisar" y no "Vigilar" por coma flotante: 0.55*0.8 da
+    #  0.44000000000000006, asi que 0.44 queda por debajo del corte. El error es de
+    #  1e-17 y no tiene ninguna consecuencia agronomica; se deja como esta y se
+    #  documenta aqui para que nadie lo "arregle" cambiando veredictos sin querer.)
+    check("fiabilidad: NO cambia el estado (comprobado sobre los dos lados del corte)",
+          lambda: [d(120, v)["estado"] for v in (0.70, 0.56, 0.55, 0.545, 0.44)],
+          lambda r: r == ["OK", "OK", "OK", "Vigilar", "Revisar"])
+    check("fiabilidad: no repite lo que ya se dice por otro lado (copa, calibrado)",
+          lambda: __import__("inspect").getsource(IF._regla_fiabilidad),
+          lambda src: "separacion" not in src and "calibrado" not in src)
+    # la LISTA
+    check("consumidor: la lista marca el veredicto ajustado sin tocar su color",
+          lambda: __import__("inspect").getsource(__import__("panel_gestion_parcelas")),
+          lambda src: 'if diag.get("ajustado"):' in src and 'txt += " *"' in src)
+    check("consumidor: y el orden por gravedad no se rompe con la marca",
+          lambda: __import__("inspect").getsource(__import__("panel_gestion_parcelas")),
+          lambda src: 'r["estado"].rstrip(" *")' in src)
+
+
+# =====================================================================
 # 38. PLAUSIBILIDAD DEL DATO DECLARADO («Revisar datos»)
 # =====================================================================
 def pruebas_plausibilidad():
@@ -4922,7 +5002,7 @@ def pruebas_reglas_motor():
           lambda: [n for n, _f in IF.REGLAS],
           lambda r: r == ["traza_indice", "lenoso_sin_hoja", "vigor_copa",
                           "falta_de_agua", "eventos_cuaderno", "zonas",
-                          "plausibilidad", "nota_calibracion"])
+                          "plausibilidad", "fiabilidad", "nota_calibracion"])
     check("tuberia: toda regla devuelve None o un _Efecto, nunca otra cosa",
           lambda: {type(f(ctx(), diag())).__name__ for _n, f in IF.REGLAS},
           lambda r: r <= {"NoneType", "_Efecto"})
@@ -4989,7 +5069,7 @@ def main():
               pruebas_pradera, pruebas_sync_cancelable,
               pruebas_instalador,
               pruebas_empaquetar, pruebas_medir_ruido, pruebas_persistencia_semaforo,
-              pruebas_plausibilidad,
+              pruebas_plausibilidad, pruebas_fiabilidad,
               pruebas_reglas_motor,
               pruebas_oro_motor):
         try:

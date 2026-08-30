@@ -3,6 +3,19 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.21.0] — 2026-08
+
+### Añadido
+- **El diagnóstico dice cuándo se ha decidido por poco.** Medido: uno de cada cuatro
+  veredictos cambia si el NDVI se mueve ±0,03, y todos se presentaban con la misma
+  rotundidad. Ahora, cuando el valor está pegado a un corte —o cuando la fase pudo
+  cambiar entre esta pasada y la anterior— el motivo lo dice y da la distancia exacta.
+  - **No cambia ningún veredicto**: verificado sobre las 3.499 entradas del barrido,
+    cambia el motivo y nada más.
+  - En la lista de parcelas el estado lleva un `*` cuando está ajustado, para poder
+    distinguir de un vistazo los avisos sólidos de los que están en el filo.
+  - No repite lo que ya se decía (separación copa/calle, umbral calibrado).
+
 ## [1.20.0] — 2026-08
 
 ### Añadido
