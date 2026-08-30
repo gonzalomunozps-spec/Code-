@@ -4293,7 +4293,7 @@ def pruebas_empaquetar():
             return fh.read()
     iss = _lee("instalador_windows.iss")
     check("instalador win: el .iss empaqueta la carpeta que genera PyInstaller",
-          lambda: ("dist\\MonitorParcelas\\*" in iss and E.NOMBRE + ".exe" in iss),
+          lambda: (f"dist\\{E.NOMBRE}\\*" in iss and E.NOMBRE + ".exe" in iss),
           lambda r: r is True)
     check("instalador win: el .iss crea acceso de escritorio y desinstalador",
           lambda: ("desktopicon" in iss and "uninstallexe" in iss.lower()),

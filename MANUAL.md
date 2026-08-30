@@ -1,4 +1,4 @@
-# Manual de usuario — Monitor de Parcelas
+# Manual de usuario — Gestor de Parcelas
 
 Guía breve para usar el programa en el día a día. No hace falta saber programar.
 

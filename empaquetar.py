@@ -24,7 +24,7 @@ import sys
 import subprocess
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-NOMBRE = "MonitorParcelas"
+NOMBRE = "GestorParcelas"
 ENTRADA = os.path.join(DIR, "panel_gestion_parcelas.py")   # tiene el if __name__ == "__main__"
 
 # Ficheros de DATOS que deben viajar dentro del ejecutable (no son codigo).
@@ -67,12 +67,12 @@ def _version_info():
                     prodvers=({n[0]}, {n[1]}, {n[2]}, {n[3]}),
                     mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0),
   kids=[StringFileInfo([StringTable('040a04b0', [
-            StringStruct('CompanyName', 'Monitor de Parcelas'),
+            StringStruct('CompanyName', 'Gestor de Parcelas'),
             StringStruct('FileDescription', 'Seguimiento de parcelas agricolas por satelite'),
             StringStruct('FileVersion', '{__version__}'),
             StringStruct('InternalName', '{NOMBRE}'),
             StringStruct('OriginalFilename', '{NOMBRE}.exe'),
-            StringStruct('ProductName', 'Monitor de Parcelas'),
+            StringStruct('ProductName', 'Gestor de Parcelas'),
             StringStruct('ProductVersion', '{__version__}')])]),
         VarFileInfo([VarStruct('Translation', [0x040a, 1200])])]
 )

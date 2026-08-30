@@ -57,7 +57,7 @@ jobs:
 
       - name: Comprobar que el ejecutable existe
         shell: bash
-        run: test -f dist/MonitorParcelas/MonitorParcelas.exe
+        run: test -f dist/GestorParcelas/GestorParcelas.exe
 
       - name: Instalar Inno Setup
         run: choco install innosetup -y --no-progress
@@ -70,7 +70,7 @@ jobs:
       - name: Publicar el Setup.exe como artefacto descargable
         uses: actions/upload-artifact@v4
         with:
-          name: MonitorParcelas-Setup-${{ steps.ver.outputs.v }}
+          name: GestorParcelas-Setup-${{ steps.ver.outputs.v }}
           path: Output/*.exe
           if-no-files-found: error
           retention-days: 90
@@ -84,11 +84,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.v }}
-          name: Monitor de Parcelas v${{ steps.ver.outputs.v }}
+          name: Gestor de Parcelas v${{ steps.ver.outputs.v }}
           body: |
-            **Instalador de Windows** de Monitor de Parcelas v${{ steps.ver.outputs.v }}.
+            **Instalador de Windows** de Gestor de Parcelas v${{ steps.ver.outputs.v }}.
 
-            Descarga `MonitorParcelas-Setup-${{ steps.ver.outputs.v }}.exe` de aqui
+            Descarga `GestorParcelas-Setup-${{ steps.ver.outputs.v }}.exe` de aqui
             abajo y haz doble clic. No necesita Python ni nada mas.
 
             Al abrirlo, Windows avisara de que el editor es desconocido (el

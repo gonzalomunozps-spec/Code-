@@ -40,7 +40,7 @@ if not exist "%ISCC%" (
 
 echo.
 echo ============================================================================
-echo  LISTO. El instalador esta en:  Output\MonitorParcelas-Setup-%VER%.exe
+echo  LISTO. El instalador esta en:  Output\GestorParcelas-Setup-%VER%.exe
 echo  Ese unico fichero es el que puedes enviar por correo o pen-drive.
 echo ============================================================================
 pause

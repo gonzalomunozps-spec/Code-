@@ -42,16 +42,16 @@ Descomprime el programa, abre su carpeta y haz **doble clic en
 Al terminar, el instalador queda en:
 
 ```
-Output\MonitorParcelas-Setup-<version>.exe
+Output\GestorParcelas-Setup-<version>.exe
 ```
 
 **Ese único fichero es el que envías** (correo, pen-drive, carpeta compartida).
 
 ## Qué hace el instalador en el equipo de destino
-- Instala el programa en `Archivos de programa\MonitorParcelas`.
+- Instala el programa en `Archivos de programa\GestorParcelas`.
 - Crea acceso directo en el **menú de inicio** y, si se marca, en el
   **escritorio**.
-- Añade **«Desinstalar Monitor de Parcelas»** (se quita como cualquier programa,
+- Añade **«Desinstalar Gestor de Parcelas»** (se quita como cualquier programa,
   desde «Aplicaciones» de Windows).
 
 ### Si prefieres hacerlo a mano
