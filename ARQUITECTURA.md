@@ -624,3 +624,9 @@ python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py 
    se presenta un dato agronómico, así que no se tocó.
 
 3. **`descargar_mapa_*` sigue sin cobertura** de pruebas (necesita credenciales).
+
+4. **TODO: el `LICENSE` no tiene titular.** Sigue diciendo
+   `Copyright (c) 2026 <TU NOMBRE>`. Mientras esa linea sea un hueco, la licencia
+   MIT no cede derechos de nadie en concreto y el proyecto no es legalmente
+   redistribuible. **Lo rellena el autor**: no es un dato que se pueda deducir del
+   repositorio ni conviene adivinarlo.
