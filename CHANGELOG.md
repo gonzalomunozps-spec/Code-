@@ -3,6 +3,42 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.17.0] — 2026-08
+
+### Añadido
+- **El informe enseña datos que el sistema ya tenía y no llegaban al papel.** Nada de
+  esto se calcula nuevo: se pinta lo que ya producen la base y los módulos existentes.
+  - **Identificación completa**: variedad, **recinto SIGPAC** (en el orden oficial
+    prov/mun/agr/zona/pol/par/rec) y aviso de **arbolado disperso**. Este último no es
+    un adorno: con la casilla marcada los índices del diagnóstico se calculan sobre los
+    píxeles de cultivo, apartando las copas, y sin decirlo los números no se pueden
+    reproducir.
+  - **Clima de la campaña** (ERA5-Land), agregado **mes a mes** —el diario son ~365
+    filas— con lluvia y ET0 sumadas y las extremas del mes. En el Excel, además, una
+    hoja con el detalle **día a día** y su gráfica.
+  - **Balance hídrico de la comarca** (lluvia − ET0) dentro de la sección de estado
+    hídrico: distingue un NDMI bajo por sequía general de uno bajo por un problema de
+    esta parcela.
+  - **Grados-día**: acumulado desde la siembra, fase por GDD, cuánto falta para la
+    siguiente y la tabla de integrales con su referencia y de dónde sale (tuya o de
+    bibliografía).
+  - **Producción registrada** (báscula) de **todas** las campañas, no solo la que se
+    está viendo: kg/ha, humedad de grano, superficie y origen del dato.
+- Las tres secciones nuevas (`clima`, `gdd`, `rendimiento`) entran en el selector de
+  «qué incluir» como las demás, y **`secciones_con_datos`** las marca «(sin datos)»
+  cuando no hay nada que enseñar, para no pedir una sección que saldría en blanco.
+
+### Corregido
+- **El informe reventaba si un índice faltaba en toda la campaña.** Una parcela puede
+  tener NDVI en todas las pasadas y NDMI o LAI en ninguna; esa línea vacía hacía saltar
+  a reportlab («Polyline must have 2 or more points») y se caía el documento entero.
+  Ahora se descarta la línea que no tiene al menos dos puntos, y si no queda ninguna
+  simplemente no hay gráfica.
+
+### Cambiado
+- Las secciones del informe técnico **se numeran solas**. Iban numeradas a mano, así que
+  insertar una obligaba a renumerar las siguientes —y alguna se quedaba atrás—.
+
 ## [1.16.0] — 2026-08
 
 ### Cambiado

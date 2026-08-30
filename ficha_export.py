@@ -65,7 +65,15 @@ class ExportMixin:
         dlg.grab_set()
         tk.Label(dlg, text="Elige qué secciones incluir en el informe:", bg=TEMA["page"],
                  fg=TEMA["text"], font=FUENTES["h2"]).pack(anchor="w", padx=16, pady=(14, 8))
-        hay = {"radar": bool(radar), "cuaderno": bool(eventos)}
+        # Que secciones tienen datos lo decide el propio modulo de informes, no esta
+        # ventana: asi anadir una seccion nueva no obliga a tocar la interfaz.
+        try:
+            hay = _INFORME.secciones_con_datos(
+                self.nombre, self.campana,
+                self._cultivo_de(self.campana) if hasattr(self, "_cultivo_de") else None,
+                radar, eventos)
+        except Exception:
+            hay = {"radar": bool(radar), "cuaderno": bool(eventos)}
         cont = tk.Frame(dlg, bg=TEMA["page"])
         cont.pack(fill="x", padx=16)
         vars_ = {}

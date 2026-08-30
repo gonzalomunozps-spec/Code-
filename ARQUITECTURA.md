@@ -103,9 +103,9 @@ Son la base testeable. Ninguno importa a otro.
 | `ficha_cuaderno.py` / `ficha_clima_gdd.py` / `ficha_validacion.py` / `ficha_export.py` | Los mixins de `FichaParcela`: cuaderno de campo y rendimientos; clima/balance/grados-día; observaciones de campo y su nota; informes y Excel. Cada uno importa lo suyo (con `try/except` para los módulos opcionales que use). |
 | `ui_alta.py` | Alta/edición de parcela (SIGPAC y dibujo a mano) y relevo de campaña. |
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
-| `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** |
+| `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 595 pruebas sin pantalla ni red. |
+| `pruebas.py` | 822 pruebas sin pantalla ni red. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -523,6 +523,8 @@ Se importan con `try/except`. **Si borras el fichero, la función desaparece y e
 resto sigue igual**; no hay interruptor que tocar.
 
 - `informe_anual.py` → quita el botón «Informe / Exportar».
+  A la inversa, borrar `clima_era5`, `balance_hidrico` o `grados_dia` **no** rompe el
+  informe: pierde esas secciones y el resto sale como siempre (`secciones_con_datos` las declara «sin datos» en el diálogo de exportar).
 - `herbicida_contexto.py` → el herbicida con LAI constante vuelve a «sin cambio claro».
 - `calibracion_umbrales.py` → desaparecen el selector de pasada y la validación por
   índice; el diagnóstico vuelve a los umbrales de la tabla. Lo ya anotado se queda
@@ -566,7 +568,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 595 pruebas, sin pantalla ni red
+python pruebas.py          # 822 pruebas, sin pantalla ni red
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py

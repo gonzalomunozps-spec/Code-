@@ -2039,6 +2039,159 @@ def pruebas_informe_anual():
     check("informe: el catalogo de secciones esta disponible para la interfaz",
           lambda: [k for k, _e in IA.SECCIONES_BALANCE],
           lambda r: "radar" in r and "cuaderno" in r and "grafica" in r)
+
+    # ---- DATOS QUE EL INFORME ENSENA PERO NO CALCULA -------------------------
+    # variedad, recinto SIGPAC, arbolado, produccion de bascula, clima, balance
+    # hidrico y grados-dia. Todos vienen de la base o de modulos opcionales; el
+    # informe solo los pinta. Se monta una parcela COMPLETA en una base temporal y
+    # se comprueba que cada dato ACABA en el PDF (no que la seccion se salte sola).
+    import almacen as DB
+    import registro_parcela as REG2
+    DB.conectar(os.path.join(tempfile.mkdtemp(), "informe.db"))
+    fich2 = dict(ficha, arbolado=True,
+                 sigpac={"Prov": "47", "Mun": "1", "Agr": "0", "Zona": "0",
+                         "Pol": "5", "Par": "12", "Rec": "3"})
+    DB.guardar_ficha("Parcela_Rica", fich2)
+    cult2 = dict(cultivo, variedad="Marius",
+                 integrales_termicas=[{"desde": "siembra", "hasta": "espigado",
+                                       "valor_gdd": 900, "metodo": "tiempo_termico"}])
+    # produccion de dos campanas (la de la vista y una anterior)
+    REG2.registrar_evento("Parcela_Rica", "2024-2025",
+                          {"fecha": "2025-07-02", "tipo": "COSECHA",
+                           "rendimiento_kg_ha": 4200.0, "humedad_grano_pct": 12.5,
+                           "fuente_dato": "bascula"})
+    REG2.registrar_evento("Parcela_Rica", "2025-2026",
+                          {"fecha": "2026-07-05", "tipo": "COSECHA",
+                           "rendimiento_kg_ha": 5100.0, "fuente_dato": "albaran"})
+    # clima: dos meses de dias sinteticos en el punto de rejilla de la parcela
+    try:
+        import clima_era5 as _CL
+    except Exception:
+        _CL = None
+    if _CL is not None:
+        punto = _CL.punto_de(fich2["coordenadas"])
+        dias = []
+        for mes, ndias in (("2026-03", 31), ("2026-04", 30)):
+            for dia_n in range(1, ndias + 1):
+                dias.append({"fecha": f"{mes}-{dia_n:02d}", "t_media": 12.0, "t_min": 4.0,
+                             "t_max": 20.0, "lluvia": 1.0, "et0": 3.0})
+        DB.anadir_clima(punto, dias)
+
+    ctx_rico = IA._analisis("Parcela_Rica", "2025-2026", fich2, cult2, serie, [], [])
+    check("informe: la variedad llega al contexto",
+          lambda: ctx_rico["variedad"], lambda r: r == "Marius")
+    check("informe: el recinto SIGPAC se escribe en el orden oficial",
+          lambda: ctx_rico["sigpac"], lambda r: r == "47 / 1 / 0 / 0 / 5 / 12 / 3")
+    check("informe: SIGPAC incompleto no se inventa",
+          lambda: IA._texto_sigpac({"Prov": "47", "Mun": "1"}), lambda r: r == "")
+    check("informe: la marca de arbolado disperso llega al contexto",
+          lambda: ctx_rico["arbolado"], lambda r: r is True)
+    check("informe: la produccion incluye TODAS las campanas, no solo la vista",
+          lambda: [r["campana"] for r in ctx_rico["rendimientos"]],
+          lambda r: "2024-2025" in r and "2025-2026" in r)
+    if _CL is not None:
+        check("informe: el clima se agrega por meses (no 365 filas)",
+              lambda: ctx_rico["clima_mensual"],
+              lambda r: len(r) == 2 and r[0]["dias"] == 31 and r[0]["lluvia"] == 31.0)
+        check("informe: la lluvia y la ET0 se suman; las extremas son la mas extrema",
+              lambda: ctx_rico["clima_mensual"][0],
+              lambda r: r["et0"] == 93.0 and r["balance"] == -62.0
+                        and r["t_max"] == 20.0 and r["t_min"] == 4.0)
+        check("informe: el resumen de clima es el mismo de la ficha",
+              lambda: ctx_rico["clima_resumen"], lambda r: r and r["dias"] == 61)
+    # los tres formatos con la parcela completa
+    # mismo generador, misma serie: lo UNICO que cambia es la parcela (con datos
+    # frente a sin ellos), asi que la diferencia de tamano es de las secciones nuevas
+    ricos, pelados = {}, {}
+    for gen, ext in ((IA.generar_informe_anual, "rico.pdf"),
+                     (IA.generar_informe_tecnico, "rico_tec.pdf")):
+        r_rico = os.path.join(d, ext)
+        r_pelado = os.path.join(d, "pelado_" + ext)
+        gen("Parcela_Rica", "2025-2026", fich2, cult2, serie, ruta_salida=r_rico)
+        gen("Parcela_Pelada", "2025-2026", ficha, cultivo, serie, ruta_salida=r_pelado)
+        ricos[ext] = os.path.getsize(r_rico)
+        pelados[ext] = os.path.getsize(r_pelado)
+    check("informe: con variedad, SIGPAC, clima y produccion el PDF crece",
+          lambda: ricos["rico.pdf"] > pelados["rico.pdf"], lambda r: r is True)
+    check("informe tecnico: idem, con las secciones nuevas",
+          lambda: ricos["rico_tec.pdf"] > pelados["rico_tec.pdf"], lambda r: r is True)
+    # el texto ACABA en el PDF: se busca en el flujo sin comprimir de reportlab
+    def _texto_pdf(ruta):
+        """El texto visible de un PDF de reportlab. Sus flujos van comprimidos
+        (Flate) y ADEMAS en ASCII85, asi que hay que deshacer las dos capas; se
+        prueban en orden y se ignora el flujo que no case (los hay de fuentes)."""
+        import zlib, base64, re as _re
+        crudo = open(ruta, "rb").read()
+        trozos = []
+        for m in _re.finditer(rb"stream(.*?)endstream", crudo, _re.S):
+            cuerpo = m.group(1).strip(b"\r\n")
+            for descomprimir in (lambda b: zlib.decompress(base64.a85decode(b, adobe=True)),
+                                 zlib.decompress, lambda b: b):
+                try:
+                    trozos.append(descomprimir(cuerpo))
+                    break
+                except Exception:
+                    continue
+        return b" ".join(trozos)
+
+    txt_rico = _texto_pdf(os.path.join(d, "rico.pdf"))
+    check("informe: la variedad se IMPRIME en el PDF",
+          lambda: b"Marius" in txt_rico, lambda r: r is True)
+    check("informe: el recinto SIGPAC se IMPRIME en el PDF",
+          lambda: b"SIGPAC" in txt_rico, lambda r: r is True)
+    check("informe: el aviso de arbolado disperso se IMPRIME en el PDF",
+          lambda: b"arbolado" in txt_rico.lower(), lambda r: r is True)
+    check("informe: la produccion de bascula se IMPRIME en el PDF",
+          lambda: b"5.100" in txt_rico or b"5100" in txt_rico, lambda r: r is True)
+    # un informe SIN esos datos no debe inventarse las secciones
+    txt_pelado = _texto_pdf(os.path.join(d, "pelado_rico.pdf"))
+    check("informe: sin variedad ni SIGPAC no aparecen esas filas",
+          lambda: b"Marius" not in txt_pelado and b"SIGPAC" not in txt_pelado,
+          lambda r: r is True)
+    check("informe: las secciones nuevas se pueden desmarcar como las demas",
+          lambda: [k for k, _e in IA.SECCIONES_BALANCE],
+          lambda r: "clima" in r and "gdd" in r and "rendimiento" in r)
+
+    # La interfaz no decide que secciones tienen datos: lo dice el propio modulo,
+    # asi que anadir una seccion no obliga a tocar la ventana de exportar.
+    check("informe: las secciones sin datos se declaran como tales",
+          lambda: IA.secciones_con_datos("Parcela_Pelada", "2025-2026", cultivo, [], []),
+          lambda r: (r["radar"] is False and r["cuaderno"] is False
+                     and r["clima"] is False and r["gdd"] is False
+                     and r["rendimiento"] is False))
+    check("informe: con datos, las secciones se ofrecen marcadas",
+          lambda: IA.secciones_con_datos("Parcela_Rica", "2025-2026", cult2, [], []),
+          lambda r: r["rendimiento"] is True and (r["clima"] is True or _CL is None))
+    check("informe: sin integrales termicas no se ofrece la seccion de GDD",
+          lambda: IA.secciones_con_datos("Parcela_Rica", "2025-2026", cultivo, [], [])["gdd"],
+          lambda r: r is False)
+
+    # Una parcela puede tener NDVI en todas las pasadas y NDMI o LAI en NINGUNA
+    # (indice que no se pudo calcular). Esa linea vacia hacia reventar la grafica
+    # -"Polyline must have 2 or more points"- y con ella el informe entero.
+    serie_coja = [{"fecha": "2025-12-05", "ndvi": 0.22},
+                  {"fecha": "2026-02-12", "ndvi": 0.55},
+                  {"fecha": "2026-04-15", "ndvi": 0.80}]
+    out_coja = os.path.join(d, "coja.pdf")
+    check("informe: un indice ausente en TODA la campana no revienta la grafica",
+          lambda: (IA.generar_informe_anual("P", "2025-2026", ficha, cultivo, serie_coja,
+                                            ruta_salida=out_coja),
+                   os.path.getsize(out_coja))[1],
+          lambda r: r > 1000)
+    out_coja_t = os.path.join(d, "coja_tec.pdf")
+    check("informe tecnico: idem con la grafica ancha",
+          lambda: (IA.generar_informe_tecnico("P", "2025-2026", ficha, cultivo, serie_coja,
+                                              ruta_salida=out_coja_t),
+                   os.path.getsize(out_coja_t))[1],
+          lambda r: r > 1000)
+    # y con UN SOLO indice, y encima con una sola pasada, tampoco
+    out_min1 = os.path.join(d, "una.pdf")
+    check("informe: una sola pasada tampoco revienta (no hay linea que trazar)",
+          lambda: (IA.generar_informe_anual("P", "2025-2026", ficha, cultivo,
+                                            [{"fecha": "2026-04-15", "ndvi": 0.80}],
+                                            ruta_salida=out_min1),
+                   os.path.getsize(out_min1))[1],
+          lambda r: r > 500)
     # informe TECNICO (PDF): mismo motor, mas detalle
     tec = os.path.join(d, "tec.pdf")
     check("informe tecnico: genera un PDF no vacio",
