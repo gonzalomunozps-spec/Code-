@@ -1696,6 +1696,69 @@ def pruebas_almacen():
     finally:
         os.chdir(cwd)
 
+    # --- UNA fila corrupta no puede dejar el programa sin abrir ---------------
+    # La lista carga TODAS las parcelas al arrancar: un JSON ilegible en una sola
+    # fila tumbaba el arranque entero. Se corrompe cada tabla a mano y se comprueba
+    # que el programa DEGRADA (pierde esa fila) en vez de reventar.
+    d3 = tempfile.mkdtemp()
+    DB.conectar(os.path.join(d3, "roto.db"))
+    f3 = {"propietario": "Coop", "coordenadas": [[-4, 37], [-4, 38], [-3, 38]],
+          "sigpac": {"Prov": "47"},
+          "cultivos_por_campana": {"2025-2026": {"tipo": "EXTENSIVO", "especie": "TRIGO"}}}
+    DB.guardar_ficha("Rota", f3)
+    DB.anadir_pasadas("Rota", "2025-2026", [{"fecha": "2026-02-10", "ndvi": 0.5}])
+    DB.anadir_radar("Rota", "2025-2026", [{"fecha": "2026-02-11", "vv": -8.0}])
+    DB.registrar_evento("Rota", "2025-2026",
+                        {"fecha": "2026-03-01", "tipo": "COSECHA", "rendimiento_kg_ha": 4000.0})
+    DB.registrar_observacion("Rota", "2025-2026", {"fecha": "2026-03-02", "fase_obs": "espigado"})
+    DB.guardar_rejilla("Rota", "2025-2026", "2026-02-10", {"filas": 2, "cols": 2, "px": "AAAA"})
+
+    def _romper(tabla, col="datos"):
+        con = DB._c()
+        with DB._LOCK:
+            con.execute(f"UPDATE {tabla} SET {col}='{{esto no es json'")
+            con.commit()
+
+    _romper("parcelas", "coordenadas")
+    check("almacen roto: coordenadas ilegibles -> ficha sin poligono, no excepcion",
+          lambda: DB.ficha("Rota")["coordenadas"], lambda r: r == [])
+    check("almacen roto: y la parcela sigue en la lista (no se pierde el arranque)",
+          lambda: DB.nombres(), lambda r: r == ["Rota"])
+    check("almacen roto: parcelas_dict tampoco revienta",
+          lambda: list(DB.parcelas_dict()), lambda r: r == ["Rota"])
+    _romper("parcelas", "sigpac")
+    check("almacen roto: sigpac ilegible -> {} y el resto de la ficha intacto",
+          lambda: (DB.ficha("Rota")["sigpac"], DB.ficha("Rota")["propietario"]),
+          lambda r: r == ({}, "Coop"))
+    _romper("cultivos")
+    check("almacen roto: cultivo ilegible -> se ignora ese cultivo",
+          lambda: DB.ficha("Rota").get("cultivos_por_campana", {}).get("2025-2026"),
+          lambda r: r == {})
+    _romper("pasadas")
+    check("almacen roto: pasada ilegible -> solo queda la fecha",
+          lambda: DB.pasadas("Rota", "2025-2026"),
+          lambda r: len(r) == 1 and r[0]["fecha"] == "2026-02-10" and "ndvi" not in r[0])
+    check("almacen roto: pasadas_de_campana idem",
+          lambda: DB.pasadas_de_campana("2025-2026")["Rota"], lambda r: len(r) == 1)
+    _romper("pasadas_radar")
+    check("almacen roto: radar ilegible -> se ignora, no revienta",
+          lambda: DB.radar("Rota", "2025-2026"), lambda r: len(r) == 1)
+    _romper("eventos")
+    check("almacen roto: evento ilegible -> el cuaderno se lee igual",
+          lambda: DB.eventos_de("Rota", "2025-2026"), lambda r: isinstance(r, list))
+    check("almacen roto: y el historico de rendimientos tampoco revienta",
+          lambda: DB.rendimientos("Rota"), lambda r: isinstance(r, list))
+    _romper("observaciones_campo")
+    check("almacen roto: observacion ilegible -> se ignora, no revienta",
+          lambda: (DB.observaciones_de("Rota", "2025-2026"), DB.observaciones("Rota")),
+          lambda r: isinstance(r[0], list) and isinstance(r[1], list))
+    _romper("pixeles")
+    check("almacen roto: rejilla ilegible -> se salta esa fecha",
+          lambda: DB.rejillas("Rota", "2025-2026"), lambda r: r == [])
+    check("almacen roto: nada de esto deja la base inservible",
+          lambda: (DB.nombres(), DB.campanas_de("Rota")),
+          lambda r: r[0] == ["Rota"] and "2025-2026" in r[1])
+
 
 # =====================================================================
 # 8. SIGPAC: parseo robusto de la respuesta GeoJSON (helpers extraidos del panel)

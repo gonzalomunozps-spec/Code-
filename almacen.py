@@ -538,14 +538,36 @@ def _col(r, nombre):
         return None
 
 
+def _json_seguro(txt, defecto, que=""):
+    """JSON de la base -> objeto, o `defecto` si la fila esta corrupta.
+
+    UNA fila con el JSON roto no puede dejar el programa sin abrir, y era lo que
+    pasaba: la lista carga TODAS las parcelas al arrancar, asi que un `datos` o unas
+    `coordenadas` ilegibles -un corte de luz a media escritura, un fichero tocado a
+    mano, un disco con un sector malo- tumbaban el arranque entero con un
+    `JSONDecodeError`. Es la diferencia entre perder una parcela y perderlas todas.
+
+    Queda constancia en la bitacora, que para eso esta: degradar en silencio
+    esconderia una base que se esta rompiendo.
+    """
+    if not txt:
+        return defecto
+    try:
+        return json.loads(txt)
+    except (ValueError, TypeError):
+        log.warning("almacen: JSON ilegible%s, se ignora esa fila",
+                    f" en {que}" if que else "")
+        return defecto
+
+
 def _ficha_from_row(r):
     return {"propietario": r["propietario"] or "",
-            "coordenadas": json.loads(r["coordenadas"]) if r["coordenadas"] else [],
+            "coordenadas": _json_seguro(r["coordenadas"], [], "coordenadas"),
             "superficie_ha": r["superficie_ha"] or 0.0,
             "anio_inicio_monitoreo": r["anio_inicio"] or "",
             "provincia": _col(r, "provincia") or "",
             "municipio": _col(r, "municipio") or "",
-            "sigpac": json.loads(_col(r, "sigpac")) if _col(r, "sigpac") else {},
+            "sigpac": _json_seguro(_col(r, "sigpac"), {}, "sigpac"),
             # NULL = "usa el valor por defecto del programa". Se distingue de un 0
             # explicito, que significa "esta parcela sin buffer, a proposito".
             "buffer_m": _col(r, "buffer_m"),
@@ -564,7 +586,8 @@ def parcelas_dict():
             out[r["nombre"]] = _ficha_from_row(r)
         for r in c.execute("SELECT nombre, campana, datos FROM cultivos"):
             if r["nombre"] in out:
-                out[r["nombre"]].setdefault("cultivos_por_campana", {})[r["campana"]] = json.loads(r["datos"])
+                out[r["nombre"]].setdefault("cultivos_por_campana", {})[r["campana"]] = \
+                    _json_seguro(r["datos"], {}, "cultivo")
         return out
 
 
@@ -577,7 +600,8 @@ def ficha(nombre):
             return None
         f = _ficha_from_row(r)
         for cr in c.execute("SELECT campana, datos FROM cultivos WHERE nombre=?", (nombre,)):
-            f.setdefault("cultivos_por_campana", {})[cr["campana"]] = json.loads(cr["datos"])
+            f.setdefault("cultivos_por_campana", {})[cr["campana"]] = \
+                _json_seguro(cr["datos"], {}, "cultivo")
         return f
 
 
@@ -712,7 +736,7 @@ def eliminar_campana(nombre, campana):
 # HISTORICO (pasadas del satelite)
 # ---------------------------------------------------------------------------
 def _pasada_from_row(r):
-    d = json.loads(r["datos"]) if r["datos"] else {}
+    d = _json_seguro(r["datos"], {})
     d["fecha"] = r["fecha"]
     if r["interpretacion"] is not None:
         d["interpretacion"] = r["interpretacion"]
@@ -807,7 +831,7 @@ def clima(punto, desde=None, hasta=None):
     with _LOCK:
         out = []
         for r in c.execute(sql + " ORDER BY fecha", args):
-            d = json.loads(r["datos"]) if r["datos"] else {}
+            d = _json_seguro(r["datos"], {})
             d["fecha"] = r["fecha"]
             out.append(d)
         return out
@@ -851,7 +875,7 @@ def purgar_clima(en_uso):
 # RADAR (Sentinel-1): serie paralela, con sus propias fechas (atraviesa nubes)
 # ---------------------------------------------------------------------------
 def _radar_from_row(r):
-    d = json.loads(r["datos"]) if r["datos"] else {}
+    d = _json_seguro(r["datos"], {})
     d["fecha"] = r["fecha"]
     return d
 
@@ -939,7 +963,7 @@ def eventos_de(parcela, campana):
         out = []
         for r in c.execute("SELECT id,datos FROM eventos WHERE nombre=? AND campana=? ORDER BY fecha",
                            (parcela, campana)):
-            d = json.loads(r["datos"]) if r["datos"] else {}
+            d = _json_seguro(r["datos"], {})
             d["id"] = r["id"]
             out.append(d)
         return out
@@ -964,7 +988,7 @@ def rendimientos(nombre):
             (nombre,)))
     out = []
     for r in filas:
-        d = json.loads(r["datos"]) if r["datos"] else {}
+        d = _json_seguro(r["datos"], {})
         if d.get("tipo") not in ("COSECHA", "SIEGA"):
             continue
         reg = {"campana": r["campana"], "fecha": r["fecha"]}
@@ -1021,7 +1045,7 @@ def observaciones_de(parcela, campana):
         out = []
         for r in c.execute("SELECT id,datos FROM observaciones_campo "
                            "WHERE nombre=? AND campana=? ORDER BY fecha", (parcela, campana)):
-            d = json.loads(r["datos"]) if r["datos"] else {}
+            d = _json_seguro(r["datos"], {})
             d["id"] = r["id"]
             out.append(d)
         return out
@@ -1035,7 +1059,7 @@ def observaciones(parcela):
         out = []
         for r in c.execute("SELECT id,campana,datos FROM observaciones_campo "
                            "WHERE nombre=? ORDER BY campana,fecha", (parcela,)):
-            d = json.loads(r["datos"]) if r["datos"] else {}
+            d = _json_seguro(r["datos"], {})
             d["id"] = r["id"]
             d["campana"] = r["campana"]
             out.append(d)
@@ -1146,11 +1170,7 @@ def rejillas(nombre, campana=None):
         filas = list(c.execute(sql + " ORDER BY campana,fecha", args))
     out = []
     for r in filas:
-        try:
-            d = json.loads(r["datos"]) if r["datos"] else None
-        except ValueError:
-            log.warning("rejilla ilegible en %s %s %s", nombre, r["campana"], r["fecha"])
-            continue
+        d = _json_seguro(r["datos"], None, f"rejilla {nombre} {r['campana']} {r['fecha']}")
         if d:
             d["campana"], d["fecha"] = r["campana"], r["fecha"]
             out.append(d)
