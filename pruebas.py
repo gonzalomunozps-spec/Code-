@@ -4055,11 +4055,25 @@ def pruebas_observaciones_campo():
 
 
 def pruebas_copias():
-    """Copias de seguridad de la base de datos (modulo copias)."""
-    import copias
+    """Copias de seguridad de la base de datos (modulo OPCIONAL `copias`).
+
+    Se importa con try/except como el resto de grupos opcionales: `copias.py` se
+    declara borrable en ARQUITECTURA §6 y hasta ahora borrarlo tumbaba la suite,
+    que es justo lo contrario de lo que ese contrato promete."""
+    try:
+        import copias
+    except Exception:
+        return                                   # modulo borrado -> nada que probar
     import rutas
     import sqlite3
     import almacen as DB
+
+    def _leer_x(ruta):
+        cn = sqlite3.connect(ruta)
+        try:
+            return cn.execute("SELECT x FROM t").fetchone()[0]
+        finally:
+            cn.close()
 
     d = tempfile.mkdtemp()
     prev = os.environ.get(rutas.VAR_ENTORNO)
@@ -4091,6 +4105,27 @@ def pruebas_copias():
         check("copias: al restaurar se guarda antes una copia de seguridad de los datos actuales",
               lambda: any(f.startswith(copias.PREFIJO_RESTAURAR) for f in os.listdir(copias.dir_copias())),
               lambda r: r is True)
+
+        # La copia de RESCATE (la de "por si me arrepiento") se hacia con
+        # shutil.copy2, que sobre una base en modo WAL copia el .db sin lo que
+        # todavia esta en el -wal: salia coja justo en la copia que no puede fallar.
+        cn = sqlite3.connect(db)
+        cn.execute("PRAGMA journal_mode=WAL")
+        cn.execute("UPDATE t SET x=1234")
+        cn.commit()                              # confirmado, pero aun en el -wal
+        hay_wal = os.path.exists(db + "-wal") and os.path.getsize(db + "-wal") > 0
+        copias.restaurar(r2, db)                 # r2 tiene x=99
+        cn.close()
+        # la mas reciente por fecha de fichero: el nombre lleva la hora al segundo,
+        # asi que dos rescates seguidos pueden compartirlo y el ultimo pisa al otro
+        rescates = sorted((f for f in os.listdir(copias.dir_copias())
+                           if f.startswith(copias.PREFIJO_RESTAURAR)),
+                          key=lambda f: os.path.getmtime(os.path.join(copias.dir_copias(), f)))
+        check("copias: con la base en WAL, hay cambios confirmados fuera del .db",
+              lambda: hay_wal, lambda r: r is True)
+        check("copias: la copia de rescate NO pierde lo ultimo escrito (WAL incluido)",
+              lambda: _leer_x(os.path.join(copias.dir_copias(), rescates[-1])),
+              lambda r: r == 1234)
 
         # rotacion: no mas de `maximo` copias con fecha
         for i in range(15):

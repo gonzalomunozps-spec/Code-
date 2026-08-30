@@ -158,7 +158,12 @@ def restaurar(ruta_copia, destino_db):
         if os.path.exists(destino_db):
             seg = os.path.join(dir_copias(),
                                PREFIJO_RESTAURAR + datetime.now().strftime("%Y%m%d_%H%M%S") + SUFIJO)
-            shutil.copy2(destino_db, seg)
+            # `_copiar_db`, NO shutil.copy2: la base va en modo WAL, asi que lo
+            # escrito mas recientemente puede estar todavia en el fichero `-wal` y
+            # no en el `.db`. Copiar el `.db` a secas da una instantanea SIN esos
+            # cambios, y esta es justamente la copia a la que el usuario recurre si
+            # se arrepiente de la restauracion: la unica que no puede salir coja.
+            _copiar_db(destino_db, seg)
         shutil.copy2(ruta_copia, destino_db)
         # una base restaurada por copia no tiene WAL pendiente: si quedaban de la
         # base anterior, hay que quitarlos o SQLite mezclaria datos de las dos.
