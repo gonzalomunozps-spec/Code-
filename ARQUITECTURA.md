@@ -79,7 +79,7 @@ Son la base testeable. Ninguno importa a otro.
 ### Capa 2 — Dominio
 | Módulo | Responsabilidad |
 |---|---|
-| `interpretacion_fenologica.py` | **El cerebro.** `evaluar_parcela` produce el diagnóstico; `texto_interpretacion` lo redacta (ChatGPT si hay clave, si no por reglas); `ajuste_por_validaciones` aprende de las correcciones del usuario. |
+| `interpretacion_fenologica.py` | **El cerebro.** `evaluar_parcela` produce el diagnóstico **como tubería de reglas** (ver §4b); `texto_interpretacion` lo redacta (ChatGPT si hay clave, si no por reglas); `ajuste_por_validaciones` aprende de las correcciones del usuario. |
 | `registro_parcela.py` | Cuaderno de campo: eventos, `efecto_producto` (respuesta del cultivo tras una aplicación) y captura de **cosecha** (kg/ha, humedad, superficie, origen del dato). |
 | `sentinel1.py` | Radar: VV/VH, RVI, CR, incertidumbre y fiabilidad; relación con el óptico. **Puro**: la descarga está en `gee_cliente`. |
 | `vista_ficha.py` | La LÓGICA de la ficha, sin Tk: decide **qué** interpretación mostrar (recorta la serie a la pasada elegida, evalúa, afina con el historial, aplica tu validación) y monta los contextos que usan los diálogos. La ficha (`ui_ficha`) solo lo pinta. Probado sin pantalla — antes esta lógica solo la veía `pruebas_interfaz`. |
@@ -105,8 +105,8 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 841 pruebas sin pantalla ni red. |
-| `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.493 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
+| `pruebas.py` | 888 pruebas sin pantalla ni red. |
+| `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.499 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -450,6 +450,52 @@ todas las parcelas.
 
 ---
 
+## 4b. El diagnóstico, como tubería de reglas
+
+`evaluar_parcela` era una función de **346 líneas, complejidad ciclomática 108 y 57
+nombres locales** (medido, no citado). Lo difícil no era la agronomía: era que once
+bloques seguidos mutaban las **mismas tres variables** (`clave`, `estado`, `motivo`),
+así que para saber qué hacía el séptimo había que haber leído los seis anteriores, y
+el **orden** —que es significativo— sólo existía como posición de las líneas.
+
+Hoy son tres piezas, y `evaluar_parcela` queda en **CC 4, 47 líneas y 13 locales**:
+
+1. **`_preparar_contexto`** → `_Ctx`, una tupla con nombres, **de sólo lectura**: fase,
+   umbrales calibrados, deltas, qué índice juzga y contra qué listón, cubierta,
+   heterogeneidad. Que sea inmutable no es adorno: impide que una regla le cambie el
+   suelo a la siguiente, que es justo lo que pasaba antes.
+2. **`_juicio_base`** → el veredicto de partida. Sigue siendo la misma cadena
+   **exclusiva** de siempre: sin NDVI → corte de forraje → caída propia de la fase →
+   nivel del índice → caída brusca → OK.
+3. **`REGLAS`** → las que **matizan** ese veredicto. Cada una es `f(ctx, diag)` y
+   devuelve un `_Efecto` (o `None` si no aplica). El efecto dice tres cosas: qué
+   estado deja, qué texto añade —o si **sustituye** el motivo entero— y si marca el
+   caso como esperado.
+
+**El orden es una lista con nombre**, no la posición de las líneas:
+
+| # | Regla | Qué hace |
+|---|---|---|
+| 1 | `traza_indice` | dice **con qué** se ha juzgado (NDVI, MSAVI, media limpia de arbolado) |
+| 2 | `lenoso_sin_hoja` | **la única que baja el nivel**: por eso va antes que las que lo suben |
+| 3 | `vigor_copa` | leñosos: MSAVI de copa por debajo de lo esperado |
+| 4 | `falta_de_agua` | NDMI bajo, con el déficit buscado y la sequía comarcal dentro |
+| 5 | `eventos_cuaderno` | **pisa todo lo anterior**: lo apuntado por el agricultor manda sobre lo deducido |
+| 6 | `zonas` | aviso de foco; se calla si el evento o el corte ya lo explicaron |
+| 7 | `nota_calibracion` | cierra diciendo si el umbral salió de tus validaciones |
+
+Para añadir una regla: se escribe la función, se mete en `REGLAS` **en su sitio** y se
+mira qué dice `pruebas_oro.py`. Si el veredicto no debía cambiar y cambia, la regla
+está mal colocada.
+
+Dos cautelas que el refactor **no** ha tocado y conviene conocer:
+- `clave` y `estado` no son lo mismo. Coinciden siempre **salvo en el corte de
+  forraje**, que es `clave="OK"` y `estado="Segado"`. Por eso `_Diag` lleva los dos.
+- `_regla_zonas` necesita saber si un evento explicó ya la caída. Ese es el único
+  dato que fluye de una regla a otra, y viaja explícito en `_Diag.evento_explica`.
+
+---
+
 ## 5. La interfaz: dónde está cada cosa
 
 Era un monolito de **4.313 líneas** —la deuda técnica número uno— y está partido en
@@ -572,7 +618,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 841 pruebas, sin pantalla ni red (incluye el fichero de oro)
+python pruebas.py          # 888 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
@@ -592,7 +638,7 @@ para tocar el motor, porque dos caminos distintos que acaben los dos en «Vigila
 son indistinguibles para esa suite. El fichero de oro congela la **salida completa**
 —`clave`, `estado`, `esperado`, `fase`, `rango_fase`, `ndvi_juicio`, `umbrales`, el
 `motivo` que lee el agricultor, los textos de los deltas y el veredicto de
-copa/cubierta/heterogeneidad— de **3.493 entradas** generadas por barrido.
+copa/cubierta/heterogeneidad— de **3.499 entradas** generadas por barrido.
 
 Qué cubre el barrido: las 12 especies de extensivo y las 4 de leñoso, cada fase con
 sus **fronteras exactas** (día anterior, día justo y día siguiente al cambio), NDVI

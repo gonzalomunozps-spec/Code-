@@ -4408,6 +4408,227 @@ def pruebas_empaquetar():
 
 # =====================================================================
 # =====================================================================
+# 38. LAS REGLAS DEL MOTOR, UNA A UNA (tuberia de `interpretacion_fenologica`)
+# =====================================================================
+def pruebas_reglas_motor():
+    """Cada regla por separado, con su tabla de casos.
+
+    El fichero de oro dice SI algo ha cambiado; esto dice QUE hace cada regla y por
+    que. Las dos cosas hacen falta: una es la red, la otra es la documentacion
+    ejecutable de la tuberia."""
+    import interpretacion_fenologica as IF
+
+    def ctx(tipo="EXTENSIVO", subtipo="COSECHA_GRANO", serie=None, spec=None, **cambios):
+        """Un contexto REAL, montado por el mismo camino que usa el motor, y luego
+        retocado con `_replace`. Asi las pruebas no inventan un contexto a mano que
+        podria no parecerse al de verdad."""
+        serie = serie or [{"fecha": "2026-03-01", "ndvi": 0.60, "ndmi": 0.20, "lai": 2.5}]
+        spec = spec if spec is not None else {"especie": "TRIGO",
+                                              "fecha_siembra": "2025-10-15"}
+        c = IF._preparar_contexto(tipo, subtipo, serie, None, None, spec, None, True, False)
+        return c._replace(**cambios) if cambios else c
+
+    def diag(clave="OK", estado=None, motivo="M.", esperado=False, evento=False):
+        return IF._Diag(clave, estado or clave, motivo, esperado, evento)
+
+    # --- el veredicto base: la cadena exclusiva, rama a rama ---------------
+    check("regla base: sin NDVI -> Sin dato",
+          lambda: IF._juicio_base(ctx(ndvi=None))[:2], lambda r: r == ("Sin", "Sin dato"))
+    check("regla base: corte de forraje -> Segado (clave OK, estado Segado)",
+          lambda: IF._juicio_base(ctx(segado=True, mes_act=4, d_ndvi=-0.40)),
+          lambda d: (d.clave, d.estado, d.esperado) == ("OK", "Segado", True)
+                    and "SEGADO en verde" in d.motivo)
+    check("regla base: caida propia de la fase -> OK y esperado",
+          lambda: IF._juicio_base(ctx(caida_ok=True, d_ndvi=-0.20)),
+          lambda d: d.estado == "OK" and d.esperado is True
+                    and "coherente con la fase" in d.motivo)
+    check("regla base: muy por debajo del rango -> Revisar",
+          lambda: IF._juicio_base(ctx(ndvi_juicio=0.20, lo=0.55, hi=0.85)).estado,
+          lambda r: r == "Revisar")
+    check("regla base: algo por debajo del rango -> Vigilar",
+          lambda: IF._juicio_base(ctx(ndvi_juicio=0.50, lo=0.55, hi=0.85)).estado,
+          lambda r: r == "Vigilar")
+    check("regla base: caida brusca NO esperada -> Revisar",
+          lambda: IF._juicio_base(ctx(caida_ok=False, d_ndvi=-0.20,
+                                      ndvi_juicio=0.70, lo=0.55, hi=0.85)),
+          lambda d: d.estado == "Revisar" and "NO esperada" in d.motivo)
+    check("regla base: dentro del rango -> OK",
+          lambda: IF._juicio_base(ctx(ndvi_juicio=0.70, lo=0.55, hi=0.85)).estado,
+          lambda r: r == "OK")
+    check("regla base: el orden manda, un segado con caida propia sigue siendo Segado",
+          lambda: IF._juicio_base(ctx(segado=True, mes_act=5, caida_ok=True,
+                                      d_ndvi=-0.40)).estado,
+          lambda r: r == "Segado")
+
+    # --- traza del indice usado -------------------------------------------
+    check("regla traza: en extensivo dice el contraste de indices",
+          lambda: (IF._regla_traza_indice(ctx(), diag()) or IF._Efecto()).texto,
+          lambda t: "Contraste de indices" in t)
+    check("regla traza: si se juzga con MSAVI, lo dice y no cambia el estado",
+          lambda: IF._regla_traza_indice(ctx(indice_juicio="MSAVI"), diag()),
+          lambda e: e.estado is None and "se juzga con MSAVI" in e.texto)
+    check("regla traza: el enmascarado de arbolado se declara con los dos valores",
+          lambda: IF._regla_traza_indice(ctx(ndvi_limpio=0.42), diag()).texto,
+          lambda t: "Arbolado disperso" in t and "0.420" in t)
+
+    # --- leñoso caduco sin hoja: la unica regla que BAJA el nivel ----------
+    inv = {"invierno_sin_hoja": True}
+    check("regla sin hoja: no aplica si la fase no es de parada invernal",
+          lambda: IF._regla_lenoso_sin_hoja(ctx(fase_esp={}), diag()), lambda r: r is None)
+    check("regla sin hoja: rescata un Revisar a OK y lo marca esperado",
+          lambda: IF._regla_lenoso_sin_hoja(ctx(fase_esp=inv, ndvi=0.20, lo=0.25),
+                                            diag("Revisar")),
+          lambda e: (e.estado, e.esperado, e.reemplaza) == ("OK", True, True)
+                    and "parada invernal" in e.texto)
+    check("regla sin hoja: si el NDVI esta MUY por debajo, no rescata",
+          lambda: IF._regla_lenoso_sin_hoja(ctx(fase_esp=inv, ndvi=0.05, lo=0.25),
+                                            diag("Revisar")),
+          lambda e: e.estado is None and e.reemplaza is False)
+    check("regla sin hoja: con el diagnostico ya en OK solo anade la explicacion",
+          lambda: IF._regla_lenoso_sin_hoja(ctx(fase_esp=inv, ndvi=0.20, lo=0.25), diag("OK")),
+          lambda e: e.estado is None and "SIN HOJA" in e.texto)
+
+    # --- vigor de copa (lenosos) ------------------------------------------
+    serie_len = [{"fecha": "2026-06-15", "ndvi": 0.50, "ndmi": 0.20, "lai": 2.0,
+                  "msavi": 0.10}]
+    spec_len = {"especie": "OLIVO", "marco_calle": 10, "marco_pie": 10}
+    c_len = ctx(tipo="LENOSO", subtipo="TRADICIONAL", serie=serie_len, spec=spec_len)
+    check("regla copa: en extensivo no aplica",
+          lambda: IF._regla_vigor_copa(ctx(), diag()), lambda r: r is None)
+    check("regla copa: con la copa por encima del umbral, solo la nota de confianza",
+          # msavi 0.100 contra un umbral en escala de parcela de 0.099: no baja de el,
+          # asi que no hay aviso de vigor; lo unico que queda es decir que copa y
+          # calle no se separan bien con un marco de 10x10
+          lambda: IF._regla_vigor_copa(c_len, diag("OK")),
+          lambda e: e.estado is None and "no se separan bien" in e.texto
+                    and "Vigor de copa" not in e.texto)
+    check("regla copa: copa POR DEBAJO del umbral con el resto en OK -> sube a Vigilar",
+          lambda: IF._regla_vigor_copa(
+              c_len._replace(fase_esp=dict(c_len.fase_esp, msavi_min_parcela=0.30)),
+              diag("OK")),
+          lambda e: e.estado == "Vigilar" and "Vigor de copa por debajo" in e.texto)
+    check("regla copa: sin fraccion de copa NO puede llegar a Revisar por si sola",
+          lambda: IF._regla_vigor_copa(
+              c_len._replace(fase_esp=dict(c_len.fase_esp, fraccion_copa=None,
+                                           msavi_min_parcela=0.30)),
+              diag("Vigilar")),
+          lambda e: e.estado is None)
+    check("regla copa: con fraccion de copa declarada, un Vigilar sube a Revisar",
+          lambda: IF._regla_vigor_copa(
+              c_len._replace(fase_esp=dict(c_len.fase_esp, fraccion_copa=0.25,
+                                           msavi_min_parcela=0.30)),
+              diag("Vigilar")),
+          lambda e: e.estado == "Revisar")
+
+    # --- falta de agua ----------------------------------------------------
+    umb = dict(ndmi_min=0.10, critica=False, regimen="SECANO")
+    check("regla agua: NDMI por encima del minimo -> no dice nada",
+          lambda: IF._regla_falta_de_agua(ctx(ndmi=0.30, umbrales=umb), diag("OK")),
+          lambda r: r is None)
+    check("regla agua: NDMI bajo con el resto en OK -> Vigilar",
+          lambda: IF._regla_falta_de_agua(ctx(ndmi=0.02, umbrales=umb), diag("OK")),
+          lambda e: e.estado == "Vigilar" and "estres hidrico" in e.texto)
+    check("regla agua: NDMI bajo sobre un Vigilar -> agrava a Revisar",
+          lambda: IF._regla_falta_de_agua(ctx(ndmi=0.02, umbrales=umb), diag("Vigilar")),
+          lambda e: e.estado == "Revisar" and "agrava" in e.texto)
+    check("regla agua: sobre un Revisar solo acompana, no puede subir mas",
+          lambda: IF._regla_falta_de_agua(ctx(ndmi=0.02, umbrales=umb), diag("Revisar")),
+          lambda e: e.estado is None and "asociado" in e.texto)
+    check("regla agua: si la caida ya era ESPERADA, el NDMI no escala",
+          lambda: IF._regla_falta_de_agua(ctx(ndmi=0.02, umbrales=umb),
+                                          diag("OK", esperado=True)),
+          lambda r: r is None)
+    check("regla agua: donde el deficit es BUSCADO, se explica y no se avisa",
+          lambda: IF._regla_falta_de_agua(
+              ctx(ndmi=0.02, umbrales=dict(umb, deficit_buscado=True)), diag("OK")),
+          lambda e: e.estado is None and "es lo esperado" in e.texto)
+    check("regla agua: en fase critica se dice lo que se juega",
+          lambda: IF._regla_falta_de_agua(
+              ctx(ndmi=0.02, umbrales=dict(umb, critica=True)), diag("OK")).texto,
+          lambda t: "se lleva por delante el rendimiento" in t)
+
+    # --- eventos del cuaderno: PISAN el motivo -----------------------------
+    ev = [(2, {"tipo": "SIEGA", "fecha": "2026-02-27"})]
+    check("regla eventos: sin eventos no hace nada",
+          lambda: IF._regla_eventos_cuaderno(ctx(), diag()), lambda r: r is None)
+    check("regla eventos: una siega registrada explica la caida y SUSTITUYE el motivo",
+          lambda: IF._regla_eventos_cuaderno(ctx(eventos_cerca=ev, d_ndvi=-0.30),
+                                             diag("Revisar")),
+          lambda e: (e.estado, e.esperado, e.reemplaza) == ("OK", True, True))
+    check("regla eventos: un evento que NO explica la caida no cambia nada",
+          lambda: IF._regla_eventos_cuaderno(
+              ctx(eventos_cerca=[(2, {"tipo": "RIEGO", "fecha": "2026-02-27"})],
+                  d_ndvi=-0.30), diag("Revisar")),
+          lambda r: r is None)
+
+    # --- zonas (heterogeneidad) -------------------------------------------
+    foco = {"patron": "deterioro LOCALIZADO", "d_std": 0.06}
+    check("regla zonas: con el analisis apagado no dice nada",
+          lambda: IF._regla_zonas(ctx(hetero=foco, heterogeneidad_activa=False), diag("OK")),
+          lambda r: r is None)
+    check("regla zonas: si un evento ya lo explico, no se solapan avisos",
+          lambda: IF._regla_zonas(ctx(hetero=foco), diag("OK", evento=True)),
+          lambda r: r is None)
+    check("regla zonas: tras un corte de forraje tampoco",
+          lambda: IF._regla_zonas(ctx(hetero=foco, segado=True), diag("OK")),
+          lambda r: r is None)
+    check("regla zonas: deterioro LOCALIZADO avisa de foco y sube un OK a Vigilar",
+          lambda: IF._regla_zonas(ctx(hetero=foco), diag("OK")),
+          lambda e: e.estado == "Vigilar" and "FOCO" in e.texto)
+    check("regla zonas: sobre una caida ESPERADA avisa pero no sube el nivel",
+          lambda: IF._regla_zonas(ctx(hetero=foco), diag("OK", esperado=True)),
+          lambda e: e.estado is None and "FOCO" in e.texto)
+    check("regla zonas: deterioro GENERALIZADO apunta a causa general, sin subir",
+          lambda: IF._regla_zonas(ctx(hetero={"patron": "deterioro GENERALIZADO"}),
+                                  diag("OK")),
+          lambda e: e.estado is None and "GENERALIZADO" in e.texto)
+    check("regla zonas: aviso TEMPRANO cuando la parcela se desiguala sin mover la media",
+          lambda: IF._regla_zonas(ctx(hetero={"patron": "heterogeneidad creciente",
+                                              "d_std": 0.04}), diag("OK")),
+          lambda e: e.estado == "Vigilar" and "AVISO TEMPRANO" in e.texto)
+    check("regla zonas: un rodal hundido tambien dispara el aviso temprano",
+          lambda: IF._regla_zonas(ctx(hetero={"rodal_sospechoso": True,
+                                              "hundimiento": 0.12}), diag("OK")).texto,
+          lambda t: "rodal hundido" in t)
+    check("regla zonas: sin patron ni rodal, no hay aviso",
+          lambda: IF._regla_zonas(ctx(hetero={"disponible": False}), diag("OK")),
+          lambda r: r is None)
+
+    # --- nota de calibracion ----------------------------------------------
+    check("regla calibracion: si el umbral es de tabla, no se dice nada",
+          lambda: IF._regla_nota_calibracion(ctx(umbrales={"calibrado": None}), diag()),
+          lambda r: r is None)
+
+    # --- el aplicador y el ORDEN ------------------------------------------
+    check("aplicar: un efecto sin estado conserva el veredicto y anade texto",
+          lambda: IF._aplicar(diag("Vigilar", motivo="A"), IF._Efecto(texto="B"), "x"),
+          lambda d: (d.clave, d.estado, d.motivo) == ("Vigilar", "Vigilar", "AB"))
+    check("aplicar: `reemplaza` sustituye el motivo entero",
+          lambda: IF._aplicar(diag("Revisar", motivo="A"),
+                              IF._Efecto(estado="OK", texto="B", reemplaza=True), "x").motivo,
+          lambda r: r == "B")
+    check("aplicar: un efecto nulo deja el veredicto intacto",
+          lambda: IF._aplicar(diag("Vigilar"), None, "x"), lambda d: d.estado == "Vigilar")
+    check("aplicar: solo la regla de eventos marca `evento_explica`",
+          lambda: (IF._aplicar(diag(), IF._Efecto(texto="x"), "zonas").evento_explica,
+                   IF._aplicar(diag(), IF._Efecto(texto="x"), "eventos_cuaderno").evento_explica),
+          lambda r: r == (False, True))
+    check("tuberia: el orden de las reglas es dato explicito y no ha cambiado",
+          lambda: [n for n, _f in IF.REGLAS],
+          lambda r: r == ["traza_indice", "lenoso_sin_hoja", "vigor_copa",
+                          "falta_de_agua", "eventos_cuaderno", "zonas",
+                          "nota_calibracion"])
+    check("tuberia: toda regla devuelve None o un _Efecto, nunca otra cosa",
+          lambda: {type(f(ctx(), diag())).__name__ for _n, f in IF.REGLAS},
+          lambda r: r <= {"NoneType", "_Efecto"})
+    check("tuberia: el contexto es de SOLO LECTURA (ninguna regla puede tocarlo)",
+          lambda: IF._preparar_contexto("EXTENSIVO", "COSECHA_GRANO",
+                                        [{"fecha": "2026-03-01", "ndvi": 0.6}], None, None,
+                                        None, None, True, False),
+          lambda c: isinstance(c, tuple) and not hasattr(c, "__dict__"))
+
+
+# =====================================================================
 # 38. FICHERO DE ORO DEL MOTOR (modulo pruebas_oro)
 # =====================================================================
 def pruebas_oro_motor():
@@ -4462,7 +4683,7 @@ def main():
               pruebas_observaciones_campo, pruebas_copias, pruebas_variedades,
               pruebas_pradera, pruebas_sync_cancelable,
               pruebas_instalador,
-              pruebas_empaquetar, pruebas_oro_motor):
+              pruebas_empaquetar, pruebas_reglas_motor, pruebas_oro_motor):
         try:
             f()
         except Exception as e:

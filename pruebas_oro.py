@@ -415,6 +415,33 @@ def _casos_heterogeneidad():
                     tipo="EXTENSIVO", subtipo="COSECHA_GRANO", serie=serie,
                     spec={"especie": "TRIGO", "fecha_siembra": SIEMBRA_OTONO},
                     heterogeneidad_activa=activa)
+    # CRUCE evento + zonas: el aviso de foco NO debe solaparse con un evento del
+    # cuaderno que ya explica la caida. Sin este bloque, el barrido no cubria ese
+    # cruce -lo detecte mutando la regla: solo lo cazaban las pruebas unitarias-.
+    ev_siega = [(2, {"tipo": "SIEGA", "fecha": _iso(SIEMBRA_OTONO, 138)})]
+    for et_ev, evs in (("con_evento", ev_siega), ("sin_evento", None)):
+        for et_esp, extra in (("dispersa", espacial), ("uniforme", espacial_uniforme)):
+            serie = [_pasada(_iso(SIEMBRA_OTONO, 128), 0.72,
+                             extra={"ndvi_std": 0.04, "ndvi_p10": 0.68,
+                                    "ndvi_p50": 0.72, "ndvi_p90": 0.76,
+                                    "n_pixeles": 900}),
+                     _pasada(_iso(SIEMBRA_OTONO, 140), 0.32, extra=extra)]
+            cid = f"HETERO|evento|{et_ev}|{et_esp}"
+            kw = dict(tipo="EXTENSIVO", subtipo="COSECHA_GRANO", serie=serie,
+                      spec={"especie": "TRIGO", "fecha_siembra": SIEMBRA_OTONO})
+            if evs:
+                kw["eventos_cerca"] = evs
+            yield cid, kw
+    # y el mismo cruce con un CORTE de forraje, que tambien silencia el aviso
+    for et_esp, extra in (("dispersa", espacial), ("uniforme", espacial_uniforme)):
+        serie = [_pasada(f"{ANO_LENOSO}-04-01", 0.75,
+                         extra={"ndvi_std": 0.04, "ndvi_p10": 0.71, "ndvi_p50": 0.75,
+                                "ndvi_p90": 0.79, "n_pixeles": 900}),
+                 _pasada(f"{ANO_LENOSO}-04-15", 0.25, extra=extra)]
+        yield f"HETERO|segado|{et_esp}", dict(
+            tipo="EXTENSIVO", subtipo="SIEGA_VERDE", serie=serie,
+            spec={"especie": "VEZA", "fecha_siembra": SIEMBRA_OTONO})
+
     # arbolado disperso: el juicio se hace sobre el NDVI del cultivo, no la media
     for arbolado in (True, False):
         cid = f"HETERO|arbolado{'ON' if arbolado else 'OFF'}|-"

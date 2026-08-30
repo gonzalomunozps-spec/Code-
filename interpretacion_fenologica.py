@@ -24,6 +24,7 @@ Uso desde panel_gestion_parcelas.py:
 
 import os
 import json
+from collections import namedtuple
 from datetime import datetime
 
 import fenologia_especies as FEN
@@ -347,38 +348,89 @@ def _detectar_segado(siega_verde, ndvi, d_ndvi, prev, fecha):
     return segado, mes_act
 
 
-def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
-                    parcela=None, heterogeneidad_activa=True, arbolado=False):
-    """
-    Devuelve un dict con el diagnostico completo. Semaforo y explicacion
-    coherentes entre si, con fenologia y (en lenosos) cubierta vegetal.
+# =====================================================================
+# 4b. EL DIAGNOSTICO, COMO TUBERIA DE REGLAS
+# =====================================================================
+# `evaluar_parcela` era una funcion de 346 lineas y 57 nombres locales. Lo dificil
+# no era la agronomia: era que once bloques seguidos mutaban las MISMAS tres
+# variables (`clave`, `estado`, `motivo`), asi que para saber que hacia el septimo
+# habia que haber leido los seis anteriores, y el ORDEN -que es significativo- solo
+# existia como posicion de las lineas en el fichero.
+#
+# Ahora hay tres piezas:
+#   1. `_Ctx`   : todo lo CALCULADO antes de juzgar (fase, umbrales, indice de
+#                 juicio, deltas...). Es una tupla con nombres: de solo lectura, para
+#                 que ninguna regla pueda cambiarle el suelo a la siguiente.
+#   2. `_juicio_base` : la cadena de decision principal, que asigna el primer
+#                 veredicto. Sigue siendo un if/elif exclusivo, como estaba.
+#   3. `REGLAS` : las reglas que MATIZAN ese veredicto, cada una `f(ctx, diag)` que
+#                 devuelve un `_Efecto` o None. El orden es una lista con nombre, no
+#                 la posicion de las lineas.
+#
+# Lo que NO ha cambiado: ni un umbral, ni un texto, ni un estado, ni el orden. La
+# prueba de eso es `pruebas_oro.py`: 3.493 entradas con su salida completa
+# congelada, que pasa identica antes y despues.
 
-    parcela: nombre, solo para poder aplicar los umbrales que el usuario haya
-        calibrado con sus validaciones (modulo OPCIONAL calibracion_umbrales).
-        Sin este argumento -o sin ese modulo- se juzga con la tabla de siempre.
+_Ctx = namedtuple("_Ctx", [
+    "tipo", "subtipo", "serie", "act", "prev", "fecha", "spec", "parcela",
+    "eventos_cerca", "heterogeneidad_activa",
+    "fase", "fase_esp", "lo", "hi", "caida_ok", "siega_verde", "umbrales",
+    "ndvi", "ndmi", "d_ndvi", "deltas",
+    "ndvi_juicio", "indice_juicio", "ndvi_limpio",
+    "contraste", "copa", "separacion", "cubierta", "hetero",
+    "segado", "mes_act",
+])
 
-    heterogeneidad_activa: si es False, NO se analizan zonas dentro de la parcela
-        ni se avisa de focos. Hay parcelas donde ese aviso solo estorba (muy
-        pequenas, muy uniformes, o donde ya se sabe de donde viene la mancha).
-        Los estadisticos se siguen calculando y mostrando: lo que se apaga es el
-        JUICIO sobre ellos, no el dato.
+# Que cambia una regla. `estado` a None = deja el veredicto como esta; `texto` se
+# ANADE al motivo salvo que `reemplaza` sea True, y entonces lo sustituye entero;
+# `esperado` a None = no lo toca.
+_Efecto = namedtuple("_Efecto", ["estado", "texto", "esperado", "reemplaza"])
+_Efecto.__new__.__defaults__ = (None, "", None, False)
 
-    eventos_cerca: lista opcional [(dias, evento), ...] del cuaderno de campo.
-    spec: dict opcional con el modelo por especie:
-        {"especie": ..., "fecha_siembra": ..., "marco_calle": ..., "marco_pie": ...}
-        Si se aporta, la fenologia se calcula por especie (cereal por dias desde
-        siembra; leñoso por mes + marco). Si no, se usa el calendario por meses.
-    """
-    if tipo == "BARBECHO":
-        return {"estado": "N.A.", "clave": "NA", "fase": "barbecho",
-                "motivo": "Parcela en barbecho: no se evalua el vigor del cultivo.",
-                "deltas": {}, "cubierta": None, "esperado": True}
+# El veredicto en curso. `clave` y `estado` van juntos SALVO en el corte de forraje,
+# que es "OK" de clave y "Segado" de estado; por eso son dos campos y no uno.
+_Diag = namedtuple("_Diag", ["clave", "estado", "motivo", "esperado", "evento_explica"])
 
-    if not serie:
-        return {"estado": "Sin dato", "clave": "Sin", "fase": "-",
-                "motivo": "Sin pasadas validas de satelite.", "deltas": {},
-                "cubierta": None, "esperado": False}
 
+def _indice_de_juicio_lenoso(serie, act, prev, fase_esp, contraste,
+                             ndvi_juicio, lo, hi, d_ndvi):
+    """En un leñoso, decide CON QUE INDICE se juzga y CONTRA QUE LISTON.
+
+    Reparto copa/cubierta con UNA sola lectura (ver contraste_indices). Usa los
+    percentiles de la pasada cuando los hay: el p90 es mucho mejor proxy de la copa
+    que la media, porque la media se come la calle.
+
+    Si la cubierta domina, el NDVI esta inflado por la hierba y deja de servir: se
+    juzga con el MSAVI. Pero entonces HAY QUE CAMBIAR TAMBIEN EL LISTON. Se comparaba
+    el MSAVI contra el rango de NDVI de la fase, que es otra magnitud: un MSAVI de
+    0.11 frente a un "0.16-0.23" de NDVI da "Revisar" por construccion. El rango pasa
+    a ser el del MSAVI en la misma escala de parcela (ver fenologia_especies).
+
+    Devuelve (separacion, copa, ndvi_juicio, indice_juicio, lo, hi, d_ndvi) ya
+    resueltos; si no hay separacion posible, devuelve lo que entro."""
+    separacion = separacion_copa_cubierta(serie, fase_esp, act)
+    if not separacion:
+        return separacion, contraste, ndvi_juicio, "NDVI", lo, hi, d_ndvi
+    copa = dict(contraste or {}, **{"separacion": separacion})
+    candidato = act.get("msavi")
+    # sin ficha de especie no hay conversion de escala posible, y sin ella
+    # no se puede juzgar en MSAVI: se sigue con el NDVI, como siempre
+    lo_msavi = (fase_esp or {}).get("msavi_min_parcela")
+    if not (separacion["cubierta_domina"] and candidato is not None and lo_msavi is not None):
+        return separacion, copa, ndvi_juicio, "NDVI", lo, hi, d_ndvi
+    hi_msavi = (fase_esp or {}).get("msavi_max_parcela") or max(lo_msavi, candidato)
+    if prev and prev.get("msavi") is not None and act.get("msavi") is not None:
+        d_ndvi = act["msavi"] - prev["msavi"]
+    return separacion, copa, candidato, "MSAVI", lo_msavi, hi_msavi, d_ndvi
+
+
+def _preparar_contexto(tipo, subtipo, serie, fecha_iso, eventos_cerca, spec, parcela,
+                       heterogeneidad_activa, arbolado):
+    """Todo lo que hay que CALCULAR antes de juzgar nada.
+
+    Es el mismo bloque de cabecera que tenia `evaluar_parcela`, en el mismo orden y
+    con las mismas llamadas; lo unico que cambia es que acaba en una tupla de solo
+    lectura en vez de en treinta variables sueltas."""
     act = serie[-1]
     prev = serie[-2] if len(serie) > 1 else None
     fecha = fecha_iso or act.get("fecha")
@@ -427,215 +479,18 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         except Exception:
             log.debug("no se pudo enmascarar el arbolado para el juicio", exc_info=True)
     if tipo == "LENOSO":
-        # Reparto copa/cubierta con UNA sola lectura (ver contraste_indices). Usa
-        # los percentiles de la pasada cuando los hay: el p90 es mucho mejor proxy
-        # de la copa que la media, porque la media se come la calle.
-        separacion = separacion_copa_cubierta(serie, fase_esp, act)
-        if separacion:
-            copa = dict(contraste or {}, **{"separacion": separacion})
-            hay_cubierta = separacion["cubierta_domina"]
-            # Si la cubierta domina, el NDVI esta inflado por la hierba y deja de
-            # servir: se juzga con el MSAVI. Pero entonces HAY QUE CAMBIAR TAMBIEN
-            # EL LISTON. Se comparaba el MSAVI contra el rango de NDVI de la fase,
-            # que es otra magnitud: un MSAVI de 0.11 frente a un "0.16-0.23" de
-            # NDVI da "Revisar" por construccion. El rango pasa a ser el del MSAVI
-            # en la misma escala de parcela (ver fenologia_especies).
-            candidato = act.get("msavi")
-            # sin ficha de especie no hay conversion de escala posible, y sin ella
-            # no se puede juzgar en MSAVI: se sigue con el NDVI, como siempre
-            lo_msavi = (fase_esp or {}).get("msavi_min_parcela")
-            if hay_cubierta and candidato is not None and lo_msavi is not None:
-                ndvi_juicio = candidato
-                indice_juicio = "MSAVI"
-                lo = lo_msavi
-                hi = (fase_esp or {}).get("msavi_max_parcela") or max(lo_msavi, candidato)
-                if prev and prev.get("msavi") is not None and act.get("msavi") is not None:
-                    d_ndvi = act["msavi"] - prev["msavi"]
+        (separacion, copa, ndvi_juicio, indice_juicio,
+         lo, hi, d_ndvi) = _indice_de_juicio_lenoso(
+            serie, act, prev, fase_esp, contraste, ndvi_juicio, lo, hi, d_ndvi)
 
     # --- SIEGA EN VERDE: una caida drastica del NDVI en primavera = SEGADO ---
     # En forraje segado en verde, un desplome en abril-mayo no es un problema: el
     # cultivo se ha CORTADO. Se marca "Segado" para que no salte como anomalia.
     segado, mes_act = _detectar_segado(siega_verde, ndvi, d_ndvi, prev, fecha)
 
-    # --- juicio unico ---
-    esperado = False
-    if ndvi is None:
-        clave, estado, motivo = "Sin", "Sin dato", "Sin NDVI valido (nubosidad)."
-    elif segado:
-        clave, estado = "OK", "Segado"
-        _mes_txt = {4: "abril", 5: "mayo"}.get(mes_act, "primavera")
-        motivo = (f"Caida drastica del NDVI ({d_ndvi:+.3f}) en {_mes_txt}: el cultivo se ha "
-                  "SEGADO en verde (corte de forraje). Es lo esperado en esta modalidad; "
-                  "el rebrote volvera a elevar los indices en las proximas pasadas.")
-        esperado = True
-    elif caida_ok and d_ndvi is not None and d_ndvi < -0.10:
-        # caida fuerte PERO propia de la fase: senescencia, siega, cosecha
-        evento = ("senescencia y maduracion" if "senescencia" in fase or "madur" in fase else
-                  "corte / siega" if "corte" in fase or "rebrote" in fase else
-                  "cosecha / rastrojo" if "rastrojo" in fase else "cambio propio de la fase")
-        clave, estado = "OK", "OK"
-        motivo = (f"Caida marcada del NDVI ({d_ndvi:+.3f}) coherente con la fase de {fase}: "
-                  f"se interpreta como {evento}, no como problema sanitario.")
-        esperado = True
-    elif ndvi_juicio < lo * 0.8:
-        clave, estado = "Revisar", "Revisar"
-        motivo = (f"{indice_juicio} {ndvi_juicio:.3f} muy por debajo del rango esperado "
-                  f"para la fase de {fase} ({lo:.2f}-{hi:.2f}).")
-    elif ndvi_juicio < lo:
-        clave, estado = "Vigilar", "Vigilar"
-        motivo = (f"{indice_juicio} {ndvi_juicio:.3f} algo por debajo del rango de la fase "
-                  f"de {fase} ({lo:.2f}-{hi:.2f}).")
-    elif d_ndvi is not None and d_ndvi < -0.10 and not caida_ok:
-        clave, estado = "Revisar", "Revisar"
-        motivo = (f"Caida brusca del NDVI ({d_ndvi:+.3f}) NO esperada en la fase de {fase}: "
-                  f"posible estres, plaga o incidencia.")
-    else:
-        clave, estado = "OK", "OK"
-        motivo = (f"{indice_juicio} {ndvi_juicio:.3f} dentro del rango esperado para la fase "
-                  f"de {fase} ({lo:.2f}-{hi:.2f}).")
-
-    # traza de como se ha llegado al juicio
-    if indice_juicio == "MSAVI":
-        motivo += (f" [El NDVI observado ({ndvi:.3f}) esta inflado por la cubierta; se juzga con "
-                   f"MSAVI, robusto al suelo. Vigor de copa: {contraste.get('vigor_copa', '-')}.]")
-    elif tipo == "EXTENSIVO" and contraste and contraste.get("situacion"):
-        motivo += f" [Contraste de indices: {contraste['situacion']}.]"
-    if ndvi_limpio is not None:
-        motivo += (f" [Arbolado disperso (dehesa/encinas): se juzga con la media del cultivo "
-                   f"{ndvi_limpio:.3f}, excluyendo los pixeles de arbol permanente; la media bruta "
-                   f"de la parcela era {ndvi:.3f}.]")
-
-    # --- LEÑOSO CADUCO EN INVIERNO: el arbol esta sin hoja ---
-    # En viña, almendro o pistacho en parada invernal no hay hoja: el NDVI cae a
-    # valores de suelo y eso es NORMAL. Cualquier verde es cubierta, no el cultivo.
-    if fase_esp and fase_esp.get("invierno_sin_hoja"):
-        if clave in ("Revisar", "Vigilar") and ndvi is not None and ndvi >= lo * 0.7:
-            clave, estado, esperado = "OK", "OK", True
-            motivo = (f"NDVI {ndvi:.3f} propio de la parada invernal sin hoja "
-                      f"({lo:.2f}-{hi:.2f}).")
-        motivo += (" [El arbol esta SIN HOJA: cualquier verde que se vea es cubierta o "
-                   "hierba, no el cultivo. El NDVI no mide el arbol hasta la brotacion.]")
-
-    # --- VIGOR DE COPA (lenosos): el MSAVI, no el NDVI medio ---
-    # El NDVI de la parcela mezcla copa y calle, asi que un olivar puede salir
-    # "normal" con la copa floja y la hierba alta. El MSAVI corrige el suelo; con
-    # percentiles y lineas resolubles se usa el p90 trasladado, que es copa casi
-    # pura. El umbral viene de (especie, fase, regimen) y lleva ya el factor del
-    # marco: un seto cubre mas suelo que un olivar a 100 arboles/ha.
-    # UNA SOLA ESCALA. El msavi_min de la tabla es un umbral DE COPA: un dosel de
-    # olivo sano da MSAVI ~0.43. Lo que mide el satelite es otra cosa: la media de
-    # un pixel que en un olivar tradicional es copa en un 20 % y calle en el 80 %
-    # restante, y que sale 0.11 con el arbol perfecto. Comparar lo uno con lo otro
-    # hacia saltar el aviso SIEMPRE en tradicional.
-    #
-    # Se compara siempre en escala de PARCELA: el umbral se traduce con la
-    # fraccion de copa (ver fenologia_especies.umbral_en_escala_parcela). El p90
-    # no se usa como si fuera copa pura, porque no lo es: a 10 m de pixel, ni
-    # siquiera un marco de 12 m da un pixel limpio de copa -lo dice el "limite
-    # honesto" de contraste_indices-. El p90 sigue sirviendo para el reparto
-    # copa/cubierta y para contarlo, que es para lo que vale.
-    msavi_min = umbrales.get("msavi_min")
-    if (tipo == "LENOSO" and msavi_min is not None and separacion
-            and not fase_esp.get("invierno_sin_hoja")):
-        copa_val = act.get("msavi")
-        umbral_val = fase_esp.get("msavi_min_parcela", msavi_min)
-        fc = fase_esp.get("fraccion_copa")
-        de_donde = ("media de la parcela" if fc is None else
-                    f"media de la parcela; umbral de copa {msavi_min:.2f} traido a "
-                    f"una copa que tapa el {fc * 100:.0f} % del suelo")
-        if copa_val is not None and umbral_val is not None and copa_val < umbral_val:
-            msavi_min = umbral_val
-            # Sin marco no hay conversion, asi que se esta comparando una mezcla
-            # contra un umbral de copa: eso NO puede llegar a "Revisar" por si
-            # solo. Con marco si, porque las dos cosas estan en la misma escala.
-            if clave == "OK":
-                clave, estado = "Vigilar", "Vigilar"
-            elif clave == "Vigilar" and fc is not None:
-                clave, estado = "Revisar", "Revisar"
-            motivo += (f" Vigor de copa por debajo de lo esperado: MSAVI {copa_val:.3f} "
-                       f"({de_donde}) frente a {msavi_min:.2f} en {fase} de "
-                       f"{umbrales.get('regimen', 'SECANO').lower()}.")
-            if umbrales.get("critica"):
-                motivo += (" Es además una fase crítica: lo que pase aquí se nota en la "
-                           "cosecha" + (" del año que viene." if "postcosecha" in fase
-                                        else "."))
-        if separacion["confianza"] != "alta":
-            motivo += (" [Copa y calle no se separan bien con este marco: el juicio de "
-                       "copa va con la media, no con el percentil 90.]")
-
-    # --- FALTA DE AGUA: eleva el nivel de alerta (ya no contradice al semaforo) ---
-    # El suelo del NDMI sale de la FASE, no de una constante unica: un maiz en
-    # floracion sufre mucho antes que un trigo en rastrojo. `ndmi_min = None`
-    # significa que en esta fase el NDMI no dice nada (presiembra, barbecho,
-    # senescencia, lenoso sin hoja) y no se evalua. Si la fase no declara nada,
-    # DEFECTO_UMBRALES deja el 0.0 de siempre.
-    # En lenosos hay ademas una fase donde el deficit es INTENCIONADO: envero y
-    # maduracion de viña (riego deficitario controlado para calidad) y el verano
-    # de secano. Ahi el NDMI bajo no es una anomalia, y avisar seria un error.
-    ndmi_min = umbrales["ndmi_min"]
-    if umbrales.get("deficit_buscado") and ndmi is not None:
-        motivo += (f" [NDMI {ndmi:+.3f}: en esta fase el deficit hidrico es lo esperado"
-                   + (" en secano" if umbrales.get("regimen") == "SECANO" else
-                      " (riego deficitario controlado)") + ", no se toma como aviso.]")
-        ndmi_min = None
-    # CONTEXTO DE SEQUIA COMARCAL (opcional, gated, extraible): si TODA la comarca
-    # lleva semanas de deficit hidrico real, un NDMI bajo en secano es coherente con
-    # la sequia y no debe -por si solo- subir la alerta (audit 2). En regadio no se
-    # suprime. Se reutiliza el mismo escape que `deficit_buscado`: poner ndmi_min a
-    # None salta el escalado. Sin `balance_hidrico.py` no se importa nada y el NDMI
-    # bajo escala EXACTAMENTE igual que hoy.
-    nota_hidrica = None
-    if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not esperado:
-        try:
-            import balance_hidrico as _BH
-            exp = _BH.explicacion_deficit(parcela, fecha, umbrales.get("regimen"))
-            if exp:
-                suprimir, nota_hidrica = exp
-                if suprimir:
-                    ndmi_min = None
-        except Exception:
-            # el contexto de sequia es opcional: si falla, el NDMI escala como siempre.
-            # Rastro en debug para diagnosticar sin cambiar el comportamiento.
-            log.debug("no se pudo aplicar el contexto de sequia comarcal", exc_info=True)
-    if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not esperado:
-        # el listón calibrado por el usuario, si lo hay, manda sobre el de la tabla
-        como = (f"negativo ({ndmi:+.3f})" if ndmi_min == 0.0 else
-                f"{ndmi:+.3f}, por debajo de {ndmi_min:.2f} esperado en {fase}")
-        if clave == "OK":
-            clave, estado = "Vigilar", "Vigilar"
-            motivo += f" Ademas el NDMI es {como}: indicio de estres hidrico."
-        elif clave == "Vigilar":
-            clave, estado = "Revisar", "Revisar"
-            motivo += f" El NDMI {como} agrava el diagnostico."
-        else:
-            motivo += f" NDMI {como}: estrés hídrico asociado."
-        if umbrales.get("critica"):
-            motivo += (" Es además la fase en la que la falta de agua más se lleva "
-                       "por delante el rendimiento.")
-    # el contexto de sequia comarcal se anade siempre que exista: si suprimio el
-    # escalado, EXPLICA por que el NDMI bajo no ha subido la alerta; si no lo
-    # suprimio (regadio), acompana al aviso con el balance de la comarca.
-    if nota_hidrica:
-        motivo += " " + nota_hidrica
-
-    # --- EVENTOS DEL CUADERNO DE CAMPO ---
-    # Una siega/cosecha/herbicida REGISTRADO por el usuario explica una caida brusca
-    # y prevalece sobre la deteccion automatica: deja de ser alarma.
-    evento_explica = False
-    if eventos_cerca:
-        try:
-            from registro_parcela import explicacion_por_eventos
-            esp_ev, txt_ev = explicacion_por_eventos(eventos_cerca, d_ndvi)
-            if esp_ev:
-                clave, estado, esperado = "OK", "OK", True
-                motivo = txt_ev
-                evento_explica = True
-        except Exception:
-            # importante: si esto falla, una siega/cosecha REGISTRADA deja de
-            # explicar la caida del NDVI y saltaria como falsa alarma.
-            log.warning("no se pudo aplicar la explicacion por eventos del cuaderno",
-                        exc_info=True)
-
+    # Cubierta y heterogeneidad son DATO, no juicio: se calculan siempre (tambien
+    # con el analisis de zonas apagado, que apaga el aviso pero no el dato) y las
+    # reglas solo los leen.
     cubierta = detectar_cubierta(tipo, subtipo, serie, fecha)
     # UNA sola fuente de verdad sobre la cubierta. `detectar_cubierta` aporta sus
     # indicadores numericos, pero el VEREDICTO que se ensena es el mismo que ha
@@ -652,22 +507,278 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         cubierta["copa_msavi"] = separacion["copa_msavi"]
     hetero = heterogeneidad(serie)
 
-    # si hay deterioro LOCALIZADO, se advierte de posible foco (biotico)
-    if not heterogeneidad_activa:
-        pass   # el usuario ha apagado el analisis de zonas para esta parcela
-    elif evento_explica or segado:
-        pass   # el evento (o el corte de forraje) ya explica lo observado; no se solapan avisos
-    elif hetero and hetero.get("patron") == "deterioro LOCALIZADO":
-        motivo += (" [ATENCION: deterioro LOCALIZADO. La dispersion interna crece "
-                   f"(std {hetero['d_std']:+.3f}) mientras la media cae: posible FOCO en la "
-                   "parcela (hongo, plaga o rodal). Revisar el mapa para localizar la mancha.]")
-        if clave == "OK" and not esperado:
-            clave, estado = "Vigilar", "Vigilar"
-    elif hetero and hetero.get("patron") == "deterioro GENERALIZADO":
-        motivo += (" [Deterioro GENERALIZADO y homogeneo: apunta a causa general "
-                   "(sequia, helada, senescencia), no a un foco localizado.]")
-    elif hetero and (hetero.get("patron") == "heterogeneidad creciente"
-                     or hetero.get("rodal_sospechoso")):
+    return _Ctx(tipo=tipo, subtipo=subtipo, serie=serie, act=act, prev=prev, fecha=fecha,
+                spec=spec, parcela=parcela, eventos_cerca=eventos_cerca,
+                heterogeneidad_activa=heterogeneidad_activa,
+                fase=fase, fase_esp=fase_esp, lo=lo, hi=hi, caida_ok=caida_ok,
+                siega_verde=siega_verde, umbrales=umbrales,
+                ndvi=ndvi, ndmi=ndmi, d_ndvi=d_ndvi, deltas=deltas,
+                ndvi_juicio=ndvi_juicio, indice_juicio=indice_juicio,
+                ndvi_limpio=ndvi_limpio, contraste=contraste, copa=copa,
+                separacion=separacion, cubierta=cubierta, hetero=hetero,
+                segado=segado, mes_act=mes_act)
+
+
+def _juicio_base(ctx):
+    """El veredicto de partida. Cadena EXCLUSIVA: manda la primera que se cumple.
+
+    El orden es agronomico, no casual: sin NDVI no hay nada que juzgar; un corte de
+    forraje o una caida propia de la fase EXPLICAN el desplome antes de que nadie lo
+    llame anomalia; y solo despues se mira el nivel del indice y la caida brusca."""
+    ndvi, ndvi_juicio, d_ndvi = ctx.ndvi, ctx.ndvi_juicio, ctx.d_ndvi
+    lo, hi, fase = ctx.lo, ctx.hi, ctx.fase
+    if ndvi is None:
+        return _Diag("Sin", "Sin dato", "Sin NDVI valido (nubosidad).", False, False)
+    if ctx.segado:
+        _mes_txt = {4: "abril", 5: "mayo"}.get(ctx.mes_act, "primavera")
+        return _Diag("OK", "Segado",
+                     f"Caida drastica del NDVI ({d_ndvi:+.3f}) en {_mes_txt}: el cultivo se ha "
+                     "SEGADO en verde (corte de forraje). Es lo esperado en esta modalidad; "
+                     "el rebrote volvera a elevar los indices en las proximas pasadas.",
+                     True, False)
+    if ctx.caida_ok and d_ndvi is not None and d_ndvi < -0.10:
+        # caida fuerte PERO propia de la fase: senescencia, siega, cosecha
+        evento = ("senescencia y maduracion" if "senescencia" in fase or "madur" in fase else
+                  "corte / siega" if "corte" in fase or "rebrote" in fase else
+                  "cosecha / rastrojo" if "rastrojo" in fase else "cambio propio de la fase")
+        return _Diag("OK", "OK",
+                     f"Caida marcada del NDVI ({d_ndvi:+.3f}) coherente con la fase de {fase}: "
+                     f"se interpreta como {evento}, no como problema sanitario.",
+                     True, False)
+    if ndvi_juicio < lo * 0.8:
+        return _Diag("Revisar", "Revisar",
+                     f"{ctx.indice_juicio} {ndvi_juicio:.3f} muy por debajo del rango esperado "
+                     f"para la fase de {fase} ({lo:.2f}-{hi:.2f}).", False, False)
+    if ndvi_juicio < lo:
+        return _Diag("Vigilar", "Vigilar",
+                     f"{ctx.indice_juicio} {ndvi_juicio:.3f} algo por debajo del rango de la fase "
+                     f"de {fase} ({lo:.2f}-{hi:.2f}).", False, False)
+    if d_ndvi is not None and d_ndvi < -0.10 and not ctx.caida_ok:
+        return _Diag("Revisar", "Revisar",
+                     f"Caida brusca del NDVI ({d_ndvi:+.3f}) NO esperada en la fase de {fase}: "
+                     f"posible estres, plaga o incidencia.", False, False)
+    return _Diag("OK", "OK",
+                 f"{ctx.indice_juicio} {ndvi_juicio:.3f} dentro del rango esperado para la fase "
+                 f"de {fase} ({lo:.2f}-{hi:.2f}).", False, False)
+
+
+# ---------------------------------------------------------------------
+# Las reglas que MATIZAN el veredicto base. Cada una: (ctx, diag) -> _Efecto | None
+# ---------------------------------------------------------------------
+def _regla_traza_indice(ctx, diag):
+    """Deja dicho CON QUE se ha juzgado. No cambia el veredicto, lo explica.
+
+    Un diagnostico que no dice si miro el NDVI o el MSAVI, ni si aparto las encinas,
+    no se puede discutir con el agricultor ni reproducir despues."""
+    txt = ""
+    if ctx.indice_juicio == "MSAVI":
+        txt += (f" [El NDVI observado ({ctx.ndvi:.3f}) esta inflado por la cubierta; se juzga con "
+                f"MSAVI, robusto al suelo. Vigor de copa: {ctx.contraste.get('vigor_copa', '-')}.]")
+    elif ctx.tipo == "EXTENSIVO" and ctx.contraste and ctx.contraste.get("situacion"):
+        txt += f" [Contraste de indices: {ctx.contraste['situacion']}.]"
+    if ctx.ndvi_limpio is not None:
+        txt += (f" [Arbolado disperso (dehesa/encinas): se juzga con la media del cultivo "
+                f"{ctx.ndvi_limpio:.3f}, excluyendo los pixeles de arbol permanente; la media bruta "
+                f"de la parcela era {ctx.ndvi:.3f}.]")
+    return _Efecto(texto=txt) if txt else None
+
+
+def _regla_lenoso_sin_hoja(ctx, diag):
+    """LEÑOSO CADUCO EN INVIERNO: el arbol esta sin hoja.
+
+    En viña, almendro o pistacho en parada invernal no hay hoja: el NDVI cae a
+    valores de suelo y eso es NORMAL. Cualquier verde es cubierta, no el cultivo.
+    Es la unica regla que BAJA el nivel de alerta, y por eso va antes que las que lo
+    suben: lo que rescata aqui no debe volver a saltar mas abajo."""
+    if not (ctx.fase_esp and ctx.fase_esp.get("invierno_sin_hoja")):
+        return None
+    sufijo = (" [El arbol esta SIN HOJA: cualquier verde que se vea es cubierta o "
+              "hierba, no el cultivo. El NDVI no mide el arbol hasta la brotacion.]")
+    if diag.clave in ("Revisar", "Vigilar") and ctx.ndvi is not None and ctx.ndvi >= ctx.lo * 0.7:
+        nuevo = (f"NDVI {ctx.ndvi:.3f} propio de la parada invernal sin hoja "
+                 f"({ctx.lo:.2f}-{ctx.hi:.2f}).")
+        return _Efecto(estado="OK", texto=nuevo + sufijo, esperado=True, reemplaza=True)
+    return _Efecto(texto=sufijo)
+
+
+def _regla_vigor_copa(ctx, diag):
+    """VIGOR DE COPA (lenosos): el MSAVI, no el NDVI medio.
+
+    El NDVI de la parcela mezcla copa y calle, asi que un olivar puede salir
+    "normal" con la copa floja y la hierba alta. El MSAVI corrige el suelo; con
+    percentiles y lineas resolubles se usa el p90 trasladado, que es copa casi
+    pura. El umbral viene de (especie, fase, regimen) y lleva ya el factor del
+    marco: un seto cubre mas suelo que un olivar a 100 arboles/ha.
+    UNA SOLA ESCALA. El msavi_min de la tabla es un umbral DE COPA: un dosel de
+    olivo sano da MSAVI ~0.43. Lo que mide el satelite es otra cosa: la media de
+    un pixel que en un olivar tradicional es copa en un 20 % y calle en el 80 %
+    restante, y que sale 0.11 con el arbol perfecto. Comparar lo uno con lo otro
+    hacia saltar el aviso SIEMPRE en tradicional.
+
+    Se compara siempre en escala de PARCELA: el umbral se traduce con la
+    fraccion de copa (ver fenologia_especies.umbral_en_escala_parcela). El p90
+    no se usa como si fuera copa pura, porque no lo es: a 10 m de pixel, ni
+    siquiera un marco de 12 m da un pixel limpio de copa -lo dice el "limite
+    honesto" de contraste_indices-. El p90 sigue sirviendo para el reparto
+    copa/cubierta y para contarlo, que es para lo que vale."""
+    msavi_min = ctx.umbrales.get("msavi_min")
+    if not (ctx.tipo == "LENOSO" and msavi_min is not None and ctx.separacion
+            and not ctx.fase_esp.get("invierno_sin_hoja")):
+        return None
+    copa_val = ctx.act.get("msavi")
+    umbral_val = ctx.fase_esp.get("msavi_min_parcela", msavi_min)
+    fc = ctx.fase_esp.get("fraccion_copa")
+    de_donde = ("media de la parcela" if fc is None else
+                f"media de la parcela; umbral de copa {msavi_min:.2f} traido a "
+                f"una copa que tapa el {fc * 100:.0f} % del suelo")
+    estado, txt = None, ""
+    if copa_val is not None and umbral_val is not None and copa_val < umbral_val:
+        # Sin marco no hay conversion, asi que se esta comparando una mezcla
+        # contra un umbral de copa: eso NO puede llegar a "Revisar" por si
+        # solo. Con marco si, porque las dos cosas estan en la misma escala.
+        if diag.clave == "OK":
+            estado = "Vigilar"
+        elif diag.clave == "Vigilar" and fc is not None:
+            estado = "Revisar"
+        txt += (f" Vigor de copa por debajo de lo esperado: MSAVI {copa_val:.3f} "
+                f"({de_donde}) frente a {umbral_val:.2f} en {ctx.fase} de "
+                f"{ctx.umbrales.get('regimen', 'SECANO').lower()}.")
+        if ctx.umbrales.get("critica"):
+            txt += (" Es además una fase crítica: lo que pase aquí se nota en la "
+                    "cosecha" + (" del año que viene." if "postcosecha" in ctx.fase
+                                 else "."))
+    if ctx.separacion["confianza"] != "alta":
+        txt += (" [Copa y calle no se separan bien con este marco: el juicio de "
+                "copa va con la media, no con el percentil 90.]")
+    return _Efecto(estado=estado, texto=txt) if (estado or txt) else None
+
+
+def _sequia_comarcal(ctx, ndmi_min):
+    """Si TODA la comarca lleva semanas de deficit, un NDMI bajo en secano es
+    coherente con la sequia y no debe -por si solo- subir la alerta.
+
+    Devuelve (ndmi_min, nota): con `ndmi_min` a None se salta el escalado, que es el
+    mismo escape que usa `deficit_buscado`. La nota se ensena SIEMPRE que exista: si
+    suprimio, explica por que no ha subido la alerta; si no (regadio), acompana al
+    aviso con el balance de la comarca.
+
+    Modulo OPCIONAL (`balance_hidrico`): si no esta o falla, el NDMI escala
+    EXACTAMENTE igual que si esta funcion no existiera."""
+    try:
+        import balance_hidrico as _BH
+        exp = _BH.explicacion_deficit(ctx.parcela, ctx.fecha, ctx.umbrales.get("regimen"))
+    except Exception:
+        # Rastro en debug para diagnosticar sin cambiar el comportamiento.
+        log.debug("no se pudo aplicar el contexto de sequia comarcal", exc_info=True)
+        return ndmi_min, None
+    if not exp:
+        return ndmi_min, None
+    suprimir, nota = exp
+    return (None if suprimir else ndmi_min), nota
+
+
+def _regla_falta_de_agua(ctx, diag):
+    """FALTA DE AGUA: eleva el nivel de alerta (ya no contradice al semaforo).
+
+    El suelo del NDMI sale de la FASE, no de una constante unica: un maiz en
+    floracion sufre mucho antes que un trigo en rastrojo. `ndmi_min = None`
+    significa que en esta fase el NDMI no dice nada (presiembra, barbecho,
+    senescencia, lenoso sin hoja) y no se evalua. Si la fase no declara nada,
+    DEFECTO_UMBRALES deja el 0.0 de siempre.
+    En lenosos hay ademas una fase donde el deficit es INTENCIONADO: envero y
+    maduracion de viña (riego deficitario controlado para calidad) y el verano
+    de secano. Ahi el NDMI bajo no es una anomalia, y avisar seria un error.
+
+    Aqui dentro va tambien el CONTEXTO DE SEQUIA COMARCAL (modulo opcional
+    `balance_hidrico`), porque decide sobre el MISMO umbral: si toda la comarca
+    lleva semanas de deficit, un NDMI bajo en secano es coherente con la sequia y
+    no debe -por si solo- subir la alerta. Separarlo en otra regla obligaria a
+    pasarse el `ndmi_min` ya tocado de una a otra, que es justo el acoplamiento
+    que este refactor quita."""
+    ndmi, ndmi_min = ctx.ndmi, ctx.umbrales["ndmi_min"]
+    estado, txt = None, ""
+    if ctx.umbrales.get("deficit_buscado") and ndmi is not None:
+        txt += (f" [NDMI {ndmi:+.3f}: en esta fase el deficit hidrico es lo esperado"
+                + (" en secano" if ctx.umbrales.get("regimen") == "SECANO" else
+                   " (riego deficitario controlado)") + ", no se toma como aviso.]")
+        ndmi_min = None
+    # CONTEXTO DE SEQUIA COMARCAL (opcional, gated, extraible). Se reutiliza el
+    # mismo escape que `deficit_buscado`: poner ndmi_min a None salta el escalado.
+    # Sin `balance_hidrico.py` no se importa nada y el NDMI bajo escala EXACTAMENTE
+    # igual que hoy.
+    nota_hidrica = None
+    if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not diag.esperado:
+        ndmi_min, nota_hidrica = _sequia_comarcal(ctx, ndmi_min)
+    if ndmi_min is not None and ndmi is not None and ndmi < ndmi_min and not diag.esperado:
+        # el listón calibrado por el usuario, si lo hay, manda sobre el de la tabla
+        como = (f"negativo ({ndmi:+.3f})" if ndmi_min == 0.0 else
+                f"{ndmi:+.3f}, por debajo de {ndmi_min:.2f} esperado en {ctx.fase}")
+        if diag.clave == "OK":
+            estado = "Vigilar"
+            txt += f" Ademas el NDMI es {como}: indicio de estres hidrico."
+        elif diag.clave == "Vigilar":
+            estado = "Revisar"
+            txt += f" El NDMI {como} agrava el diagnostico."
+        else:
+            txt += f" NDMI {como}: estrés hídrico asociado."
+        if ctx.umbrales.get("critica"):
+            txt += (" Es además la fase en la que la falta de agua más se lleva "
+                    "por delante el rendimiento.")
+    # el contexto de sequia comarcal se anade siempre que exista: si suprimio el
+    # escalado, EXPLICA por que el NDMI bajo no ha subido la alerta; si no lo
+    # suprimio (regadio), acompana al aviso con el balance de la comarca.
+    if nota_hidrica:
+        txt += " " + nota_hidrica
+    return _Efecto(estado=estado, texto=txt) if (estado or txt) else None
+
+
+def _regla_eventos_cuaderno(ctx, diag):
+    """EVENTOS DEL CUADERNO DE CAMPO.
+
+    Una siega/cosecha/herbicida REGISTRADO por el usuario explica una caida brusca
+    y prevalece sobre la deteccion automatica: deja de ser alarma. Es la unica regla
+    que SUSTITUYE el motivo entero, porque lo que explica el dato ya no es el
+    razonamiento del motor, es el apunte del agricultor."""
+    if not ctx.eventos_cerca:
+        return None
+    try:
+        from registro_parcela import explicacion_por_eventos
+        esp_ev, txt_ev = explicacion_por_eventos(ctx.eventos_cerca, ctx.d_ndvi)
+    except Exception:
+        # importante: si esto falla, una siega/cosecha REGISTRADA deja de
+        # explicar la caida del NDVI y saltaria como falsa alarma.
+        log.warning("no se pudo aplicar la explicacion por eventos del cuaderno",
+                    exc_info=True)
+        return None
+    if not esp_ev:
+        return None
+    return _Efecto(estado="OK", texto=txt_ev, esperado=True, reemplaza=True)
+
+
+def _regla_zonas(ctx, diag):
+    """Si hay deterioro LOCALIZADO, se advierte de posible foco (biotico).
+
+    Cuatro lecturas EXCLUSIVAS de la distribucion interna, de mas grave a menos:
+    foco localizado, deterioro general, y el aviso temprano (la parcela se desiguala
+    antes de que la media se mueva). No se solapa con un evento del cuaderno ni con
+    un corte de forraje: si eso ya explica lo observado, sobra un segundo aviso."""
+    hetero = ctx.hetero
+    if not ctx.heterogeneidad_activa:
+        return None      # el usuario ha apagado el analisis de zonas para esta parcela
+    if diag.evento_explica or ctx.segado:
+        return None      # el evento (o el corte de forraje) ya explica lo observado
+    sube = ("Vigilar" if diag.clave == "OK" and not diag.esperado else None)
+    if hetero and hetero.get("patron") == "deterioro LOCALIZADO":
+        return _Efecto(estado=sube, texto=(
+            " [ATENCION: deterioro LOCALIZADO. La dispersion interna crece "
+            f"(std {hetero['d_std']:+.3f}) mientras la media cae: posible FOCO en la "
+            "parcela (hongo, plaga o rodal). Revisar el mapa para localizar la mancha.]"))
+    if hetero and hetero.get("patron") == "deterioro GENERALIZADO":
+        return _Efecto(texto=(
+            " [Deterioro GENERALIZADO y homogeneo: apunta a causa general "
+            "(sequia, helada, senescencia), no a un foco localizado.]"))
+    if hetero and (hetero.get("patron") == "heterogeneidad creciente"
+                   or hetero.get("rodal_sospechoso")):
         # AVISO TEMPRANO: el foco AUN NO ha movido la media, pero la parcela ya se
         # esta desigualando (o hay un 10 % claramente hundido). Se avisa antes de
         # que el problema sea visible en el promedio.
@@ -678,21 +789,106 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
         if hetero.get("rodal_sospechoso"):
             senales.append(f"el 10 % peor está {hetero['hundimiento']:.2f} puntos por debajo "
                            "de la mediana (rodal hundido)")
-        motivo += (" [AVISO TEMPRANO: " + " y ".join(senales) + ". Puede ser el INICIO de un "
-                   "foco localizado, antes de que se note en el promedio. Conviene mirar el "
-                   "mapa y, si al revisarla esta todo bien, validar el diagnostico: se tendra "
-                   "en cuenta para las proximas pasadas.]")
-        if clave == "OK" and not esperado:
-            clave, estado = "Vigilar", "Vigilar"
+        return _Efecto(estado=sube, texto=(
+            " [AVISO TEMPRANO: " + " y ".join(senales) + ". Puede ser el INICIO de un "
+            "foco localizado, antes de que se note en el promedio. Conviene mirar el "
+            "mapa y, si al revisarla esta todo bien, validar el diagnostico: se tendra "
+            "en cuenta para las proximas pasadas.]"))
+    return None
 
-    # si algun umbral viene de tus validaciones y no de la tabla, se dice
-    if _CAL is not None and umbrales.get("calibrado"):
-        motivo += " " + _CAL.texto_calibracion(umbrales)
 
-    return {"estado": estado, "clave": clave, "fase": fase, "rango_fase": (lo, hi),
-            "motivo": motivo, "deltas": deltas, "cubierta": cubierta, "copa": copa,
-            "heterogeneidad": hetero, "ndvi_juicio": ndvi_juicio,
-            "esperado": esperado, "fecha": fecha, "umbrales": umbrales}
+def _regla_nota_calibracion(ctx, diag):
+    """Si algun umbral viene de TUS validaciones y no de la tabla, se dice.
+
+    Va la ultima a proposito: es una nota sobre COMO se ha juzgado, no una razon
+    mas del juicio, y tiene que leerse al final del motivo."""
+    if _CAL is None or not ctx.umbrales.get("calibrado"):
+        return None
+    return _Efecto(texto=" " + _CAL.texto_calibracion(ctx.umbrales))
+
+
+# EL ORDEN IMPORTA, y por eso es una lista con nombre y no la posicion de las
+# lineas en el fichero. De arriba abajo:
+#   1. se dice con que indice se ha juzgado;
+#   2. el leñoso sin hoja RESCATA (unica regla que baja el nivel), asi que va antes
+#      que todas las que suben;
+#   3. vigor de copa y falta de agua suben el nivel, en ese orden: primero el
+#      cultivo, luego el agua, que es como se lee el motivo;
+#   4. un evento del cuaderno PISA todo lo anterior: lo apuntado por el agricultor
+#      manda sobre lo deducido;
+#   5. el aviso de zonas, que se calla si el evento ya lo explico;
+#   6. y la nota de calibracion, que cierra.
+REGLAS = [
+    ("traza_indice", _regla_traza_indice),
+    ("lenoso_sin_hoja", _regla_lenoso_sin_hoja),
+    ("vigor_copa", _regla_vigor_copa),
+    ("falta_de_agua", _regla_falta_de_agua),
+    ("eventos_cuaderno", _regla_eventos_cuaderno),
+    ("zonas", _regla_zonas),
+    ("nota_calibracion", _regla_nota_calibracion),
+]
+
+
+def _aplicar(diag, efecto, nombre):
+    """El veredicto despues de una regla. Devuelve un `_Diag` nuevo: nadie muta."""
+    if efecto is None:
+        return diag
+    motivo = efecto.texto if efecto.reemplaza else diag.motivo + efecto.texto
+    clave = estado = efecto.estado
+    if efecto.estado is None:
+        clave, estado = diag.clave, diag.estado
+    return _Diag(clave=clave, estado=estado, motivo=motivo,
+                 esperado=diag.esperado if efecto.esperado is None else efecto.esperado,
+                 evento_explica=diag.evento_explica or nombre == "eventos_cuaderno")
+
+
+def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
+                    parcela=None, heterogeneidad_activa=True, arbolado=False):
+    """
+    Devuelve un dict con el diagnostico completo. Semaforo y explicacion
+    coherentes entre si, con fenologia y (en lenosos) cubierta vegetal.
+
+    Se resuelve en tres pasos, que es como conviene leerlo: se PREPARA el contexto
+    (`_preparar_contexto`), se emite un veredicto base (`_juicio_base`) y se pasa por
+    las `REGLAS`, en ese orden, que lo matizan.
+
+    parcela: nombre, solo para poder aplicar los umbrales que el usuario haya
+        calibrado con sus validaciones (modulo OPCIONAL calibracion_umbrales).
+        Sin este argumento -o sin ese modulo- se juzga con la tabla de siempre.
+
+    heterogeneidad_activa: si es False, NO se analizan zonas dentro de la parcela
+        ni se avisa de focos. Hay parcelas donde ese aviso solo estorba (muy
+        pequenas, muy uniformes, o donde ya se sabe de donde viene la mancha).
+        Los estadisticos se siguen calculando y mostrando: lo que se apaga es el
+        JUICIO sobre ellos, no el dato.
+
+    eventos_cerca: lista opcional [(dias, evento), ...] del cuaderno de campo.
+    spec: dict opcional con el modelo por especie:
+        {"especie": ..., "fecha_siembra": ..., "marco_calle": ..., "marco_pie": ...}
+        Si se aporta, la fenologia se calcula por especie (cereal por dias desde
+        siembra; leñoso por mes + marco). Si no, se usa el calendario por meses.
+    """
+    if tipo == "BARBECHO":
+        return {"estado": "N.A.", "clave": "NA", "fase": "barbecho",
+                "motivo": "Parcela en barbecho: no se evalua el vigor del cultivo.",
+                "deltas": {}, "cubierta": None, "esperado": True}
+
+    if not serie:
+        return {"estado": "Sin dato", "clave": "Sin", "fase": "-",
+                "motivo": "Sin pasadas validas de satelite.", "deltas": {},
+                "cubierta": None, "esperado": False}
+
+    ctx = _preparar_contexto(tipo, subtipo, serie, fecha_iso, eventos_cerca, spec,
+                             parcela, heterogeneidad_activa, arbolado)
+    diag = _juicio_base(ctx)
+    for nombre, regla in REGLAS:
+        diag = _aplicar(diag, regla(ctx, diag), nombre)
+
+    return {"estado": diag.estado, "clave": diag.clave, "fase": ctx.fase,
+            "rango_fase": (ctx.lo, ctx.hi), "motivo": diag.motivo, "deltas": ctx.deltas,
+            "cubierta": ctx.cubierta, "copa": ctx.copa, "heterogeneidad": ctx.hetero,
+            "ndvi_juicio": ctx.ndvi_juicio, "esperado": diag.esperado,
+            "fecha": ctx.fecha, "umbrales": ctx.umbrales}
 
 
 # =====================================================================

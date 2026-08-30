@@ -3,6 +3,27 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.18.0] — 2026-08
+
+### Añadido
+- **Fichero de oro del motor** (`pruebas_oro.py` + `oro_evaluar_parcela.json`): congela
+  la salida completa de `evaluar_parcela` —incluido el `motivo` que lee el agricultor—
+  sobre **3.499 entradas** generadas a partir de las propias tablas de fases. Cubre
+  fronteras exactas de fase, NDVI pegado a cada corte (±0,005), NDMI a los dos lados de
+  su mínimo, leñosos con y sin marco, series de 1/2/4 pasadas, eventos, zonas y 25
+  entradas degeneradas. Determinista: sin red, sin base, sin azar y sin depender de la
+  fecha de hoy. **No se regenera solo, nunca**: si falla, dice qué caso y qué cambió.
+- **46 pruebas nuevas de las reglas del motor**, una tabla de casos por regla.
+
+### Cambiado
+- **`evaluar_parcela` pasa a ser una tubería de reglas explícita** (ver ARQUITECTURA §4b).
+  De **346 líneas, complejidad 108 y 57 locales** a **47 líneas, complejidad 4 y 13
+  locales**. El orden de las reglas es ahora una lista con nombre, no la posición de las
+  líneas en el fichero, y el contexto es de sólo lectura para que ninguna regla le
+  cambie el suelo a la siguiente.
+  - **Ni un veredicto, ni un umbral, ni un texto cambian.** El fichero de oro pasa
+    idéntico: es la prueba, no la intención.
+
 ## [1.17.0] — 2026-08
 
 ### Añadido
