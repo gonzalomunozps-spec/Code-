@@ -17,7 +17,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from ui_tema import TEMA, FUENTES, centrar_sobre
+from ui_tema import TEMA, FUENTES, centrar_sobre, ui_seguro
 from ficha_comun import _abrir_archivo
 import almacen as DB
 import registro_parcela as REG
@@ -145,7 +145,7 @@ class ExportMixin:
                 ruta = generar(self.nombre, self.campana, ficha, cultivo, serie,
                                radar=radar, eventos=eventos, ruta_salida=destino, **kw)
             except Exception as e:
-                self.master.after(0, lambda err=e: messagebox.showerror(
+                ui_seguro(self.master, lambda err=e: messagebox.showerror(
                     titulo, f"No se pudo generar:\n\n{err}", parent=self.master))
                 return
 
@@ -153,5 +153,5 @@ class ExportMixin:
                 if messagebox.askyesno(titulo, f"Generado:\n{ruta}\n\n¿Abrirlo ahora?",
                                        parent=self.master):
                     _abrir_archivo(ruta)
-            self.master.after(0, ok)
+            ui_seguro(self.master, ok)
         threading.Thread(target=worker, daemon=True).start()

@@ -405,6 +405,36 @@ def tarjeta(parent, **kw):
                     highlightcolor=TEMA["border"], highlightthickness=1, bd=0, **kw)
 
 
+def ui_seguro(widget, fn):
+    """Encola `fn` en el hilo de Tk. Si la ventana ya murio, no hace nada.
+
+    Un hilo de trabajo NO puede tocar widgets: lo que hace es pedirle al hilo
+    principal que los toque, con `widget.after(0, fn)`. El problema es que `after`
+    ES YA una llamada a Tcl, asi que si el usuario cierra la ventana mientras la
+    descarga sigue en marcha, la propia peticion revienta con
+    `RuntimeError: main thread is not in main loop`. La excepcion salta en el hilo
+    de trabajo, donde nadie la recoge; no tumba el programa, pero deja un volcado
+    por consola y el trabajo a medias sin avisar a nadie.
+
+    Comprobado que la condicion exacta es esa: llamar a Tcl desde un hilo que NO es
+    el suyo con el bucle de eventos parado -porque termino o porque la ventana se
+    cerro-. Desde el hilo principal `after` no se queja ni con el widget destruido,
+    asi que este ayudante es para los hilos. Se captura tambien `TclError` por si
+    otra version de Tk prefiere lanzar eso.
+
+    Cerrar la ventana es una respuesta legitima a «esto tarda»: que el usuario lo
+    haga no debe imprimir una traza. Por eso aqui se traga, y solo aqui.
+
+    Devuelve True si se pudo encolar y False si Tk ya no estaba, por si quien llama
+    quiere dejar de trabajar en balde.
+    """
+    try:
+        widget.after(0, fn)
+        return True
+    except (tk.TclError, RuntimeError):
+        return False
+
+
 def centrar_sobre(win, parent):
     """Fija la ventana `win` centrada sobre la ventana principal (parent)."""
     try:

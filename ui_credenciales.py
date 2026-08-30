@@ -13,7 +13,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from ui_tema import TEMA, FUENTES, esc, tarjeta
+from ui_tema import TEMA, FUENTES, esc, tarjeta, ui_seguro
 from tkinter import filedialog
 
 import credenciales as CRED
@@ -180,7 +180,7 @@ class PanelCredenciales(ttk.Frame):
 
         def run():
             est, msg = CRED.autenticar_google(project)
-            self.after(0, lambda: self._set_badge("gee", est, msg))
+            ui_seguro(self, lambda: self._set_badge("gee", est, msg))
         threading.Thread(target=run, daemon=True).start()
 
     def _abrir_openai(self):
@@ -218,7 +218,7 @@ class PanelCredenciales(ttk.Frame):
                     est, msg = "aviso", msg + f"  ·  Aviso: el ultimo sync automatico fallo ({ULTIMO_SYNC['msg']})."
             else:
                 est, msg = CRED.probar_openai(cfg["openai_api_key"])
-            self.after(0, lambda: self._set_badge(servicio, est, msg))
+            ui_seguro(self, lambda: self._set_badge(servicio, est, msg))
         threading.Thread(target=run, daemon=True).start()
 
     def probar_todo(self):

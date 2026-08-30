@@ -22,7 +22,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from ui_tema import TEMA, FUENTES, centrar_sobre, marco_scroll
+from ui_tema import TEMA, FUENTES, centrar_sobre, marco_scroll, ui_seguro
 from ui_widgets import CampoFecha
 
 import almacen as DB
@@ -70,7 +70,7 @@ class DialogoCorreccion(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         tk.Label(self, text="El sistema diagnostico:", bg=TEMA["surface"], fg=TEMA["text_sec"],
@@ -147,7 +147,7 @@ class DialogoValidacionIndices(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         cab = f"{ficha.nombre.replace('_', ' ')}  ·  {ctx.get('fecha', '?')}"
@@ -253,7 +253,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         # El limite lo pone el satelite, no el programa: Sentinel-2 L2A empieza en
@@ -312,7 +312,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
         total, lineas = 0, []
         orden = sorted(sel)
         for i, camp in enumerate(orden, 1):
-            self.after(0, lambda c=camp, k=i: self._prog(f"Sincronizando {c}  ({k}/{len(orden)})…"))
+            ui_seguro(self, lambda c=camp, k=i: self._prog(f"Sincronizando {c}  ({k}/{len(orden)})…"))
             tenia = DB.ultima_fecha(self.nombre, camp) is not None
             try:
                 n, msg = sincronizar_parcela(self.nombre, camp, silencioso=True)
@@ -335,7 +335,7 @@ class DialogoSincronizarCampanas(tk.Toplevel):
             self.panel._actualizar_estado_sync()
             self.panel._refrescar()
             messagebox.showinfo("Sincronización de campañas", "\n".join(lineas), parent=self)
-        self.after(0, fin)
+        ui_seguro(self, fin)
 
     def _prog(self, texto):
         if self.lbl_prog.winfo_exists():
@@ -355,7 +355,7 @@ class DialogoEfectoProducto(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         f_ap = evento.get("fecha")
@@ -459,7 +459,7 @@ class DialogoBorrarCampana(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         n_pas = len(DB.pasadas(nombre, campana))
@@ -548,7 +548,7 @@ class DialogoObservacionCampo(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         cab = f"{ficha.nombre.replace('_', ' ')}  ·  campaña {ficha.campana}"

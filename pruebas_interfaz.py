@@ -989,10 +989,6 @@ def escenario_cierre(P, DB):
     P.sincronizar_parcela = lambda *a, **k: (lento.wait(30.0), (0, "sin pasadas nuevas"))[1]
     gee_cliente.sincronizar_radar = lambda *a, **k: (lento.wait(30.0), (0, "sin datos"))[1]
     P._EE = True
-    fallos_hilo = []
-    excepthook = threading.excepthook
-    threading.excepthook = lambda a: fallos_hilo.append(f"{a.exc_type.__name__}: {a.exc_value}")
-
     root = _raiz()
     P.aplicar_tema(root, escala=1.0)
     nb = ttk.Notebook(root)
@@ -1007,11 +1003,12 @@ def escenario_cierre(P, DB):
     hechas = []
 
     def escena(t0, etiqueta, arrancar, cerrar):
-        root.after(int(t0 * 1000), lambda: (lento.clear(), fallos_hilo.clear(), arrancar()))
+        # las excepciones de los hilos las recoge el gancho GLOBAL (`_vigilar_hilos`),
+        # que las mete en FALLOS; aqui solo se anota que la escena se ha corrido
+        root.after(int(t0 * 1000), lambda: (lento.clear(), arrancar()))
         root.after(int((t0 + 0.6) * 1000), cerrar)
         root.after(int((t0 + 0.8) * 1000), lento.set)
-        root.after(int((t0 + 2.2) * 1000),
-                   lambda: hechas.append((etiqueta, list(fallos_hilo))))
+        root.after(int((t0 + 2.2) * 1000), lambda: hechas.append(etiqueta))
 
     root.after(100, lambda: panel.mostrar_ficha("Cerealista_Vega"))
     escena(0.5, "sincronizar y abrir otra ficha",
@@ -1026,16 +1023,32 @@ def escenario_cierre(P, DB):
     root.after(9000, root.quit)
     root.mainloop()
 
-    for etiqueta, fallos in hechas:
-        if fallos:
-            FALLOS.append((f"cierre: {etiqueta}", "excepcion en el hilo", fallos[0], fallos[0]))
     P.FichaParcela.__init__ = original
     P.sincronizar_parcela = original_sync
     gee_cliente.sincronizar_radar = original_radar
     P._EE = original_ee
-    threading.excepthook = excepthook
     _derribar(root)
     return f"{len(hechas)} escenas de cierre"
+
+
+def _vigilar_hilos():
+    """Hace que una excepcion en CUALQUIER hilo de trabajo tumbe la prueba.
+
+    Sin esto, un fallo en un hilo solo imprime una traza por consola: el arnes lo
+    da por bueno y la suite sale verde con el programa roto. Es justo el fallo que
+    tiene la interfaz cuando se cierra una ventana a media descarga -el `after` del
+    hilo revienta contra un Tk que se esta apagando- y era invisible salvo en el
+    unico escenario que se molestaba en instalar el gancho.
+
+    Se instala UNA vez, para todos los escenarios, y no se quita: el proceso
+    termina al acabar la suite."""
+    def al_fallar(arg):
+        if arg.exc_type is SystemExit:
+            return
+        FALLOS.append(("hilo de trabajo", arg.exc_type.__name__, str(arg.exc_value),
+                       "".join(traceback.format_exception(arg.exc_type, arg.exc_value,
+                                                          arg.exc_traceback))))
+    threading.excepthook = al_fallar
 
 
 def _contraste(a, b):
@@ -1312,6 +1325,63 @@ def escenario_presentacion(P, DB):
 
 
 # ---------------------------------------------------------------------------
+def escenario_ui_seguro(P, DB):
+    """`ui_seguro` es el unico camino por el que un hilo toca la interfaz.
+
+    Se reproduce el fallo real: un hilo de trabajo que pide `after` cuando el bucle
+    de Tk ya no corre -el usuario ha cerrado la ventana a media descarga-. Ahi
+    `after` lanza `RuntimeError: main thread is not in main loop` y, sin el
+    ayudante, esa excepcion se queda en el hilo sin que nadie la recoja.
+
+    Y de paso se comprueba el gancho global de hilos: si no funcionara, esta suite
+    daria verde con excepciones sueltas por la consola, que es lo que pasaba."""
+    from ui_tema import ui_seguro
+    root = _raiz()
+    hechas = []
+    _check(ui_seguro(root, lambda: hechas.append("viva")) is True,
+           "ui_seguro: con la ventana viva, encola y devuelve True")
+    root.update()
+    _check(hechas == ["viva"], "ui_seguro: y la funcion se ejecuta de verdad")
+
+    # el caso de verdad: hilo de trabajo con la ventana ya cerrada
+    _derribar(root)
+    crudo, seguro = [], []
+
+    def trabajador():
+        try:
+            root.after(0, lambda: None)
+            crudo.append("sin excepcion")
+        except Exception as e:
+            crudo.append(type(e).__name__)
+        seguro.append(ui_seguro(root, lambda: hechas.append("tarde")))
+
+    h = threading.Thread(target=trabajador)
+    h.start()
+    h.join(5.0)
+
+    _check(crudo == ["RuntimeError"],
+           f"ui_seguro: `after` a pelo desde un hilo con la ventana cerrada revienta "
+           f"(se obtuvo {crudo})")
+    _check(seguro == [False],
+           "ui_seguro: por el ayudante NO revienta, solo devuelve False")
+    _check(hechas == ["viva"],
+           "ui_seguro: y lo encolado tarde no llega a ejecutarse")
+
+    # gancho global: una excepcion en un hilo cualquiera TIENE que apuntarse
+    antes = len(FALLOS)
+
+    def revienta():
+        raise ValueError("de mentira")
+    hb = threading.Thread(target=revienta)
+    hb.start()
+    hb.join(5.0)
+    apuntado = len(FALLOS) > antes and FALLOS[-1][1] == "ValueError"
+    if apuntado:
+        FALLOS.pop()            # provocada a proposito: no es un fallo de verdad
+    _check(apuntado, "arnes: una excepcion en un hilo cualquiera se apunta como fallo")
+    return "RuntimeError reproducido y absorbido, gancho de hilos comprobado"
+
+
 ESCENARIOS = [("arranque", escenario_arranque), ("lista de parcelas", escenario_lista),
               ("fichas de parcela", escenario_fichas), ("cuaderno y cosecha", escenario_cuaderno),
               ("validacion por indice", escenario_validacion_indices),
@@ -1319,7 +1389,8 @@ ESCENARIOS = [("arranque", escenario_arranque), ("lista de parcelas", escenario_
               ("dialogos", escenario_dialogos), ("presentacion (DPI, icono, arranque)", escenario_presentacion),
               ("fluidez (lista reutilizada, busqueda con retardo)", escenario_fluidez),
               ("tema claro/oscuro y paleta de datos", escenario_tema),
-              ("cierre a media sincronizacion", escenario_cierre)]
+              ("cierre a media sincronizacion", escenario_cierre),
+              ("ui_seguro y gancho de hilos", escenario_ui_seguro)]
 
 
 def main():
@@ -1340,6 +1411,7 @@ def main():
 
     _sin_modales()
     _callar_ruido_de_cierre()
+    _vigilar_hilos()
     DB = _sembrar()
     import panel_gestion_parcelas as P
     # Se anota AQUI, recien importado: para cuando corre el escenario de

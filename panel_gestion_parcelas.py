@@ -55,7 +55,7 @@ import ui_tema
 from ui_tema import (TEMA, TEMAS, MODO, FUENTES, PALETA_DATOS, RANURA_SERIE,
                      color_serie, activar_dpi, esc, geom, poner_icono,
                      aplicar_tema, tarjeta, centrar_sobre, marco_scroll,
-                     enlazar_rueda)
+                     enlazar_rueda, ui_seguro)
 from ui_widgets import LienzoMapa, CampoFecha, PopupCalendario
 from ui_ficha import (FichaParcela, VentanaRadar, VentanaComparaMapas,
                       PanelMapaComparado, tooltip_pasada)
@@ -301,9 +301,9 @@ class PanelGestionParcelas(ttk.Frame):
             self._sync_en_curso = False
         if not cancelado and ULTIMO_SYNC.get("estado") != "fallo":
             sincronizacion.marca_guardar()   # solo marca la hora si conecto y termino
-        self.after(0, self._actualizar_estado_sync)   # refleja exito/fallo del auto-sync
+        ui_seguro(self, self._actualizar_estado_sync)   # refleja exito/fallo del auto-sync
         if total:
-            self.after(0, self._refrescar)
+            ui_seguro(self, self._refrescar)
 
     def _progreso_sync(self, i, cuantas):
         """Ensena por que parcela va la sincronizacion. Se marshalla al hilo de la
@@ -311,7 +311,7 @@ class PanelGestionParcelas(ttk.Frame):
         def pintar():
             if hasattr(self, "lbl_sync") and self.lbl_sync.winfo_exists():
                 self.lbl_sync.config(text=f"↻ GEE: {i}/{cuantas}", fg=TEMA["header_sub"])
-        self.after(0, pintar)
+        ui_seguro(self, pintar)
 
     def detener_sincronizacion(self):
         """Pide que el recorrido en curso pare en cuanto termine la parcela actual.
@@ -466,7 +466,7 @@ class PanelGestionParcelas(ttk.Frame):
             else:
                 messagebox.showinfo("Sincronizacion",
                                     f"{n_par} parcela(s) revisadas. Sin pasadas nuevas por ahora.")
-        self.after(0, fin)
+        ui_seguro(self, fin)
 
     def _elegir_campana(self):
         """UNA sola campana para todo el programa: la de esta barra.

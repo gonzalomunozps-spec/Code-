@@ -15,7 +15,8 @@ Recibe el panel como ARGUMENTO (`panel.guardar_parcela`), no lo importa.
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from ui_tema import TEMA, FUENTES, esc, geom, tarjeta, centrar_sobre, marco_scroll
+from ui_tema import (TEMA, FUENTES, esc, geom, tarjeta, centrar_sobre,
+                     marco_scroll, ui_seguro)
 
 import almacen as DB
 import fenologia_especies as FEN
@@ -82,7 +83,7 @@ class VentanaAltaParcela(tk.Toplevel):
         self.transient(panel.winfo_toplevel())
         self.lift()
         self.after(80, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
@@ -806,7 +807,7 @@ class DialogoRelevoCampana(tk.Toplevel):
         self.grab_set()          # modal
         self.lift()
         self.after(80, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")

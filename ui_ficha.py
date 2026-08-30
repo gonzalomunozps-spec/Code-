@@ -43,7 +43,7 @@ from tkinter import ttk, messagebox
 
 import ui_tema
 from ui_tema import (TEMA, FUENTES, esc, geom, tarjeta, centrar_sobre,
-                     marco_scroll, enlazar_rueda, color_serie)
+                     marco_scroll, enlazar_rueda, color_serie, ui_seguro)
 from ui_widgets import LienzoMapa
 from ui_dialogos import (DialogoCorreccion, DialogoValidacionIndices, DialogoBorrarCampana,
                          DialogoSincronizarCampanas)
@@ -203,12 +203,12 @@ class PanelMapaComparado:
     def _descargar(self, iso, idx, png, metros):
         try:
             dim = descargar_mapa_indice(self.coords, iso, idx, metros, png)
-            self.canvas.after(0, lambda: self.lienzo.set_png(png, f"{dim}x{dim} px  ·  {metros} m/pixel"))
+            ui_seguro(self.canvas, lambda: self.lienzo.set_png(png, f"{dim}x{dim} px  ·  {metros} m/pixel"))
         except Exception as e:
             # `e` se borra al salir del except: hay que fijarlo como argumento por
             # defecto o la lambda (que corre despues, via after) lanzaria NameError
             # y el usuario nunca veria el motivo del fallo.
-            self.canvas.after(0, lambda err=e: self.lienzo.mensaje(f"Error mapa: {err}",
+            ui_seguro(self.canvas, lambda err=e: self.lienzo.mensaje(f"Error mapa: {err}",
                                                                    TEMA["danger_fg"]))
 
     def _leyenda(self):
@@ -236,7 +236,7 @@ class VentanaComparaMapas(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(80, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
 
         coords = (DB.ficha(nombre) or {}).get("coordenadas") or []
         cab = tk.Frame(self, bg=TEMA["header_bg"])
@@ -274,7 +274,7 @@ class VentanaRadar(tk.Toplevel):
         self.transient(master.winfo_toplevel())
         self.lift()
         self.after(80, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
 
         cab = tk.Frame(self, bg=TEMA["header_bg"])
         cab.pack(fill="x")
@@ -414,10 +414,10 @@ class VentanaRadar(tk.Toplevel):
     def _descargar_mapa(self, iso, param, png, metros):
         try:
             dim = descargar_mapa_radar(self.coords, iso, param, metros, png)
-            self.after(0, lambda: self.lienzo.set_png(png, f"S1 {param} · {dim}x{dim} px · {metros} m/pixel"))
+            ui_seguro(self, lambda: self.lienzo.set_png(png, f"S1 {param} · {dim}x{dim} px · {metros} m/pixel"))
         except Exception as e:
             # ver nota en PanelMapaComparado._descargar: `e` debe fijarse por defecto
-            self.after(0, lambda err=e: self.lienzo.mensaje(f"Error mapa radar: {err}",
+            ui_seguro(self, lambda err=e: self.lienzo.mensaje(f"Error mapa radar: {err}",
                                                             TEMA["danger_fg"]))
 
 
@@ -619,7 +619,7 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
                         "Campanas",
                         f"{camp}: no hay pasadas de Copernicus utilizables para esta "
                         f"parcela en esa campana.\n\n({msg})")
-            ficha.after(0, fin)
+            ui_seguro(ficha, fin)
         threading.Thread(target=worker, daemon=True).start()
 
     def _titulo(self, parent, texto):
@@ -1182,7 +1182,7 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
                 self.txt.delete("1.0", tk.END)
                 self.txt.insert(tk.END, encabezado + texto)
             try:
-                self.master.after(0, pintar)
+                ui_seguro(self.master, pintar)
             except Exception:
                 pass          # la ventana ya no existe: nada que pintar
         threading.Thread(target=worker, daemon=True).start()
@@ -1276,10 +1276,10 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
         try:
             coords = DB.ficha(self.nombre)["coordenadas"]
             dim = descargar_mapa_indice(coords, iso, idx, metros, png)
-            self.master.after(0, lambda: self.lienzo.set_png(png, f"{dim}x{dim} px  ·  {metros} m/pixel"))
+            ui_seguro(self.master, lambda: self.lienzo.set_png(png, f"{dim}x{dim} px  ·  {metros} m/pixel"))
         except Exception as e:
             # ver nota en PanelMapaComparado._descargar: `e` debe fijarse por defecto
-            self.master.after(0, lambda err=e: self.lienzo.mensaje(f"Error mapa: {err}",
+            ui_seguro(self.master, lambda err=e: self.lienzo.mensaje(f"Error mapa: {err}",
                                                                    TEMA["danger_fg"]))
 
     def _comparar_mapas(self):
@@ -1327,7 +1327,7 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
                                        optica, spec=spec_de(cult))
             info = S1.interpretar_radar(optica, self._radar, diag)
             VentanaRadar(self.master, self.nombre, self.campana, self._radar, info, n, msg)
-        self.master.after(0, fin)
+        ui_seguro(self.master, fin)
 
     def sincronizar(self):
         if not _EE:
@@ -1338,9 +1338,9 @@ class FichaParcela(CuadernoMixin, ClimaGddMixin, ValidacionMixin, ExportMixin):
         n, msg = sincronizar_parcela(self.nombre, self.campana, silencioso=True)
         if ULTIMO_SYNC.get("estado") != "fallo":
             sincronizacion.marca_guardar()
-        self.master.after(0, self.refrescar)
-        self.master.after(0, self.panel._refrescar)
-        self.master.after(0, self.panel._actualizar_estado_sync)
-        self.master.after(0, lambda: messagebox.showinfo(
+        ui_seguro(self.master, self.refrescar)
+        ui_seguro(self.master, self.panel._refrescar)
+        ui_seguro(self.master, self.panel._actualizar_estado_sync)
+        ui_seguro(self.master, lambda: messagebox.showinfo(
             "Sincronizacion", f"{self.nombre}: {msg}." if n == 0 else
             f"{self.nombre}: {msg} (incremental, sin sobrescribir)."))

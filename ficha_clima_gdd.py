@@ -19,7 +19,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from ui_tema import TEMA, FUENTES, esc, tarjeta
+from ui_tema import TEMA, FUENTES, esc, tarjeta, ui_seguro
 from cultivo import spec_de
 from ficha_comun import _EE
 
@@ -236,5 +236,5 @@ class ClimaGddMixin:
                     return
                 self._pintar_clima()
                 messagebox.showinfo("Clima", f"{msg}.")
-            ficha.after(0, fin)
+            ui_seguro(ficha, fin)
         threading.Thread(target=worker, daemon=True).start()

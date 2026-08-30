@@ -19,7 +19,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from ui_tema import TEMA, FUENTES, centrar_sobre
+from ui_tema import TEMA, FUENTES, centrar_sobre, ui_seguro
 import almacen as DB
 import copias
 
@@ -34,7 +34,7 @@ class DialogoCopias(tk.Toplevel):
         self.transient(panel.winfo_toplevel())
         self.lift()
         self.after(60, self.focus_force)
-        self.after(0, lambda: centrar_sobre(self, self.master))
+        ui_seguro(self, lambda: centrar_sobre(self, self.master))
         self.grab_set()
 
         tk.Label(self, text="Copias de seguridad de tus datos", bg=TEMA["surface"],
