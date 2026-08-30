@@ -71,7 +71,7 @@ mapas. **Para hacer copia de seguridad basta con copiar esa carpeta.**
 ## 7. Pruebas
 
 ```bash
-python pruebas.py            # 888 pruebas, sin pantalla ni red
+python pruebas.py            # 900 pruebas, sin pantalla ni red
 python pruebas_interfaz.py   # monta la aplicación de verdad y la recorre
 ```
 

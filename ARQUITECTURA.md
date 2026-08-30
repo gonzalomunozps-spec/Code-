@@ -105,7 +105,8 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 888 pruebas sin pantalla ni red. |
+| `pruebas.py` | 900 pruebas sin pantalla ni red. |
+| `medir_ruido.py` | **Herramienta de diagnóstico**, no parte del programa: estima el ruido del NDVI de tus parcelas con la segunda diferencia de tripletes de pasadas, y cuenta cuántos cambios del semáforo ocurrieron pegados a un umbral. **Borrable**: no la importa nadie. |
 | `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.499 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
@@ -572,6 +573,8 @@ sale con el icono por defecto de Tk y no pasa nada más.
 Se importan con `try/except`. **Si borras el fichero, la función desaparece y el
 resto sigue igual**; no hay interruptor que tocar.
 
+- `medir_ruido.py` → desaparece la herramienta de diagnóstico del ruido. No la importa
+  nadie; el programa ni se entera.
 - `informe_anual.py` → quita el botón «Informe / Exportar».
   A la inversa, borrar `clima_era5`, `balance_hidrico` o `grados_dia` **no** rompe el
   informe: pierde esas secciones y el resto sale como siempre (`secciones_con_datos` las declara «sin datos» en el diálogo de exportar).
@@ -618,7 +621,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 888 pruebas, sin pantalla ni red (incluye el fichero de oro)
+python pruebas.py          # 900 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db

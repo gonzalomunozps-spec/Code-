@@ -4408,6 +4408,95 @@ def pruebas_empaquetar():
 
 # =====================================================================
 # =====================================================================
+# 38. MEDIDA DEL RUIDO DEL NDVI (herramienta medir_ruido, nucleo puro)
+# =====================================================================
+def pruebas_medir_ruido():
+    """El estimador de ruido, sin base de datos.
+
+    Se comprueba contra un ruido de magnitud CONOCIDA: es la unica forma de saber
+    si el numero que sale significa algo."""
+    try:
+        import medir_ruido as MR
+    except Exception:
+        return                                   # herramienta borrada -> nada que probar
+    import math
+    from datetime import datetime, timedelta
+
+    def serie(n, sigma, pendiente=0.01, curvatura=0.0, semilla=7, paso=5):
+        """Senal + ruido gaussiano DETERMINISTA (Box-Muller sobre un congruencial)."""
+        x = semilla * 7919 + 13
+        def u():
+            nonlocal x
+            x = (1103515245 * x + 12345) % 2147483648
+            return (x + 0.5) / 2147483648.0
+        f0, out = datetime(2026, 1, 1), []
+        for i in range(n):
+            g = math.sqrt(-2 * math.log(u())) * math.cos(2 * math.pi * u())
+            out.append({"fecha": (f0 + timedelta(days=paso * i)).strftime("%Y-%m-%d"),
+                        "ndvi": 0.30 + pendiente * i + curvatura * i * i + sigma * g})
+        return out
+
+    check("ruido: una recta perfecta no tiene ruido (residuos todos cero)",
+          lambda: MR.segundas_diferencias(serie(20, 0.0)),
+          lambda r: len(r) == 18 and max(abs(x) for x in r) < 1e-9)
+    check("ruido: sobre una recta, el estimador da cero",
+          lambda: MR.sigma_robusta(MR.segundas_diferencias(serie(20, 0.0))),
+          lambda r: r is not None and r < 1e-9)
+    # insesgado: se promedian muchas realizaciones porque en una sola el error
+    # tipico es grande (medido: 33 % con 20 pasadas, 16 % con 80)
+    check("ruido: con sigma conocida 0.020, la mediana de 60 realizaciones lo acierta",
+          lambda: MR.mediana([MR.sigma_robusta(MR.segundas_diferencias(serie(40, 0.020, semilla=k)))
+                              for k in range(60)]),
+          lambda r: 0.017 <= r <= 0.023)
+    check("ruido: y con sigma 0.005 tambien (escala bien)",
+          lambda: MR.mediana([MR.sigma_robusta(MR.segundas_diferencias(serie(40, 0.005, semilla=k)))
+                              for k in range(60)]),
+          lambda r: 0.004 <= r <= 0.006)
+    check("ruido: la pendiente de la senal NO se cuenta como ruido",
+          lambda: MR.mediana([MR.sigma_robusta(MR.segundas_diferencias(
+                                  serie(40, 0.020, pendiente=0.05, semilla=k)))
+                              for k in range(40)]),
+          lambda r: 0.017 <= r <= 0.023)
+    check("ruido: la curvatura SI infla la estimacion (por eso es cota superior)",
+          lambda: MR.mediana([MR.sigma_robusta(MR.segundas_diferencias(
+                                  serie(40, 0.005, curvatura=0.01, semilla=k)))
+                              for k in range(20)]),
+          lambda r: r > 0.005)
+    # una pasada con nube residual no puede llevarse por delante la estimacion
+    s_nube = serie(40, 0.010, semilla=3)
+    s_nube[20]["ndvi"] = 0.02          # residuo de nube: se desploma una pasada
+    check("ruido: una sola pasada con nube no dispara la estimacion (MAD, no desviacion)",
+          lambda: MR.sigma_robusta(MR.segundas_diferencias(s_nube)),
+          lambda r: r < 0.020)
+    # huecos
+    s_h = serie(10, 0.010)
+    s_h[5]["fecha"] = "2026-09-01"
+    check("ruido: los tripletes con hueco largo se descartan",
+          lambda: (len(MR.segundas_diferencias(s_h, hueco_max=999)),
+                   len(MR.segundas_diferencias(s_h, hueco_max=20))),
+          lambda r: r[0] > r[1])
+    # degenerados: la herramienta no puede reventar por un dato malo
+    check("ruido: serie vacia -> sin residuos, sin estimacion",
+          lambda: (MR.segundas_diferencias([]), MR.sigma_robusta([])),
+          lambda r: r == ([], None))
+    check("ruido: NDVI nulos y fechas basura se saltan sin reventar",
+          lambda: MR.segundas_diferencias([{"fecha": "2026-01-01", "ndvi": None},
+                                           {"fecha": "no-es-fecha", "ndvi": 0.5},
+                                           {"fecha": "2026-01-06", "ndvi": 0.5},
+                                           {"ndvi": 0.5},
+                                           {"fecha": "2026-01-11", "ndvi": 0.5},
+                                           {"fecha": "2026-01-16", "ndvi": 0.5}]),
+          lambda r: len(r) == 1)
+    check("ruido: con menos de 3 residuos no se inventa una estimacion",
+          lambda: MR.sigma_robusta([0.01, 0.02]), lambda r: r is None)
+    check("ruido: las pasadas desordenadas se ordenan por fecha",
+          lambda: MR.segundas_diferencias([{"fecha": "2026-01-11", "ndvi": 0.5},
+                                           {"fecha": "2026-01-01", "ndvi": 0.4},
+                                           {"fecha": "2026-01-06", "ndvi": 0.45}]),
+          lambda r: len(r) == 1 and abs(r[0]) < 1e-9)
+
+
+# =====================================================================
 # 38. LAS REGLAS DEL MOTOR, UNA A UNA (tuberia de `interpretacion_fenologica`)
 # =====================================================================
 def pruebas_reglas_motor():
@@ -4683,7 +4772,8 @@ def main():
               pruebas_observaciones_campo, pruebas_copias, pruebas_variedades,
               pruebas_pradera, pruebas_sync_cancelable,
               pruebas_instalador,
-              pruebas_empaquetar, pruebas_reglas_motor, pruebas_oro_motor):
+              pruebas_empaquetar, pruebas_medir_ruido, pruebas_reglas_motor,
+              pruebas_oro_motor):
         try:
             f()
         except Exception as e:

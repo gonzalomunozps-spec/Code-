@@ -129,7 +129,7 @@ con copiar esa carpeta.** Se puede cambiar con `GESTOR_PARCELAS_DIR`.
 ## Pruebas
 
 ```bash
-python pruebas.py            # 888 pruebas, sin pantalla ni red
+python pruebas.py            # 900 pruebas, sin pantalla ni red
 python pruebas_interfaz.py   # monta la aplicación real y la recorre
 ```
 
