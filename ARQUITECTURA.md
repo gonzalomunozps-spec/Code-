@@ -105,7 +105,8 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 837 pruebas sin pantalla ni red. |
+| `pruebas.py` | 841 pruebas sin pantalla ni red. |
+| `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.493 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
 ---
@@ -571,8 +572,9 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 837 pruebas, sin pantalla ni red
+python pruebas.py          # 841 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
+python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
 python panel_gestion_parcelas.py
 ```
@@ -582,6 +584,49 @@ Herramientas útiles:
 python -m pyflakes *.py                                  # nombres muertos/indefinidos
 python -m mypy --ignore-missing-imports fechas.py geo.py campanas.py cultivo.py sigpac.py
 ```
+
+### El fichero de oro del motor (`pruebas_oro.py` + `oro_evaluar_parcela.json`)
+
+`pruebas.py` comprueba **veredictos**: que tal entrada da «Vigilar». Eso no basta
+para tocar el motor, porque dos caminos distintos que acaben los dos en «Vigilar»
+son indistinguibles para esa suite. El fichero de oro congela la **salida completa**
+—`clave`, `estado`, `esperado`, `fase`, `rango_fase`, `ndvi_juicio`, `umbrales`, el
+`motivo` que lee el agricultor, los textos de los deltas y el veredicto de
+copa/cubierta/heterogeneidad— de **3.493 entradas** generadas por barrido.
+
+Qué cubre el barrido: las 12 especies de extensivo y las 4 de leñoso, cada fase con
+sus **fronteras exactas** (día anterior, día justo y día siguiente al cambio), NDVI
+**pegado a cada corte** (`lo*0.8`, `lo` y `hi`, a ±0,005), NDMI a ambos lados de su
+mínimo de fase, siega en verde y pradera, corte de forraje, marco y diámetro de copa
+declarados y sin declarar, regadío/secano/sin declarar, series de 1, 2 y 4 pasadas,
+eventos del cuaderno a varias distancias, heterogeneidad encendida y apagada, y 25
+entradas degeneradas (serie vacía, NDVI nulo, 0.0 exacto, fechas ilegibles, especie
+desconocida…).
+
+Las fronteras **no están escritas a mano**: salen de las tablas de
+`fenologia_especies`. Si se ajusta una fase, el barrido la sigue solo.
+
+Es determinista por contrato: sin red, sin base de datos, sin azar y **sin depender
+de la fecha de hoy** (todas las fechas son absolutas y `parcela=None`, así que
+tampoco entra la calibración).
+
+**Cuándo se regenera.** Nunca solo, y nunca para que la suite se calle. Si falla,
+`python pruebas_oro.py` dice qué caso, con qué entrada, qué decía antes y qué dice
+ahora, más el recuento por transición (`Vigilar → Revisar: 119 casos`). Si el cambio
+es una regresión, se arregla el código. Si es **deliberado** —una decisión
+agronómica tomada a conciencia— se regenera a mano:
+
+```bash
+python pruebas_oro.py --regenerar
+```
+
+y **el diff de ese fichero entra en la revisión como si fuera código**: es la lista
+exacta de veredictos que cambian. Un caso por línea, precisamente para eso.
+
+Límite consciente: no se congelan los números internos de `copa["contrastes"]`
+(aritmética derivada de la entrada, ya cubierta por el veredicto que produce) ni
+`fecha` (es un eco de la entrada). Un refactor que cambiara esa aritmética sin mover
+ni el veredicto ni el texto no lo vería este fichero.
 
 ### Límites conocidos de las pruebas
 - `pruebas.py` corre **sin Tkinter** a propósito, así que no ve nada de lo que

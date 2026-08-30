@@ -4407,6 +4407,49 @@ def pruebas_empaquetar():
 
 
 # =====================================================================
+# =====================================================================
+# 38. FICHERO DE ORO DEL MOTOR (modulo pruebas_oro)
+# =====================================================================
+def pruebas_oro_motor():
+    """Barrido congelado de `evaluar_parcela` contra `oro_evaluar_parcela.json`.
+
+    El resto de la suite comprueba VEREDICTOS sueltos; esto compara la salida
+    entera -motivo incluido- de miles de entradas. Es la red que permite tocar el
+    motor sabiendo exactamente que cambia.
+
+    Si esta prueba falla, el informe completo (que caso, que entrada, antes y
+    despues, y el recuento por transicion de estado) sale ejecutando:
+
+        python pruebas_oro.py
+
+    y NUNCA se arregla regenerando el fichero de oro sin mirar el diff."""
+    try:
+        import pruebas_oro
+    except Exception:
+        return                                   # modulo borrado -> nada que probar
+    ok, informe, resumen = pruebas_oro.comparar()
+    check(f"oro: la salida del motor no ha cambiado ({resumen['casos']} casos)",
+          lambda: (ok, informe), lambda r: r[0] is True)
+    if not ok:
+        # el informe completo, para no tener que lanzar el modulo a mano
+        print(informe)
+    # el barrido tiene que seguir cubriendo lo que dice cubrir: si alguien retoca
+    # un generador y se lleva por delante media rejilla, esto lo canta
+    check("oro: el barrido conserva su tamano y su reparto por bloques",
+          lambda: sorted({k.split("|")[0] for k in pruebas_oro.casos()}),
+          lambda r: r == ["DEGEN", "EVENTO", "EXT", "FRONT", "HETERO", "LEN",
+                          "LENMARCO", "LENSERIE", "SEGADO", "SERIE", "UMBRAL",
+                          "UMBRALLEN", "UMBRALNDMI"])
+    check("oro: sigue habiendo casos de todos los estados del semaforo",
+          # `cargar()` puede devolver None si falta el fichero; ese caso ya lo
+          # denuncia la comprobacion de arriba, aqui solo hay que no reventar
+          lambda: {v.get("estado") for v in (pruebas_oro.cargar() or {}).values()},
+          lambda r: {"OK", "Vigilar", "Revisar", "Segado", "N.A.", "Sin dato"} <= r)
+    # determinismo: dos ejecuciones seguidas tienen que dar exactamente lo mismo
+    check("oro: el barrido es determinista (dos ejecuciones, mismo resultado)",
+          lambda: pruebas_oro.ejecutar() == pruebas_oro.ejecutar(), lambda r: r is True)
+
+
 def main():
     for f in (pruebas_motor, pruebas_fenologia, pruebas_contraste,
               pruebas_cuaderno, pruebas_umbrales, pruebas_lenosos, pruebas_rejilla, pruebas_credenciales, pruebas_persistencia, pruebas_almacen,
@@ -4419,7 +4462,7 @@ def main():
               pruebas_observaciones_campo, pruebas_copias, pruebas_variedades,
               pruebas_pradera, pruebas_sync_cancelable,
               pruebas_instalador,
-              pruebas_empaquetar):
+              pruebas_empaquetar, pruebas_oro_motor):
         try:
             f()
         except Exception as e:
