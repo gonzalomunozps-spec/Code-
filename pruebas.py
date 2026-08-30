@@ -109,8 +109,12 @@ def pruebas_motor():
     spec_forr = {"especie": "AVENA", "fecha_siembra": "2025-10-05"}
     check("motor: siega en verde -> corte = OK", lambda: evaluar_parcela("EXTENSIVO", "SIEGA_VERDE",
           corte, "2026-04-14", spec=spec_forr)["clave"], lambda r: r == "OK")
-    check("motor: mismo corte en grano NO es OK", lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
-          corte, "2026-04-14", spec=spec_forr)["clave"], lambda r: r in ("Vigilar", "Revisar"))
+    # `clave_cruda`, no `clave`: se comprueba el JUICIO agronomico. Lo que se ENSENA
+    # pasa ademas por la persistencia (k=2), que tiene sus propias pruebas.
+    check("motor: mismo corte en grano NO es OK",
+          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
+                                  corte, "2026-04-14", spec=spec_forr)["clave_cruda"],
+          lambda r: r in ("Vigilar", "Revisar"))
 
     # --- SIEGA EN VERDE: desplome en abril-mayo -> estado "Segado" ---
     seg = [{"fecha": "2026-04-20", "ndvi": 0.80, "ndmi": 0.30},
@@ -134,9 +138,10 @@ def pruebas_motor():
                  "ndvi_p10": 0.55, "ndvi_p50": 0.60, "ndvi_p90": 0.65, "n_pixeles": 800},
                 {"fecha": "2026-03-20", "ndvi": media2, "ndvi_std": std2,
                  "ndvi_p10": p10_2, "ndvi_p50": 0.61, "ndvi_p90": 0.72, "n_pixeles": 800}]
+    # `estado_crudo`: el juicio. Lo ENSENADO espera confirmacion (persistencia k=2).
     check("foco temprano: dispersion creciente -> Vigilar con aviso",
           lambda: evaluar_parcela("LENOSO", "", _serie(0.13, 0.38), spec=_sp),
-          lambda d: d["estado"] == "Vigilar" and "AVISO TEMPRANO" in d["motivo"])
+          lambda d: d["estado_crudo"] == "Vigilar" and "AVISO TEMPRANO" in d["motivo"])
     check("foco temprano: nombra el rodal hundido (p50-p10)",
           lambda: evaluar_parcela("LENOSO", "", _serie(0.13, 0.38), spec=_sp)["motivo"],
           lambda m: "rodal hundido" in m)
@@ -169,7 +174,7 @@ def pruebas_motor():
         d = evaluar_parcela("LENOSO", "", _serie(0.13, 0.38), spec=_sp)
         vals = [{"cultivo": "LENOSO//ALMENDRO", "fase": d["fase"], "estado_sistema": "Vigilar",
                  "veredicto": "incorrecto", "estado_real": "OK"}] * 2
-        return _aj("LENOSO//ALMENDRO", d["fase"], d["estado"], vals)
+        return _aj("LENOSO//ALMENDRO", d["fase"], d["estado_crudo"], vals)
     check("foco temprano: el usuario puede corregirlo y se aprende",
           _usuario_manda, lambda r: r.get("corregido") == "OK")
 
@@ -717,7 +722,8 @@ def pruebas_umbrales():
     d0 = evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec, parcela="Vega")
     FASE = d0["fase"]
     check("calibracion: sin validaciones manda la tabla",
-          lambda: (d0["estado"], d0["umbrales"]["ndmi_min"]), lambda r: r == ("Vigilar", 0.12))
+          lambda: (d0["estado_crudo"], d0["umbrales"]["ndmi_min"]),
+          lambda r: r == ("Vigilar", 0.12))
 
     def _valida(n, ambito="municipio", parcela="Vega", dijo="normal"):
         for k in range(n):
@@ -2417,10 +2423,11 @@ def pruebas_buffer_y_zonas():
     def _con(on):
         return evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec,
                                heterogeneidad_activa=on)
+    # `estado_crudo` en las que suben el nivel: el ENSENADO espera la segunda pasada
     check("zonas: encendido (por defecto) avisa del foco y sube a Vigilar",
           lambda: _con(True),
-          lambda d: d["estado"] == "Vigilar" and ("FOCO" in d["motivo"]
-                                                  or "AVISO TEMPRANO" in d["motivo"]))
+          lambda d: d["estado_crudo"] == "Vigilar" and ("FOCO" in d["motivo"]
+                                                        or "AVISO TEMPRANO" in d["motivo"]))
     check("zonas: apagado no avisa ni cambia el estado",
           lambda: _con(False),
           lambda d: d["estado"] == "OK" and "FOCO" not in d["motivo"]
@@ -2428,7 +2435,8 @@ def pruebas_buffer_y_zonas():
     check("zonas: apagado NO deja de calcular los estadisticos (solo el juicio)",
           lambda: _con(False)["heterogeneidad"], lambda r: r is not None)
     check("zonas: el valor por defecto de la firma conserva el comportamiento de siempre",
-          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie, spec=spec)["estado"],
+          lambda: evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie,
+                                  spec=spec)["estado_crudo"],
           lambda r: r == "Vigilar")
 
     # --- persistencia del ajuste
@@ -4408,6 +4416,122 @@ def pruebas_empaquetar():
 
 # =====================================================================
 # =====================================================================
+# 38. PERSISTENCIA DEL SEMAFORO (no cambia con una sola pasada)
+# =====================================================================
+def pruebas_persistencia_semaforo():
+    """El filtro de persistencia k=2, entrada, permanencia y salida.
+
+    Decision agronomica tomada con los numeros de la fase 3: con ruido realista
+    quita el 78 % de las oscilaciones y retrasa un aviso de verdad UNA pasada."""
+    import interpretacion_fenologica as IF
+    from datetime import datetime, timedelta
+
+    SI = "2025-10-15"
+    SP = {"especie": "TRIGO", "fecha_siembra": SI}
+
+    def f(das):
+        return (datetime.strptime(SI, "%Y-%m-%d") + timedelta(days=das)).strftime("%Y-%m-%d")
+
+    def serie(valores, das0=100, paso=10, **extra):
+        return [dict({"fecha": f(das0 + paso * i), "ndvi": v, "ndmi": 0.30, "lai": 2.8},
+                     **extra) for i, v in enumerate(valores)]
+
+    def mostrados(valores, **kw):
+        s_ = serie(valores)
+        return [IF.evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", s_[:i + 1],
+                                   spec=SP, **kw)["estado"] for i in range(len(s_))]
+
+    def crudos(valores):
+        s_ = serie(valores)
+        return [IF._diagnostico_crudo("EXTENSIVO", "COSECHA_GRANO", s_[:i + 1],
+                                      spec=SP)["estado"] for i in range(len(s_))]
+
+    check("persistencia: la constante es 2 pasadas, y esta a la vista",
+          lambda: IF.PERSISTENCIA_PASADAS, lambda r: r == 2)
+    # ENTRADA: un aviso aislado NO entra; repetido, si
+    check("persistencia: un aviso de UNA sola pasada no mueve el semaforo",
+          lambda: mostrados([0.70, 0.70, 0.50, 0.70]),
+          lambda r: r == ["OK", "OK", "OK", "OK"])
+    check("persistencia: repetido dos pasadas seguidas, entra",
+          lambda: mostrados([0.70, 0.70, 0.50, 0.50]),
+          lambda r: r[:3] == ["OK", "OK", "OK"] and r[3] == "Vigilar")
+    check("persistencia: el crudo SI se mueve a la primera (es el juicio agronomico)",
+          lambda: crudos([0.70, 0.70, 0.50, 0.70]),
+          lambda r: r == ["OK", "OK", "Vigilar", "OK"])
+    # PERMANENCIA
+    check("persistencia: una vez dentro, se queda mientras el crudo lo confirme",
+          lambda: mostrados([0.50, 0.50, 0.50, 0.50]),
+          lambda r: r == ["Vigilar"] * 4)
+    # SALIDA: simetrica, tambien cuesta dos pasadas salir
+    check("persistencia: salir tambien cuesta dos pasadas (no se sale con un repunte)",
+          lambda: mostrados([0.50, 0.50, 0.70, 0.50]),
+          lambda r: r == ["Vigilar"] * 4)
+    check("persistencia: con el repunte confirmado, sale",
+          lambda: mostrados([0.50, 0.50, 0.70, 0.70]),
+          lambda r: r[:3] == ["Vigilar"] * 3 and r[3] == "OK")
+    # RUIDO ALREDEDOR DEL UMBRAL: el caso que motivo todo esto
+    check("persistencia: ruido alterno pegado al umbral deja de hacer parpadear",
+          lambda: (sum(1 for a, b in zip(crudos([0.58, 0.52] * 4), crudos([0.58, 0.52] * 4)[1:]) if a != b),
+                   sum(1 for a, b in zip(mostrados([0.58, 0.52] * 4), mostrados([0.58, 0.52] * 4)[1:]) if a != b)),
+          lambda r: r[1] < r[0])
+    # SERIES CORTAS
+    check("persistencia: con UNA sola pasada se ensena lo que hay (no hay nada que confirmar)",
+          lambda: mostrados([0.50]), lambda r: r == ["Vigilar"])
+    check("persistencia: con dos pasadas, la segunda espera confirmacion",
+          lambda: mostrados([0.70, 0.50]), lambda r: r == ["OK", "OK"])
+    # DATOS QUE FALTAN: "Sin dato" NO se retiene, seria ensenar un juicio no hecho
+    check("persistencia: una pasada sin NDVI se ensena como Sin dato, sin esperar",
+          lambda: IF.evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
+                                     serie([0.70, 0.70]) + [{"fecha": f(120), "ndvi": None}],
+                                     spec=SP)["estado"],
+          lambda r: r == "Sin dato")
+    # SEGADO: evento discreto, tampoco se retiene
+    check("persistencia: un corte de forraje entra a la primera (es un hecho, no ruido)",
+          lambda: IF.evaluar_parcela(
+              "EXTENSIVO", "SIEGA_VERDE",
+              [{"fecha": "2026-04-01", "ndvi": 0.75, "ndmi": 0.3, "lai": 2.8},
+               {"fecha": "2026-04-15", "ndvi": 0.25, "ndmi": 0.3, "lai": 2.8}],
+              spec={"especie": "VEZA", "fecha_siembra": SI})["estado"],
+          lambda r: r == "Segado")
+    # ESPERADO: lo ya explicado no se retiene
+    check("persistencia: una caida propia de la fase no espera confirmacion",
+          lambda: IF.evaluar_parcela(
+              "EXTENSIVO", "COSECHA_GRANO",
+              serie([0.55, 0.20], das0=200, paso=12), spec=SP),
+          lambda d: d["esperado"] is True and d["confirmando"] is False)
+    # FRONTERA DE FASE: el cambio de umbral tambien se retiene (coste asumido)
+    check("persistencia: en una frontera de fase el cambio tambien espera una pasada",
+          lambda: IF.evaluar_parcela("EXTENSIVO", "COSECHA_GRANO",
+                                     [{"fecha": f(93), "ndvi": 0.46, "ndmi": 0.3, "lai": 2.8},
+                                      {"fecha": f(97), "ndvi": 0.46, "ndmi": 0.3, "lai": 2.8}],
+                                     spec=SP),
+          lambda d: d["confirmando"] is True and d["estado"] != d["estado_crudo"])
+    # LO QUE SE ENSENA Y LO QUE SE APRENDE
+    d_ret = IF.evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie([0.70, 0.50]), spec=SP)
+    check("persistencia: el dict trae el estado CRUDO aparte del ensenado",
+          lambda: (d_ret["estado"], d_ret["estado_crudo"], d_ret["clave_cruda"]),
+          lambda r: r == ("OK", "Vigilar", "Vigilar"))
+    check("persistencia: y una bandera que dice que hay un cambio esperando",
+          lambda: d_ret["confirmando"], lambda r: r is True)
+    check("persistencia: el motivo cuenta lo OBSERVADO y explica por que el semaforo espera",
+          lambda: d_ret["motivo"],
+          lambda t: "por debajo" in t and "espera una segunda pasada" in t)
+    check("persistencia: sin retencion, no se ensucia el motivo con la nota",
+          lambda: IF.evaluar_parcela("EXTENSIVO", "COSECHA_GRANO", serie([0.70]),
+                                     spec=SP)["motivo"],
+          lambda t: "espera una segunda pasada" not in t)
+    # el barbecho y la serie vacia siguen saliendo por su atajo, con las claves nuevas
+    check("persistencia: barbecho y serie vacia traen tambien las claves nuevas",
+          lambda: (IF.evaluar_parcela("BARBECHO", "", serie([0.5])),
+                   IF.evaluar_parcela("EXTENSIVO", "", [])),
+          lambda r: all("estado_crudo" in d and d["confirmando"] is False for d in r))
+    # el aprendizaje mira el crudo, no el retenido
+    check("vista_ficha: el aprendizaje usa el estado CRUDO, no el retenido",
+          lambda: __import__("inspect").getsource(__import__("vista_ficha")),
+          lambda src: 'estado_bruto = diag.get("estado_crudo"' in src)
+
+
+# =====================================================================
 # 38. MEDIDA DEL RUIDO DEL NDVI (herramienta medir_ruido, nucleo puro)
 # =====================================================================
 def pruebas_medir_ruido():
@@ -4772,7 +4896,8 @@ def main():
               pruebas_observaciones_campo, pruebas_copias, pruebas_variedades,
               pruebas_pradera, pruebas_sync_cancelable,
               pruebas_instalador,
-              pruebas_empaquetar, pruebas_medir_ruido, pruebas_reglas_motor,
+              pruebas_empaquetar, pruebas_medir_ruido, pruebas_persistencia_semaforo,
+              pruebas_reglas_motor,
               pruebas_oro_motor):
         try:
             f()

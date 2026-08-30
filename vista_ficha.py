@@ -74,7 +74,12 @@ def preparar_interpretacion(nombre, campana, regs, idx):
     # `arbolado` enmascara las encinas para juzgar el cultivo, no los arboles.
     diag = evaluar_parcela(tipo, sub, regs, eventos_cerca=eventos_cerca, spec=spec,
                            parcela=nombre, heterogeneidad_activa=hetero_on, arbolado=arbolado)
-    estado_bruto = diag["estado"]          # el que produce el motor (base del aprendizaje)
+    # El CRUDO, no el que se ensena. El semaforo puede estar reteniendo un cambio a
+    # la espera de la segunda pasada (ver `interpretacion_fenologica`, persistencia),
+    # y eso es una decision de PRESENTACION. Si el aprendizaje mirase el estado
+    # retenido, estaria aprendiendo del filtro en vez de del cultivo: el usuario
+    # corregiria un veredicto que el motor no ha emitido.
+    estado_bruto = diag.get("estado_crudo", diag["estado"])
     cultivo_id = f"{tipo}/{sub}" + (f"/{spec['especie']}" if spec and spec.get("especie") else "")
 
     historial = DB.validaciones_recientes(limite=300)

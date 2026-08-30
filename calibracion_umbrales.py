@@ -375,10 +375,16 @@ def comparar_con_historico(campana=None):
                                        spec=spec_de(cult))
                 cal = evaluar_parcela(cult.get("tipo", ""), cult.get("subtipo", ""), sub,
                                       spec=spec_de(cult), parcela=nombre)
-                if base["estado"] != cal["estado"]:
+                # el estado CRUDO: aqui se mide el efecto de la CALIBRACION, y el
+                # semaforo puede estar reteniendo un cambio a la espera de la
+                # segunda pasada. Comparar los estados ya retenidos mezclaria el
+                # efecto del calibrado con el del filtro de persistencia.
+                e_base = base.get("estado_crudo", base["estado"])
+                e_cal = cal.get("estado_crudo", cal["estado"])
+                if e_base != e_cal:
                     resumen["cambian"] += 1
                     resumen["detalle"].append(
-                        (nombre, camp, sub[-1].get("fecha", ""), base["estado"], cal["estado"]))
+                        (nombre, camp, sub[-1].get("fecha", ""), e_base, e_cal))
     return resumen
 
 

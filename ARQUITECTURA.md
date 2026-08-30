@@ -105,7 +105,7 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 900 pruebas sin pantalla ni red. |
+| `pruebas.py` | 920 pruebas sin pantalla ni red. |
 | `medir_ruido.py` | **Herramienta de diagnóstico**, no parte del programa: estima el ruido del NDVI de tus parcelas con la segunda diferencia de tripletes de pasadas, y cuenta cuántos cambios del semáforo ocurrieron pegados a un umbral. **Borrable**: no la importa nadie. |
 | `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.499 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
@@ -497,6 +497,55 @@ Dos cautelas que el refactor **no** ha tocado y conviene conocer:
 
 ---
 
+## 4c. El semáforo no cambia con una sola pasada (persistencia)
+
+**Medido** sobre 6.880 combinaciones (especie × fase × distancia al umbral × ruido ×
+patrón), siempre dentro de una fase para que el umbral no se mueva:
+
+- con ruido **cero**, el semáforo **no cambia nunca**: todo lo que se mueve con ruido
+  es artefacto, no fenología;
+- con ruido realista de ±0,03 oscila en el **45 %** de las combinaciones;
+- y la franja donde ocurre es **del ancho del ruido**: a +0,03 por encima del umbral,
+  cero oscilación. Hay dos franjas, una en `lo` y otra en `lo*0.8`.
+
+**Decisión tomada** (es agronómica, no técnica): **persistencia de dos pasadas**.
+
+> El estado que se ENSEÑA cambia sólo cuando el estado CRUDO se repite en dos pasadas
+> seguidas.
+
+Medido antes y después sobre 282 series con ruido realista: **623 → 140 cambios de
+estado (78 % menos)**, 483 falsos cambios evitados, y el retraso en avisar de un
+deterioro real es de **una pasada**. Se descartó k=3 porque, quitando más ruido
+(92 %), en la prueba de deterioro real **no llegaba a avisar en ocho pasadas**.
+
+**Lo que NO se retiene**, porque no es ruido sino un hecho, y retenerlo sería enseñar
+algo falso: `Sin dato` (esa pasada no tiene NDVI), `Segado` (el corte es un evento
+discreto), `N.A.` (barbecho, que ni llega) y cualquier pasada con `esperado=True` (una
+caída propia de la fase o explicada por el cuaderno ya está explicada). Está en
+`_SIN_RETENER` y en `_retiene`, para poder discutirlo en un sitio.
+
+**Tres claves nuevas en el dict**, y una de ellas importa mucho:
+- `estado_crudo` / `clave_cruda`: el juicio sin filtrar. **Es lo que aprende la
+  calibración**, porque retener un estado es una decisión de presentación: si el
+  aprendizaje mirase el estado retenido, estaría aprendiendo del filtro y no del
+  cultivo. `vista_ficha` y `calibracion_umbrales.comparar_con_historico` usan éste.
+- `confirmando`: True cuando hay un cambio esperando su segunda pasada.
+
+El `motivo` es **siempre** el de la pasada actual —lo que se ha visto de verdad—; al
+retener se le añade una nota que explica por qué el semáforo aún no se ha movido, para
+que el texto nunca contradiga al dato.
+
+**Coste**: para saber si el estado crudo se repite hace falta el de la pasada anterior,
+así que `evaluar_parcela` recorre la serie entera. Con 30 pasadas son milisegundos; la
+suite completa pasó de 3,9 s a 5,0 s.
+
+**Límite conocido**: al recalcular las pasadas anteriores no se dispone de los eventos
+del cuaderno de esas fechas (el llamante sólo pasa los de la última). Como un evento
+marca `esperado` y lo esperado no se retiene, el efecto se limita a la pasada siguiente
+a una explicada por un evento.
+
+---
+
 ## 5. La interfaz: dónde está cada cosa
 
 Era un monolito de **4.313 líneas** —la deuda técnica número uno— y está partido en
@@ -621,7 +670,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 900 pruebas, sin pantalla ni red (incluye el fichero de oro)
+python pruebas.py          # 920 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db

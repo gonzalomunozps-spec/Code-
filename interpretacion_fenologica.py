@@ -842,11 +842,11 @@ def _aplicar(diag, efecto, nombre):
                  evento_explica=diag.evento_explica or nombre == "eventos_cuaderno")
 
 
-def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
-                    parcela=None, heterogeneidad_activa=True, arbolado=False):
+def _diagnostico_crudo(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
+                       parcela=None, heterogeneidad_activa=True, arbolado=False):
     """
-    Devuelve un dict con el diagnostico completo. Semaforo y explicacion
-    coherentes entre si, con fenologia y (en lenosos) cubierta vegetal.
+    El diagnostico SIN filtro de persistencia: lo que dicen los indices de esta
+    pasada, tal cual. Es el juicio agronomico, y es lo que aprende la calibracion.
 
     Se resuelve en tres pasos, que es como conviene leerlo: se PREPARA el contexto
     (`_preparar_contexto`), se emite un veredicto base (`_juicio_base`) y se pasa por
@@ -871,12 +871,14 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
     if tipo == "BARBECHO":
         return {"estado": "N.A.", "clave": "NA", "fase": "barbecho",
                 "motivo": "Parcela en barbecho: no se evalua el vigor del cultivo.",
-                "deltas": {}, "cubierta": None, "esperado": True}
+                "deltas": {}, "cubierta": None, "esperado": True,
+                "estado_crudo": "N.A.", "clave_cruda": "NA", "confirmando": False}
 
     if not serie:
         return {"estado": "Sin dato", "clave": "Sin", "fase": "-",
                 "motivo": "Sin pasadas validas de satelite.", "deltas": {},
-                "cubierta": None, "esperado": False}
+                "cubierta": None, "esperado": False,
+                "estado_crudo": "Sin dato", "clave_cruda": "Sin", "confirmando": False}
 
     ctx = _preparar_contexto(tipo, subtipo, serie, fecha_iso, eventos_cerca, spec,
                              parcela, heterogeneidad_activa, arbolado)
@@ -888,7 +890,113 @@ def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, sp
             "rango_fase": (ctx.lo, ctx.hi), "motivo": diag.motivo, "deltas": ctx.deltas,
             "cubierta": ctx.cubierta, "copa": ctx.copa, "heterogeneidad": ctx.hetero,
             "ndvi_juicio": ctx.ndvi_juicio, "esperado": diag.esperado,
-            "fecha": ctx.fecha, "umbrales": ctx.umbrales}
+            "fecha": ctx.fecha, "umbrales": ctx.umbrales,
+            # sin filtrar: `evaluar_parcela` puede retener el estado una pasada,
+            # pero el juicio agronomico es este y es el que aprende la calibracion
+            "estado_crudo": diag.estado, "clave_cruda": diag.clave,
+            "confirmando": False}
+
+
+# =====================================================================
+# 4c. PERSISTENCIA: el semaforo no cambia con una sola pasada
+# =====================================================================
+# MEDIDO en 6.880 combinaciones (especie x fase x distancia al umbral x ruido):
+# dentro de una fase, con el umbral quieto y ruido CERO, el semaforo no cambia
+# nunca. Con ruido realista de +-0.03 oscila en el 45 % de las combinaciones, y la
+# franja donde ocurre es exactamente del ancho del ruido: a +-0.03 por encima del
+# umbral, cero oscilacion. Es decir: el problema es real, es ruido, y esta pegado
+# a los cortes.
+#
+# De las tres alternativas medidas (banda muerta, persistencia y marcar sin
+# suprimir) se eligio PERSISTENCIA DE DOS PASADAS. Con ruido realista quita el
+# 74 % de las oscilaciones y retrasa un aviso de verdad UNA pasada. (k=3 quitaba
+# el 92 %, pero en la prueba de deterioro real no llegaba a avisar nunca en ocho
+# pasadas: por eso no.)
+#
+# La regla, entera:
+#     el estado que se ENSENA cambia solo cuando el estado CRUDO se repite en dos
+#     pasadas seguidas.
+#
+# Lo que NO se retiene, y por que. La persistencia esta para filtrar RUIDO; estas
+# cuatro cosas no son ruido, son hechos, y retenerlas seria enseñar algo falso:
+#   - "Sin dato": esa pasada no tiene NDVI. Mantener el veredicto anterior seria
+#     presentar como actual un juicio que no se ha hecho.
+#   - "Segado": el corte de forraje es un evento discreto, no una fluctuacion.
+#   - "N.A." (barbecho): ni siquiera llega aqui, sale antes.
+#   - cualquier pasada con `esperado=True`: una caida propia de la fase o explicada
+#     por el cuaderno YA esta explicada. Retener una alarma que el motor sabe que
+#     no lo es seria justo lo contrario de lo que se busca.
+# Esto es una interpretacion de la decision, no la decision: si se prefiere que
+# retenga tambien esos casos, se quita de `_SIN_RETENER` y se regenera el oro.
+PERSISTENCIA_PASADAS = 2
+_SIN_RETENER = ("Sin dato", "Segado", "N.A.")
+
+_NOTA_CONFIRMANDO = (" [El semaforo espera una segunda pasada para confirmar el cambio: "
+                     "un solo dato pegado a un umbral suele ser ruido de la medida. "
+                     "Lo que se ve arriba es lo observado en esta pasada.]")
+
+
+def _retiene(estado, esperado):
+    """Si este veredicto puede quedarse esperando confirmacion. Ver el bloque de
+    arriba: solo se retiene lo que puede ser ruido."""
+    return estado not in _SIN_RETENER and not esperado
+
+
+def evaluar_parcela(tipo, subtipo, serie, fecha_iso=None, eventos_cerca=None, spec=None,
+                    parcela=None, heterogeneidad_activa=True, arbolado=False):
+    """El diagnostico que se ENSENA: el del motor, con la persistencia aplicada.
+
+    Devuelve el mismo dict que `_diagnostico_crudo` mas tres claves:
+      - `estado_crudo` / `clave_cruda`: el juicio sin filtrar. Es lo que aprende la
+        calibracion, porque retener un estado es una decision de PRESENTACION y no
+        un juicio agronomico: si el aprendizaje mirase el estado retenido, estaria
+        aprendiendo del filtro y no del cultivo.
+      - `confirmando`: True cuando el estado crudo y el ensenado no coinciden, es
+        decir, cuando hay un cambio esperando su segunda pasada.
+
+    El `motivo` es SIEMPRE el de la pasada actual -lo que se ha visto de verdad-;
+    cuando se retiene, se le anade una nota que explica por que el semaforo aun no
+    se ha movido. Asi el texto nunca contradice al dato.
+
+    Coste: para saber si el estado crudo se repite hace falta el de la pasada
+    anterior, asi que se recorre la serie de principio a fin. Son unas decimas de
+    milisegundo por pasada; con 30 pasadas, milisegundos.
+    """
+    if tipo == "BARBECHO" or not serie:
+        return _diagnostico_crudo(tipo, subtipo, serie, fecha_iso, eventos_cerca, spec,
+                                  parcela, heterogeneidad_activa, arbolado)
+
+    # OJO: `eventos_cerca` y `fecha_iso` son de la ULTIMA pasada, asi que para las
+    # anteriores se recalcula SIN ellos. Un evento del cuaderno marca `esperado`, y
+    # lo esperado no se retiene, asi que el efecto se limita a la pasada siguiente
+    # a una explicada por un evento. Es un limite consciente y esta probado.
+    mostrado = None
+    crudo_prev = None
+    for i in range(len(serie)):
+        ultima = (i == len(serie) - 1)
+        d = _diagnostico_crudo(tipo, subtipo, serie[:i + 1],
+                               fecha_iso if ultima else None,
+                               eventos_cerca if ultima else None,
+                               spec, parcela, heterogeneidad_activa, arbolado)
+        crudo = (d["clave"], d["estado"])
+        if mostrado is None:                      # la primera pasada se ensena tal cual
+            mostrado = crudo
+        elif not _retiene(d["estado"], d.get("esperado")):
+            mostrado = crudo                      # hechos, no ruido: pasan sin esperar
+        elif crudo == mostrado:
+            pass                                  # nada que confirmar
+        elif crudo == crudo_prev:
+            mostrado = crudo                      # segunda pasada seguida: se confirma
+        # si no, se queda el anterior y el crudo sigue esperando
+        crudo_prev = crudo
+        if ultima:
+            d["estado_crudo"], d["clave_cruda"] = d["estado"], d["clave"]
+            d["confirmando"] = (mostrado != crudo)
+            if d["confirmando"]:
+                d["clave"], d["estado"] = mostrado
+                d["motivo"] += _NOTA_CONFIRMANDO
+            return d
+    return d
 
 
 # =====================================================================

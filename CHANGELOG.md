@@ -3,6 +3,29 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.19.0] — 2026-08
+
+### Cambiado
+- **El semáforo ya no cambia con una sola pasada** (persistencia de dos pasadas). Un
+  estado nuevo se enseña cuando el juicio del motor lo repite en dos pasadas seguidas.
+  - **Por qué**: medido sobre 6.880 combinaciones, con ruido cero el semáforo no cambia
+    nunca; con ruido realista de ±0,03 oscila en el 45 % de los casos, y siempre pegado
+    a un umbral (a +0,03 por encima, cero oscilación).
+  - **Cuánto arregla y qué cuesta**: 623 → 140 cambios de estado sobre 282 series
+    (**78 % menos**, 483 falsos cambios evitados); un deterioro real se avisa **una
+    pasada más tarde**.
+  - **Lo que NO espera**: «Sin dato», «Segado», el barbecho y cualquier pasada ya
+    explicada (caída propia de la fase o evento del cuaderno). No son ruido, son hechos.
+  - El motivo sigue contando lo observado en la pasada, con una nota que explica por qué
+    el semáforo aún no se ha movido.
+- **`estado_crudo` en el diagnóstico**: el juicio sin filtrar. Es lo que aprende la
+  calibración y lo que se compara al medir el efecto del calibrado — retener un estado
+  es presentación, no agronomía.
+
+### Añadido
+- **`medir_ruido.py`**: herramienta para estimar, sobre tu base real, cuánto ruido tiene
+  el NDVI de tus parcelas y cuántos cambios del semáforo ocurrieron pegados a un umbral.
+
 ## [1.18.0] — 2026-08
 
 ### Añadido
