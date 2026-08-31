@@ -112,7 +112,7 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 986 pruebas sin pantalla ni red. |
+| `pruebas.py` | 991 pruebas sin pantalla ni red. |
 | `medir_ruido.py` | **Herramienta de diagnóstico**, no parte del programa: estima el ruido del NDVI de tus parcelas con la segunda diferencia de tripletes de pasadas, y cuenta cuántos cambios del semáforo ocurrieron pegados a un umbral. **Borrable**: no la importa nadie. |
 | `contraste_rendimiento.py` | **Herramienta de diagnóstico**, no parte del programa: contrasta lo que el semáforo marcó en la **fase crítica** contra los **kg/ha de báscula**, corrigiendo humedad y agrupando por especie×campaña. Es la única prueba de los umbrales que no se cierra sobre la opinión del propio usuario. **Borrable**: no la importa nadie. |
 | `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.499 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
@@ -700,6 +700,42 @@ enumeración exacta —sin suponer normalidad, que con cinco parcelas no se pued
 
 ---
 
+## 4g. El informe que juzga al sistema, no a la parcela
+
+Todas las secciones del balance hablan de la parcela. La de **«Acierto del sistema
+contra campo»** habla del sistema, y es la única que se puede suspender.
+
+Empareja las **observaciones de campo** (`observaciones_campo.fase_obs`) con la fase
+que el motor predijo, y saca **matriz de confusión, exactitud y kappa de Cohen**. El
+cálculo no es nuevo: es `vista_ficha.resumen_validacion`, el mismo que ya enseña la
+ficha. Se reutiliza a propósito —si el informe lo repitiera por su cuenta, dos sitios
+podrían discrepar y el usuario no sabría a cuál creer—; `vista_ficha` no importa
+tkinter, así que traerlo a la capa de entrega no la ata a la interfaz.
+
+Tres decisiones:
+
+1. **El kappa se calla por debajo de `MIN_PARES_KAPPA` (10).** Con tres
+   observaciones un kappa de 0,8 es ruido con aspecto de métrica: da una confianza
+   que no existe. En su lugar el informe dice **cuántas observaciones faltan**. Es un
+   umbral de *presentación* —no cambia ningún cálculo— y por eso vive en un solo
+   sitio, para poder discutirlo.
+2. **La lectura en palabras** («acuerdo sustancial») sigue la escala de Landis & Koch
+   (1977), que es la referencia habitual para acuerdo entre observadores. Los cortes
+   son suyos, no inventados aquí.
+3. **Se compara contra la predicción ORIGINAL**, nunca contra una fase corregida a
+   mano: si no, el sistema se examinaría de lo que ya se le había soplado.
+
+Lo que hace útil a la matriz no es la diagonal, es **lo de fuera**: dice hacia dónde
+se equivoca. Si el sistema dice «ahijado» donde el campo ve «nascencia», el
+calendario va adelantado, y eso se corrige. Un porcentaje de acierto solo, no.
+
+Y no se confunda con `contraste_rendimiento.py` (§4f): **son validaciones distintas
+de cosas distintas.** Ésta valida el **calendario de fases** contra lo que se ve en
+campo; aquella valida los **umbrales de índice** contra la báscula. Se puede tener el
+listón correcto aplicado en la fase equivocada.
+
+---
+
 ## 5. La interfaz: dónde está cada cosa
 
 Era un monolito de **4.313 líneas** —la deuda técnica número uno— y está partido en
@@ -825,7 +861,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 986 pruebas, sin pantalla ni red (incluye el fichero de oro)
+python pruebas.py          # 991 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db

@@ -2093,6 +2093,25 @@ def pruebas_informe_anual():
                                             serie, ruta_salida=out),
                    os.path.getsize(out))[1],
           lambda r: r > 1000)
+    # --- matriz de fases con kappa: lo que se ENSENA y lo que se calla ---
+    # El kappa por debajo del minimo NO sale: con tres observaciones un 0,8 da una
+    # confianza que no existe. Se comprueba el corte, no solo que el texto exista.
+    check("informe: la matriz de fases es una seccion mas del catalogo",
+          lambda: dict(IA.SECCIONES_BALANCE).get("validacion"),
+          lambda r: bool(r) and "matriz" in r.lower())
+    check("informe: la lectura del kappa sigue la escala de Landis & Koch",
+          lambda: [IA._lectura_kappa(k) for k in (-0.1, 0.1, 0.3, 0.5, 0.7, 0.9)],
+          lambda r: (r[0].startswith("peor que el azar") and "leve" in r[1]
+                     and "aceptable" in r[2] and "moderado" in r[3]
+                     and "sustancial" in r[4] and "casi perfecto" in r[5]))
+    check("informe: sin kappa no se inventa una lectura",
+          lambda: IA._lectura_kappa(None), lambda r: r == "")
+    check("informe: el minimo de pares para ensenar kappa esta puesto y es >= 5",
+          lambda: IA.MIN_PARES_KAPPA, lambda r: isinstance(r, int) and r >= 5)
+    # el corte importa: por debajo se dice cuantas faltan, por encima sale el numero
+    check("informe: 9 observaciones no llegan al minimo, 10 si (el corte es el que es)",
+          lambda: (9 < IA.MIN_PARES_KAPPA <= 10), lambda r: r is True)
+
     # SELECCION de secciones: un informe recortado se genera y pesa menos que el completo
     out_min = os.path.join(d, "inf_min.pdf")
     check("informe: se pueden elegir secciones (recortado pesa menos que el completo)",

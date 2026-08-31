@@ -43,6 +43,16 @@ from interpretacion_fenologica import evaluar_parcela
 from contraste_indices import heterogeneidad
 import registro_parcela as REG
 import almacen as DB
+
+# `vista_ficha.resumen_validacion` empareja lo observado en campo con lo que el
+# motor predijo y llama a `validacion` para la matriz y el kappa. Es el MISMO
+# calculo que ensena la ficha: si el informe lo repitiera por su cuenta, dos
+# sitios podrian discrepar y el usuario no sabria a cual creer. `vista_ficha` no
+# importa tkinter, asi que traerlo aqui no ata la entrega a la interfaz.
+try:
+    from vista_ficha import resumen_validacion as _resumen_validacion
+except Exception:
+    _resumen_validacion = None
 try:
     import sentinel1 as S1
 except Exception:
@@ -99,7 +109,33 @@ SECCIONES_BALANCE = [
     ("rendimiento", "Producción registrada"),
     ("progresion",  "Progresión del estado"),
     ("radar",       "Corroboración con radar"),
+    ("validacion",  "Acierto del sistema contra campo (matriz de fases)"),
 ]
+
+# Pares minimos para ensenar el kappa. Con menos, el valor oscila tanto entre una
+# observacion y la siguiente que da una confianza que no existe: es preferible
+# decir cuantas faltan. El umbral es de PRESENTACION -no cambia ningun calculo- y
+# se elige aqui para que se pueda discutir en un solo sitio.
+MIN_PARES_KAPPA = 10
+
+
+def _lectura_kappa(k):
+    """El kappa en palabras. Escala de Landis & Koch (1977), que es la referencia
+    habitual para acuerdo entre observadores; los cortes son suyos, no inventados."""
+    if k is None:
+        return ""
+    if k < 0.00:
+        return "peor que el azar: el calendario de fases no encaja con lo que se ve"
+    if k < 0.20:
+        return "acuerdo leve"
+    if k < 0.40:
+        return "acuerdo aceptable"
+    if k < 0.60:
+        return "acuerdo moderado"
+    if k < 0.80:
+        return "acuerdo sustancial"
+    return "acuerdo casi perfecto"
+
 
 # --- openpyxl: solo para la exportacion a Excel (tolerante) ---
 try:
@@ -349,6 +385,14 @@ def _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos):
     pico_lai = max(lai_serie, key=lambda r: r["lai"]) if lai_serie else None
     min_ndmi = min(ndmi_serie, key=lambda r: r["ndmi"]) if ndmi_serie else None
 
+    # --- acierto contra campo: se calcula una vez, lo usen o no ---
+    validacion_campo = None
+    if _resumen_validacion is not None:
+        try:
+            validacion_campo = _resumen_validacion(nombre)
+        except Exception:
+            validacion_campo = None      # nunca impide generar el informe
+
     # --- recorrido fenologico y alertas (motor real, pasada a pasada) ---
     recorrido = []
     avisos = []                      # [(indice, fecha, estado, fase)]
@@ -410,6 +454,7 @@ def _analisis(nombre, campana, ficha, cultivo, serie, radar, eventos):
         "inicio": inicio, "fin": fin,
         "pico_ndvi": pico_ndvi, "pico_lai": pico_lai, "min_ndmi": min_ndmi,
         "recorrido": recorrido, "fases_orden": fases_orden,
+        "validacion_campo": validacion_campo,
         "alertas": alertas, "alertas_vigentes": alertas_vigentes,
         "diag_final": diag_final, "hetero": hetero, "efectos": efectos,
         "radar_info": radar_info,
@@ -478,6 +523,15 @@ def _preparar(serie, radar, eventos, ruta_salida, ext, nombre, campana):
 # =====================================================================
 # API PUBLICA
 # =====================================================================
+def _observaciones_hay(nombre):
+    """¿Hay alguna observacion de campo de esta parcela? Tolerante: ante cualquier
+    fallo se dice que si, y como mucho la seccion sale vacia."""
+    try:
+        return bool(DB.observaciones(nombre))
+    except Exception:
+        return True
+
+
 def secciones_con_datos(nombre, campana, cultivo=None, radar=None, eventos=None):
     """Que secciones del balance tienen datos DE VERDAD para esta parcela.
 
@@ -501,7 +555,9 @@ def secciones_con_datos(nombre, campana, cultivo=None, radar=None, eventos=None)
             "clima": clima,
             # el GDD necesita integrales definidas Y clima al que acumular
             "gdd": bool(_GDD is not None and spec and spec.get("integrales_termicas") and clima),
-            "rendimiento": rend}
+            "rendimiento": rend,
+            # sin observaciones de campo la seccion sale en blanco: se marca
+            "validacion": bool(_observaciones_hay(nombre))}
 
 
 
@@ -883,6 +939,76 @@ def _construir_pdf(ruta, ctx, secciones=None):
         story.append(Paragraph("Dato de b&aacute;scula o de parte de cosecha, anotado en el cuaderno: el "
                                "sistema NO lo estima ni lo corrige a humedad comercial. Incluye las "
                                "campa&ntilde;as anteriores que consten.", SMALL))
+
+    # ---- acierto del sistema contra campo ----
+    # La unica seccion del informe que juzga AL SISTEMA en vez de a la parcela. La
+    # matriz es la del modulo `validacion`, la misma que ve la ficha.
+    vc = ctx.get("validacion_campo") or {}
+    fases_val = ((vc.get("informe") or {}).get("fases")) or {}
+    if inc("validacion") and fases_val.get("total"):
+        story.append(H("Acierto del sistema contra campo"))
+        tot = fases_val["total"]
+        exa = fases_val.get("exactitud")
+        kap = fases_val.get("kappa")
+        linea = f"Sobre <b>{tot}</b> observaci&oacute;n(es) de campo apuntada(s) en esta parcela"
+        if exa is not None:
+            linea += f", el sistema acert&oacute; la fase el <b>{100 * exa:.0f} %</b> de las veces"
+        story.append(P(linea + "."))
+
+        # KAPPA: con muy pocos pares el numero es ruido con aspecto de metrica, asi
+        # que por debajo del minimo NO se ensena. Decir «kappa 0,7» con tres
+        # observaciones seria peor que no decir nada: da una confianza que no hay.
+        if kap is None:
+            story.append(P("No se puede calcular el &iacute;ndice kappa: todas las observaciones "
+                           "caen en la misma fase, y sin variedad de fases el acuerdo por azar "
+                           "ya es total."))
+        elif tot < MIN_PARES_KAPPA:
+            story.append(P(f"El &iacute;ndice <b>kappa</b> no se muestra todav&iacute;a: con menos de "
+                           f"{MIN_PARES_KAPPA} observaciones el valor es ruido con aspecto de m&eacute;trica. "
+                           f"Faltan <b>{MIN_PARES_KAPPA - tot}</b> observaci&oacute;n(es) de campo en esta parcela."))
+        else:
+            story.append(P(f"&Iacute;ndice <b>kappa de Cohen: {kap:.2f}</b> &mdash; {esc(_lectura_kappa(kap))}"))
+
+        # la matriz: predicha en filas, observada en columnas
+        etq = fases_val.get("etiquetas") or []
+        mat = fases_val.get("matriz") or {}
+        if etq:
+            # Las fases se llaman «espigado / floracion» y no caben de cabecera: se
+            # NUMERAN, y el numero va tambien delante del nombre en cada fila, que
+            # es como se imprimen estas matrices cuando las etiquetas son largas.
+            ancho_col = max(9, min(14, 120 // max(1, len(etq))))
+            fil = [[Paragraph("<b>sistema \\ campo</b>", WCELL)]
+                   + [Paragraph(f"<b>{i}</b>", WCELL) for i in range(1, len(etq) + 1)]]
+            for i, e in enumerate(etq, 1):
+                fila = [Paragraph(f"<b>{i}.</b> {esc(e[:26])}", CELL)]
+                for o in etq:
+                    n = mat.get(e, {}).get(o, 0)
+                    if n and e == o:                 # acierto: se ve de un vistazo
+                        cel = f"<font color='{PRIMARY_DK.hexval()}'><b>{n}</b></font>"
+                    elif n:                          # fallo: hacia donde se equivoca
+                        cel = f"<font color='{colors.HexColor('#dd6b20').hexval()}'>{n}</font>"
+                    else:
+                        cel = f"<font color='{INK3.hexval()}'>&middot;</font>"
+                    fila.append(Paragraph(cel, CELL))
+                fil.append(fila)
+            tm = Table(fil, colWidths=[46 * mm] + [ancho_col * mm] * len(etq))
+            tm.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), PRIMARY_DK),
+                                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, PANEL]),
+                                    ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+                                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                                    ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+                                    ("TOPPADDING", (0, 0), (-1, -1), 3.5),
+                                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5)]))
+            story.append(tm)
+            story.append(Paragraph("Filas: la fase que dijo el sistema. Columnas (numeradas igual): la que se "
+                                   "vio en campo. "
+                                   "La diagonal (en verde) son los aciertos; lo de fuera, en naranja, dice "
+                                   "HACIA D&Oacute;NDE se equivoca &mdash; que es lo que permite corregir el "
+                                   "calendario de fases, y no solo saber que falla.", SMALL))
+        story.append(Paragraph("Se emparejan las observaciones de campo de TODAS las campa&ntilde;as de esta "
+                               "parcela contra la predicci&oacute;n ORIGINAL del motor, nunca contra una fase "
+                               "corregida a mano: si no, el sistema se estar&iacute;a examinando de lo que ya "
+                               "se le hab&iacute;a soplado.", SMALL))
 
     # ---- progresion del estado (narrativa, NO lista dia a dia) ----
     # El detalle pasada-a-pasada se deja para el Excel; aqui se cuenta el arco.

@@ -3,6 +3,23 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.23.0] — 2026-08
+
+### Añadido
+- **Sección opcional «Acierto del sistema contra campo» en el informe de balance.**
+  Matriz de confusión de fases, exactitud y **kappa de Cohen**, emparejando las
+  observaciones de campo de todas las campañas de la parcela contra la predicción
+  **original** del motor —nunca contra una fase corregida a mano—.
+  - **El kappa se calla por debajo de 10 observaciones** y dice cuántas faltan: con
+    tres, un 0,8 es ruido con aspecto de métrica.
+  - La lectura en palabras sigue la escala de Landis & Koch (1977).
+  - Lo útil es lo de **fuera de la diagonal**: dice hacia dónde se equivoca, que es
+    lo que permite corregir el calendario de fases.
+  - Se reutiliza `vista_ficha.resumen_validacion`, el mismo cálculo que ya enseña la
+    ficha, para que no puedan discrepar dos sitios.
+  - Sale sola en el selector de secciones (es dirigido por datos) y se marca
+    «(sin datos)» si aún no hay observaciones de campo.
+
 ## [1.22.0] — 2026-08
 
 ### Añadido
