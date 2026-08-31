@@ -24,7 +24,7 @@ siempre sus datos, se arranque desde donde se arranque.
 
 ---
 
-## 2. Mapa de módulos (49 ficheros, ~18.000 líneas, sin contar `pruebas*.py`)
+## 2. Mapa de módulos (50 ficheros, ~18.300 líneas, sin contar `pruebas*.py`)
 
 El grafo de dependencias **no tiene ciclos** al importar. Hay exactamente **una
 arista hacia atrás**, y está deliberadamente aplazada: `calibracion_umbrales.
@@ -112,8 +112,9 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 958 pruebas sin pantalla ni red. |
+| `pruebas.py` | 986 pruebas sin pantalla ni red. |
 | `medir_ruido.py` | **Herramienta de diagnóstico**, no parte del programa: estima el ruido del NDVI de tus parcelas con la segunda diferencia de tripletes de pasadas, y cuenta cuántos cambios del semáforo ocurrieron pegados a un umbral. **Borrable**: no la importa nadie. |
+| `contraste_rendimiento.py` | **Herramienta de diagnóstico**, no parte del programa: contrasta lo que el semáforo marcó en la **fase crítica** contra los **kg/ha de báscula**, corrigiendo humedad y agrupando por especie×campaña. Es la única prueba de los umbrales que no se cierra sobre la opinión del propio usuario. **Borrable**: no la importa nadie. |
 | `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.499 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
 
@@ -653,6 +654,52 @@ conserva el suyo.
 
 ---
 
+## 4f. La única prueba de los umbrales que no es circular
+
+Cuando el usuario valida un diagnóstico como «correcto», está contrastando el
+criterio del sistema **contra su propio criterio**. Y como los umbrales de
+`fenologia_especies` salieron de ese mismo criterio, el bucle se cierra sobre sí
+mismo: confirma una opinión con la misma opinión. La calibración (§`calibracion_
+umbrales`) aprende de eso, y está bien que lo haga —afina el sistema al ojo del
+agricultor—, pero **no lo valida**.
+
+Los kg/ha de la báscula no opinan. `contraste_rendimiento.py` hace la pregunta que
+sí decide: *¿las parcelas que el semáforo marcó en la fase crítica rindieron
+menos?* Es una herramienta aparte, borrable, que sólo lee y sólo imprime: **no
+propone mover ningún umbral**, porque hacerlo con cuatro parcelas cambiaría la
+agronomía de todas las de esa especie.
+
+Tres decisiones que la hacen válida, y que si se tocan la invalidan:
+
+1. **Humedad.** 6.000 kg/ha al 18 % no son más que 5.800 al 14 %: en los primeros
+   hay más agua. Se lleva todo a una humedad de referencia por balance de materia
+   seca. La referencia (14 % por defecto, `--humedad-ref`) **no altera el
+   contraste** —es un factor común dentro del grupo— y sólo cambia los kg/ha que
+   se leen en pantalla.
+2. **No mezclar.** Todo se compara dentro de un grupo **(especie, campaña)**: dos
+   especies no rinden lo mismo y el año manda más que cualquier umbral.
+3. **La fase crítica, no el pico.** Lo que empareja `vista_ficha` hoy es el NDVI
+   *máximo* de la campaña contra el rendimiento; el máximo cae en cobertura
+   máxima, **antes** de que se decida la cosecha. Aquí se mira el mínimo dentro de
+   las fases marcadas `"critica": True` en las tablas.
+
+**Y la regla que costó un error:** un aviso de fase crítica sólo cuenta como
+resuelto si el cultivo se reencuadra **mientras la ventana crítica sigue
+abierta**. El balance del informe anual mira toda la campaña, porque allí se
+cuenta la historia del año; copiarlo aquí marcaba como «resuelto» absolutamente
+todo, porque después de la fase crítica siempre viene la senescencia y allí el
+NDVI bajo es lo normal. Agronómicamente es lo mismo que dicen los coeficientes de
+respuesta (FAO-56, Ky): **lo que se pierde en floración y llenado no se
+recupera**. Está fijado en `aviso_vigente` y en siete pruebas.
+
+**Nunca concluye sin muestra.** Con 3 parcelas avisadas y 3 limpias hay 20
+repartos posibles, así que aunque la separación fuese perfecta la p no bajaría de
+0,05: **ninguna muestra así puede ser concluyente**, y el informe lo dice antes de
+enseñar el resultado. El mínimo real es 4 y 4. La prueba es la de Mann-Whitney con
+enumeración exacta —sin suponer normalidad, que con cinco parcelas no se puede—.
+
+---
+
 ## 5. La interfaz: dónde está cada cosa
 
 Era un monolito de **4.313 líneas** —la deuda técnica número uno— y está partido en
@@ -729,6 +776,7 @@ sale con el icono por defecto de Tk y no pasa nada más.
 Se importan con `try/except`. **Si borras el fichero, la función desaparece y el
 resto sigue igual**; no hay interruptor que tocar.
 
+- `contraste_rendimiento.py` → desaparece el contraste contra báscula. No la importa nadie.
 - `medir_ruido.py` → desaparece la herramienta de diagnóstico del ruido. No la importa
   nadie; el programa ni se entera.
 - `informe_anual.py` → quita el botón «Informe / Exportar».
@@ -777,7 +825,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 958 pruebas, sin pantalla ni red (incluye el fichero de oro)
+python pruebas.py          # 986 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
@@ -866,7 +914,9 @@ ni el veredicto ni el texto no lo vería este fichero.
    **propuestas**, no cambios aplicados: mover un `msavi_min` desplaza el
    diagnóstico de todas las parcelas de esa especie, incluidas las ya validadas. Y
    se puede contrastar contra bibliografía y contra la coherencia interna, pero
-   **no contra campo**: eso lo dicen las validaciones del agricultor.
+   **no contra campo** desde aquí: eso lo dicen los kg/ha del agricultor.
+   Para eso está `contraste_rendimiento.py` (§4f), que es el primer paso de esta
+   deuda: no propone umbrales, pero dice si los que hay separan cosechas o no.
 
 2. **Los ~599 números de `fenologia_especies` no dicen, uno a uno, de dónde
    salen.** Se estudió marcar cada umbral con su procedencia (bibliografía /

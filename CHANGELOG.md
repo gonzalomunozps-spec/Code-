@@ -3,6 +3,43 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.22.0] — 2026-08
+
+### Añadido
+- **`contraste_rendimiento.py`: la única prueba de los umbrales que no es circular.**
+  Validar un diagnóstico como «correcto» contrasta el criterio del sistema contra el
+  criterio del usuario —y como los umbrales salieron de ese mismo criterio, el bucle
+  se cierra sobre sí mismo—. Los kg/ha de báscula no opinan. La herramienta contesta
+  *¿las parcelas que el semáforo marcó en la fase crítica rindieron menos?*
+  - **Corrige humedad** por balance de materia seca (6.000 kg al 18 % son 5.721 al
+    14 %). La referencia es un parámetro (`--humedad-ref`) y **no altera el
+    contraste**: es un factor común dentro del grupo.
+  - **Agrupa por especie × campaña.** Dos especies no rinden lo mismo, y el año manda
+    más que cualquier umbral.
+  - **Mira la fase crítica, no el pico.** El NDVI máximo de la campaña cae en
+    cobertura máxima, antes de que se decida la cosecha; las fases que la deciden ya
+    vienen marcadas `"critica": True` en las tablas.
+  - **Nunca concluye sin muestra.** Con 3 y 3 la mejor p posible es 0,05, así que
+    ninguna muestra así puede concluir — y lo dice antes de enseñar el resultado. El
+    mínimo real es 4 y 4. Mann-Whitney con enumeración exacta, sin suponer normalidad.
+  - **No propone mover ningún umbral.** Dice si el que hay separa o no separa.
+  - **Borrable**: no la importa nadie.
+
+### Corregido
+- **Un error agronómico propio, encontrado probándola de punta a punta.** El primer
+  criterio de «aviso resuelto» estaba copiado del informe anual, que mira toda la
+  campaña. Aquí marcaba como resuelto **todo**, porque tras la fase crítica siempre
+  viene la senescencia y allí el NDVI bajo es lo normal: el contraste salía con cero
+  parcelas avisadas siempre. Ahora la recuperación sólo cuenta **dentro de la ventana
+  crítica**, que es lo que dicen los coeficientes de respuesta (FAO-56, Ky): lo que se
+  pierde en floración y llenado no se recupera. Fijado en `aviso_vigente` y 7 pruebas.
+
+### Cambiado
+- Se retira la comprobación «pyproject no declara módulos que ya no existen»: chocaba
+  con un invariante que vale más —los módulos opcionales se pueden borrar y la suite
+  sigue verde—. El trinquete en la dirección útil (ningún `.py` del árbol sin
+  empaquetar) se queda, y ya ha pillado dos módulos.
+
 ## [1.21.1] — 2026-08
 
 Auditoría final de la revisión 1.16: no se añade ninguna funcionalidad, se repasa

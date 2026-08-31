@@ -4419,8 +4419,11 @@ def pruebas_empaquetar():
     check("empaquetar: pyproject no se deja ningun modulo sin empaquetar",
           lambda: sorted(_en_disco() - _py_modules() - _FUERA_DEL_PAQUETE),
           lambda r: r == [])
-    check("empaquetar: pyproject no declara modulos que ya no existen",
-          lambda: sorted(_py_modules() - _en_disco()), lambda r: r == [])
+    # NO se comprueba la direccion contraria (pyproject declara algo que no esta
+    # en disco). Chocaria con un invariante que vale mas: los modulos OPCIONALES
+    # se pueden borrar y la suite tiene que seguir verde. Una entrada de sobra en
+    # `py-modules` es, como mucho, un aviso al empaquetar; una suite que se pone
+    # roja al borrar un modulo opcional rompe una promesa del programa.
 
     # --- instalador de Windows (Inno Setup): coherencia de los ficheros ---
     def _lee(f):
@@ -4731,6 +4734,122 @@ def pruebas_persistencia_semaforo():
 # =====================================================================
 # 38. MEDIDA DEL RUIDO DEL NDVI (herramienta medir_ruido, nucleo puro)
 # =====================================================================
+def pruebas_contraste_rendimiento():
+    """El contraste de diagnostico contra kg/ha de bascula.
+
+    Lo que se prueba aqui no es que el codigo corra: es que la ESTADISTICA no
+    permita concluir cuando no se puede. Un informe que dice «el umbral separa»
+    con cuatro parcelas seria peor que no tener informe."""
+    try:
+        import contraste_rendimiento as CR
+    except Exception:
+        return                                   # herramienta borrada -> nada que probar
+
+    # --- humedad: balance de materia seca, no una regla de tres cualquiera ---
+    check("cosecha: 6.000 kg al 18 % son 5.721 al 14 % (hay mas agua en los primeros)",
+          lambda: round(CR.normaliza(6000, 18), 1), lambda r: r == 5720.9)
+    check("cosecha: a la humedad de referencia el valor no se toca",
+          lambda: CR.normaliza(6000, 14), lambda r: r == 6000.0)
+    check("cosecha: al 9 % (girasol) se corrige hacia ARRIBA contra el 14",
+          lambda: CR.normaliza(1000, 9, 14) > 1000, lambda r: r is True)
+    check("cosecha: sin humedad anotada el peso pasa crudo (mas vale eso que nada)",
+          lambda: CR.normaliza(6000, None), lambda r: r == 6000.0)
+    check("cosecha: una humedad imposible no corrige nada",
+          lambda: (CR.normaliza(6000, -3), CR.normaliza(6000, 140)),
+          lambda r: r == (6000.0, 6000.0))
+    check("cosecha: sin kg/ha no hay dato",
+          lambda: (CR.normaliza(None, 14), CR.normaliza("x", 14), CR.normaliza(-5, 14)),
+          lambda r: r == (None, None, None))
+    # La referencia es un factor COMUN: no puede cambiar el orden de las parcelas.
+    check("cosecha: cambiar la humedad de referencia no reordena las parcelas",
+          lambda: ([CR.normaliza(k, h, 14) for k, h in ((6000, 18), (5800, 12), (6200, 20))],
+                   [CR.normaliza(k, h, 9) for k, h in ((6000, 18), (5800, 12), (6200, 20))]),
+          lambda r: sorted(range(3), key=lambda i: r[0][i]) ==
+                    sorted(range(3), key=lambda i: r[1][i]))
+
+    # --- la parte que importa: cuando NO se puede concluir ---
+    check("contraste: con 3 y 3 la mejor p posible es 0,05, asi que nunca concluye",
+          lambda: CR.evidencia_maxima(3, 3), lambda r: abs(r - 0.05) < 1e-12)
+    check("contraste: con 2 y 2 la mejor p posible es 0,17 (ninguna muestra asi vale)",
+          lambda: CR.evidencia_maxima(2, 2), lambda r: abs(r - 1 / 6) < 1e-12)
+    check("contraste: 4 y 4 es el minimo que PUEDE concluir (mejor p = 0,014)",
+          lambda: CR.evidencia_maxima(4, 4), lambda r: r < 0.05)
+    perfecto3 = CR.contraste([3000, 3200, 2800], [5000, 5200, 4900])
+    check("contraste: separacion PERFECTA con 3 y 3 sigue sin ser concluyente",
+          lambda: (perfecto3["p"], perfecto3["concluyente"], perfecto3["solapan"]),
+          lambda r: r == (0.05, False, False))
+    perfecto4 = CR.contraste([3000, 3200, 2800, 3100], [5000, 5200, 4900, 5100])
+    check("contraste: la misma separacion con 4 y 4 SI concluye",
+          lambda: (perfecto4["concluyente"], perfecto4["p"] < 0.05),
+          lambda r: r == (True, True))
+
+    # --- que no invente senal donde no la hay ---
+    mezclado = CR.contraste([3000, 5000, 3500, 4800], [3200, 4900, 3400, 5100])
+    check("contraste: rendimientos entremezclados NO concluyen",
+          lambda: mezclado["concluyente"], lambda r: r is False)
+    alreves = CR.contraste([5000, 5200, 4900, 5100], [3000, 3200, 2800, 3100])
+    check("contraste: si las avisadas rinden MAS, no se declara acierto",
+          lambda: (alreves["concluyente"], alreves["diferencia"] > 0),
+          lambda r: r == (False, True))
+    check("contraste: sin ningun lado no revienta, devuelve n=0",
+          lambda: CR.contraste([], [1, 2, 3]),
+          lambda r: r["n_avisados"] == 0 and r["concluyente"] is False)
+
+    # --- la mediana, que es la que aguanta una helada en una parcela ---
+    check("contraste: la mediana no se la lleva un valor extremo",
+          lambda: CR.mediana([3000, 3100, 3200, 3300, 50]), lambda r: r == 3100)
+    check("contraste: mediana de una lista par es el promedio de los dos centrales",
+          lambda: CR.mediana([10, 20, 30, 40]), lambda r: r == 25)
+    check("contraste: mediana de nada es None",
+          lambda: CR.mediana([None, None]), lambda r: r is None)
+
+    # --- la p exacta, contra el valor que se puede contar a mano ---
+    # Con 3 y 3 hay comb(6,3)=20 repartos; solo UNO deja las tres avisadas debajo.
+    check("contraste: la p exacta sale de contar repartos, no de suponer normalidad",
+          lambda: CR.p_una_cola([1, 2, 3], [4, 5, 6]), lambda r: abs(r - 1 / 20) < 1e-12)
+    check("contraste: el peor reparto posible da p = 1",
+          lambda: CR.p_una_cola([4, 5, 6], [1, 2, 3]), lambda r: abs(r - 1.0) < 1e-12)
+
+    # --- agrupar: no mezclar especies ni campanas ---
+    lista = [{"especie": "TRIGO", "campana": "2025-2026"},
+             {"especie": "TRIGO", "campana": "2025-2026"},
+             {"especie": "TRIGO", "campana": "2024-2025"},
+             {"especie": "CEBADA", "campana": "2025-2026"}]
+    check("contraste: cada especie y cada campana van por separado",
+          lambda: sorted((k, len(v)) for k, v in CR.agrupa(lista).items()),
+          lambda r: r == [(("CEBADA", "2025-2026"), 1), (("TRIGO", "2024-2025"), 1),
+                          (("TRIGO", "2025-2026"), 2)])
+
+    # --- LA REGLA AGRONOMICA: recuperarse despues de la fase critica no cuenta ---
+    # (critica, estado, esperado) pasada a pasada
+    hundido = [(False, "OK", False), (False, "OK", False),
+               (True, "Revisar", False), (True, "Revisar", False),
+               (False, "OK", False)]           # senescencia: el motor deja de avisar
+    check("contraste: hundirse en fase critica y «volver» en senescencia SIGUE avisado",
+          lambda: CR.aviso_vigente(hundido), lambda r: r is True)
+    recupera = [(True, "Revisar", False), (True, "OK", False), (True, "OK", False),
+                (False, "OK", False)]
+    check("contraste: recuperarse DENTRO de la ventana critica si cuenta como resuelto",
+          lambda: CR.aviso_vigente(recupera), lambda r: r is False)
+    esperado = [(True, "Revisar", True), (False, "OK", False)]
+    check("contraste: una caida ESPERADA en fase critica no es un aviso",
+          lambda: CR.aviso_vigente(esperado), lambda r: r is False)
+    fuera = [(False, "Revisar", False), (False, "Revisar", False)]
+    check("contraste: un aviso FUERA de la fase critica no entra en el contraste",
+          lambda: CR.aviso_vigente(fuera), lambda r: r is False)
+    check("contraste: una campana sin fase critica no avisa nunca",
+          lambda: CR.aviso_vigente([(False, "OK", False)] * 5), lambda r: r is False)
+    check("contraste: sin pasadas, no hay aviso",
+          lambda: CR.aviso_vigente([]), lambda r: r is False)
+    ultimo = [(True, "OK", False), (True, "Revisar", False)]
+    check("contraste: un aviso en la ULTIMA pasada critica no se puede resolver",
+          lambda: CR.aviso_vigente(ultimo), lambda r: r is True)
+
+    # --- el informe dice que no sabe, en vez de callarse ---
+    texto = "\n".join(CR.informe.__doc__.split())      # solo para asegurar que existe
+    check("contraste: el informe esta documentado", lambda: bool(texto), lambda r: r is True)
+
+
 def pruebas_medir_ruido():
     """El estimador de ruido, sin base de datos.
 
@@ -5093,7 +5212,8 @@ def main():
               pruebas_observaciones_campo, pruebas_copias, pruebas_variedades,
               pruebas_pradera, pruebas_sync_cancelable,
               pruebas_instalador,
-              pruebas_empaquetar, pruebas_medir_ruido, pruebas_persistencia_semaforo,
+              pruebas_empaquetar, pruebas_medir_ruido, pruebas_contraste_rendimiento,
+              pruebas_persistencia_semaforo,
               pruebas_plausibilidad, pruebas_fiabilidad,
               pruebas_reglas_motor,
               pruebas_oro_motor):
