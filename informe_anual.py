@@ -1144,7 +1144,11 @@ def _construir_pdf_tecnico(ruta, ctx):
     filas = []
     for r in recorrido:
         est = r["estado"]
+        # «Revisar datos» va en ambar, como en el panel: no dice que el cultivo
+        # este mal, dice que el dato no cuadra con la fase declarada. Pintarlo en
+        # tinta normal lo habria disimulado justo en el papel que se archiva.
         cc = {"OK": VERDE, "Vigilar": colors.HexColor("#d69e2e"),
+              "Revisar datos": colors.HexColor("#d69e2e"),
               "Revisar": colors.HexColor("#dd6b20"), "Segado": VERDE}.get(est, INK)
         filas.append([Paragraph(r["fecha"], C), Paragraph(esc(r["fase"]), CL),
                       Paragraph(f"<font color='{cc.hexval()}'><b>{esc(est)}</b></font>", C),

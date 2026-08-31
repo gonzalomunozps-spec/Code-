@@ -303,6 +303,21 @@ def escenario_lista(P, DB):
         if "eliminar" in texto.lower():
             continue
         _paso(f"boton '{texto}'", lambda b=b: (b.invoke(), root.update()))
+    def _sin_copias():
+        """Con el modulo OPCIONAL `copias` borrado, el boton no debe reventar.
+
+        Antes el manejador hacia `from ui_copias import ...` al pulsar, asi que
+        borrar el modulo dejaba un boton que existia y lanzaba ModuleNotFoundError.
+        Ahora se comprueba al importar: sin modulo, el boton ni se crea, y el
+        manejador -que sigue siendo alcanzable desde fuera- se va de vacio."""
+        guardado = P._DialogoCopias
+        P._DialogoCopias = None
+        try:
+            panel._abrir_copias()        # no debe lanzar nada
+            root.update()
+        finally:
+            P._DialogoCopias = guardado
+    _paso("copias: sin el modulo opcional, ni boton ni excepcion", _sin_copias)
     _paso("relevo de campana", panel._comprobar_relevo_campana)
     _paso("autosincronizacion", panel._auto_sync)
     root.update()
@@ -775,8 +790,12 @@ def escenario_dialogos(P, DB):
         root.update()
         if not v._copias:
             raise AssertionError("la copia creada no aparece en la lista de copias")
-    import ui_copias
-    abrir("copias de seguridad", lambda: ui_copias.DialogoCopias(panel), _copias)
+    try:                                 # `copias` es OPCIONAL: sin el, no hay ventana
+        import ui_copias
+    except Exception:
+        ui_copias = None
+    if ui_copias is not None:
+        abrir("copias de seguridad", lambda: ui_copias.DialogoCopias(panel), _copias)
 
     def _alta_con_margen():
         v = P.VentanaAltaParcela(panel)

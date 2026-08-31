@@ -4397,6 +4397,31 @@ def pruebas_empaquetar():
           lambda: (__import__("version").__version__, vi),
           lambda r: r[0] in r[1])
 
+    # --- trinquete: pyproject no puede olvidarse un modulo ---
+    # Se encontro a mano que `medir_ruido` no viajaba en `pip install .`. Que no
+    # vuelva a pasar: cada .py del arbol o esta en `py-modules`, o esta aqui abajo
+    # dicho a proposito por ser un script de instalacion/empaquetado, que no forma
+    # parte del programa instalado.
+    _FUERA_DEL_PAQUETE = {"instalar", "desinstalar", "instalador", "empaquetar",
+                          "iniciar"}
+
+    def _py_modules():
+        import re
+        with open(os.path.join(E.DIR, "pyproject.toml"), encoding="utf-8") as fh:
+            txt = fh.read()
+        bloque = re.search(r"py-modules\s*=\s*\[(.*?)\]", txt, re.S).group(1)
+        return set(re.findall(r'"([^"]+)"', bloque))
+
+    def _en_disco():
+        return {f[:-3] for f in os.listdir(E.DIR)
+                if f.endswith(".py") and not f.startswith("pruebas")}
+
+    check("empaquetar: pyproject no se deja ningun modulo sin empaquetar",
+          lambda: sorted(_en_disco() - _py_modules() - _FUERA_DEL_PAQUETE),
+          lambda r: r == [])
+    check("empaquetar: pyproject no declara modulos que ya no existen",
+          lambda: sorted(_py_modules() - _en_disco()), lambda r: r == [])
+
     # --- instalador de Windows (Inno Setup): coherencia de los ficheros ---
     def _lee(f):
         with open(os.path.join(E.DIR, f), encoding="utf-8") as fh:

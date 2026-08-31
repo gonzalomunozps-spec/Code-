@@ -24,9 +24,14 @@ siempre sus datos, se arranque desde donde se arranque.
 
 ---
 
-## 2. Mapa de módulos (48 ficheros, ~17.100 líneas, sin contar `pruebas*.py`)
+## 2. Mapa de módulos (49 ficheros, ~18.000 líneas, sin contar `pruebas*.py`)
 
-El grafo de dependencias **no tiene ciclos**. Las capas van de abajo arriba:
+El grafo de dependencias **no tiene ciclos** al importar. Hay exactamente **una
+arista hacia atrás**, y está deliberadamente aplazada: `calibracion_umbrales.
+comparar_con_historico` importa `evaluar_parcela` **dentro de la función**, porque es
+un informe que relee el histórico y necesita el motor que lo juzga. Al cargar el
+módulo esa arista no existe. Si aparece una segunda, es que la capa está mal puesta.
+Las capas van de abajo arriba:
 
 ```
 CAPA 3  ENTREGA        panel_gestion_parcelas.py   informe_anual.py*
@@ -73,6 +78,8 @@ Son la base testeable. Ninguno importa a otro.
 | `bitacora.py` | Registro de incidencias a `parcelas.log`. Nunca escribe en consola; si no puede escribir, degrada a `NullHandler`. |
 | `rutas.py` | **Dónde viven los datos**: `GESTOR_PARCELAS_DIR` → `platformdirs` (opcional) → `~/.gestor_parcelas`. También purga los PNG viejos de la caché. |
 | `credenciales.py` | Config y clave de OpenAI. La clave se **cifra en el llavero del SO** (`keyring`, opcional) cuando se puede; si no, respaldo **ofuscado** (base64) en fichero 0600, escritura atómica. La variable `OPENAI_API_KEY` tiene prioridad y no toca disco. |
+| `ui_copias.py` | La ventana de copias (crear, restaurar, exportar). **Opcional junto con `copias.py`**: el panel la importa una sola vez al arrancar y, si no está, **el botón «Copias» no se crea**. |
+| `version.py` | La versión del programa en UN solo sitio (`__version__`). La leen `pyproject.toml`, el arranque y el título de la ventana. No confundir con `almacen.ESQUEMA_VERSION`, que versiona el esquema de la base. |
 | `copias.py` | **Copias de seguridad** de la base. Toda la información vive en un fichero SQLite; este módulo hace copias con fecha (usando el backup online de SQLite, consistente aun con WAL), las **rota** (guarda las N más nuevas), restaura (guardando antes una copia de los datos actuales) y exporta a una ruta cualquiera. Autónomo (no importa `almacen`); **opcional**. **Restaurar NO cierra la base**: lo hace `almacen.restaurar_desde`, que vuelca la copia *dentro* de la conexión viva con el backup online. Cerrarla y sustituir el fichero por debajo era una **carrera** con los hilos de fondo (la sincronización automática arranca sola): el hilo se quedaba escribiendo sobre una conexión cerrada (`Cannot operate on a closed database`), o peor, reabría el fichero a medio copiar. Cubierto por prueba de regresión con un hilo escribiendo mientras se restaura. La copia automática del arranque (`crear_copia_si_toca`) no se repite si ya hay una reciente. `ui_copias.DialogoCopias` es su ventana; el arranque la llama tras `DB.conectar()`. |
 | `empaquetar.py` | Script de EMPAQUETADO (aparte del programa): construye un **ejecutable con PyInstaller** para repartirlo a quien no tiene Python. Declara los datos (icono, `MANUAL.md`) y los imports ocultos que el análisis estático no ve. No lo importa nadie. |
 
@@ -105,7 +112,7 @@ Son la base testeable. Ninguno importa a otro.
 | `ui_credenciales.py` | Pestaña de credenciales y aspecto. |
 | `informe_anual.py` | Informes PDF (balance y técnico) y Excel. **Opcional.** Además de la serie de índices, **enseña** —sin recalcular— lo que ya producen otros módulos: clima de ERA5 y su balance hídrico (`clima_era5`, `balance_hidrico`), grados-día (`grados_dia`) y lo anotado a mano (variedad, recinto SIGPAC, marca de arbolado y producción de báscula). Los tres módulos se importan con `try/except`: si se borran, sus secciones desaparecen y el informe sale igual. |
 | `demo_sistema.py` | Siembra datos de ejemplo y ejecuta el motor sin satélite ni GUI. |
-| `pruebas.py` | 956 pruebas sin pantalla ni red. |
+| `pruebas.py` | 958 pruebas sin pantalla ni red. |
 | `medir_ruido.py` | **Herramienta de diagnóstico**, no parte del programa: estima el ruido del NDVI de tus parcelas con la segunda diferencia de tripletes de pasadas, y cuenta cuántos cambios del semáforo ocurrieron pegados a un umbral. **Borrable**: no la importa nadie. |
 | `pruebas_oro.py` | Fichero de oro del motor: congela la salida completa de `evaluar_parcela` sobre 3.499 entradas generadas de las propias tablas de fases (ver §7). **Opcional**: si se borra, la suite lo salta. |
 | `pruebas_interfaz.py` | Pruebas **con** pantalla: monta la aplicación y la toca entera. **Opcional.** |
@@ -459,7 +466,11 @@ bloques seguidos mutaban las **mismas tres variables** (`clave`, `estado`, `moti
 así que para saber qué hacía el séptimo había que haber leído los seis anteriores, y
 el **orden** —que es significativo— sólo existía como posición de las líneas.
 
-Hoy son tres piezas, y `evaluar_parcela` queda en **CC 4, 47 líneas y 13 locales**:
+Hoy son tres piezas. Al terminar el troceado `evaluar_parcela` quedó en **CC 4, 47
+líneas y 13 locales**; hoy está en **CC 12, 55 líneas y 6 locales** porque encima se
+le montó el pliegue de la persistencia (§4c), que recorre la serie pasada a pasada.
+Esa complejidad es del bucle, no de la agronomía: el juicio entero sigue viviendo en
+`_diagnostico_crudo` y sus reglas.
 
 1. **`_preparar_contexto`** → `_Ctx`, una tupla con nombres, **de sólo lectura**: fase,
    umbrales calibrados, deltas, qué índice juzga y contra qué listón, cubierta,
@@ -483,7 +494,12 @@ Hoy son tres piezas, y `evaluar_parcela` queda en **CC 4, 47 líneas y 13 locale
 | 4 | `falta_de_agua` | NDMI bajo, con el déficit buscado y la sequía comarcal dentro |
 | 5 | `eventos_cuaderno` | **pisa todo lo anterior**: lo apuntado por el agricultor manda sobre lo deducido |
 | 6 | `zonas` | aviso de foco; se calla si el evento o el corte ya lo explicaron |
-| 7 | `nota_calibracion` | cierra diciendo si el umbral salió de tus validaciones |
+| 7 | `plausibilidad` | el valor no cuadra con la fase declarada (§4d) — puede imponer `Revisar datos` |
+| 8 | `fiabilidad` | avisa de que el veredicto se ha decidido por poco (§4e) |
+| 9 | `nota_calibracion` | cierra diciendo si el umbral salió de tus validaciones |
+
+Las reglas 7 y 8 se añadieron después del troceado y **entraron sin tocar las otras
+seis**: esa es la prueba de que la tubería servía para algo.
 
 Para añadir una regla: se escribe la función, se mete en `REGLAS` **en su sitio** y se
 mira qué dice `pruebas_oro.py`. Si el veredicto no debía cambiar y cambia, la regla
@@ -761,7 +777,7 @@ tooling: borrarlos no afecta a la aplicación, que se usa igual con
 
 ```bash
 pip install -r requirements.txt
-python pruebas.py          # 956 pruebas, sin pantalla ni red (incluye el fichero de oro)
+python pruebas.py          # 958 pruebas, sin pantalla ni red (incluye el fichero de oro)
 python pruebas_interfaz.py # la interfaz de verdad (xvfb-run -a ... si no hay pantalla)
 python pruebas_oro.py      # solo el fichero de oro, con el informe completo de diferencias
 python demo_sistema.py     # siembra parcelas de ejemplo en parcelas.db
@@ -852,14 +868,35 @@ ni el veredicto ni el texto no lo vería este fichero.
    se puede contrastar contra bibliografía y contra la coherencia interna, pero
    **no contra campo**: eso lo dicen las validaciones del agricultor.
 
-2. **La gráfica de radar tiene doble eje Y** (VV/VH/CR en dB contra RVI
+2. **Los ~599 números de `fenologia_especies` no dicen, uno a uno, de dónde
+   salen.** Se estudió marcar cada umbral con su procedencia (bibliografía /
+   derivado / estimado) y se decidió **no hacerlo**, por estas medidas:
+   - Son **~599** valores, no ~400: 12 especies extensivas × ~78 números de fase
+     (≈419) más 4 leñosos × 48 valores mensuales (≈180).
+   - En 820 líneas hay **5** menciones de procedencia, y hablan de *qué fase es
+     crítica* (FAO-56, coeficientes Ky) y de la regla de derivación del NDMI —no
+     de umbrales sueltos.
+   - La cabecera del fichero **ya declara la incertidumbre en prosa** («SON UN
+     PUNTO DE PARTIDA, no una verdad») y ya distingue lo bibliográfico de lo
+     derivado. Marcar los 599 como `estimado` sería **menos preciso** que los
+     comentarios que ya hay.
+   - El conocimiento es **de grupo**, no de número: 599 casillas repetirían la
+     misma frase. Sería andamiaje vacío, y el andamiaje vacío envejece peor que un
+     comentario honesto.
+   Lo que sí tendría valor es un **test de trinquete** que impida que el número de
+   valores sin procedencia crezca. Queda pendiente, con esa forma reducida:
+   procedencia por grupo (especie/bloque), trinquete e informe priorizado. La
+   estructura no estorba —cada fase ya es una tupla de 7 con un `dict` `extra`—,
+   así que el día que haya criterio agronómico para llenarlo, cabe sin refactor.
+
+3. **La gráfica de radar tiene doble eje Y** (VV/VH/CR en dB contra RVI
    adimensional). Dos escalas en una gráfica invitan a comparar lo que no es
    comparable; lo correcto serían dos paneles apilados. Es una decisión sobre cómo
    se presenta un dato agronómico, así que no se tocó.
 
-3. **`descargar_mapa_*` sigue sin cobertura** de pruebas (necesita credenciales).
+4. **`descargar_mapa_*` sigue sin cobertura** de pruebas (necesita credenciales).
 
-4. **TODO: el `LICENSE` no tiene titular.** Sigue diciendo
+5. **TODO: el `LICENSE` no tiene titular.** Sigue diciendo
    `Copyright (c) 2026 <TU NOMBRE>`. Mientras esa linea sea un hueco, la licencia
    MIT no cede derechos de nadie en concreto y el proyecto no es legalmente
    redistribuible. **Lo rellena el autor**: no es un dato que se pueda deducir del

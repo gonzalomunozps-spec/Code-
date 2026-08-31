@@ -89,6 +89,14 @@ from mapas_cache import DIR_MAPAS
 
 _EE = gee_cliente.hay_ee()
 
+# `copias` es OPCIONAL: si se borra el fichero, el programa sigue funcionando. Se
+# comprueba aqui, una vez, y no al pulsar: si no esta, el boton no llega a
+# aparecer. Un boton que existe y revienta al pulsarlo es peor que uno que no esta.
+try:
+    from ui_copias import DialogoCopias as _DialogoCopias
+except Exception:
+    _DialogoCopias = None
+
 # La superficie PUBLICA del modulo. El panel es la puerta de entrada de toda la
 # interfaz (`from panel_gestion_parcelas import ...`), asi que reexporta las
 # piezas aunque este fichero no las use: si no, quien monte la aplicacion tendria
@@ -404,15 +412,17 @@ class PanelGestionParcelas(ttk.Frame):
         self.btn_sync = ttk.Button(barra, text="  ↻ Sincronizar ahora  ",
                                    command=self._sincronizar_ahora)
         self.btn_sync.pack(side="right", padx=(0, 8))
-        ttk.Button(barra, text="  🛡 Copias  ", style="Ghost.TButton",
-                   command=self._abrir_copias).pack(side="right", padx=(0, 8))
+        if _DialogoCopias is not None:
+            ttk.Button(barra, text="  🛡 Copias  ", style="Ghost.TButton",
+                       command=self._abrir_copias).pack(side="right", padx=(0, 8))
         ttk.Button(barra, text="  ❔ Ayuda  ", style="Ghost.TButton",
                    command=self._abrir_manual).pack(side="right", padx=(0, 8))
 
     def _abrir_copias(self):
         """Abre la ventana de copias de seguridad (crear, restaurar, exportar)."""
-        from ui_copias import DialogoCopias
-        DialogoCopias(self)
+        if _DialogoCopias is None:      # sin el modulo opcional no hay ventana
+            return
+        _DialogoCopias(self)
 
     def _abrir_manual(self):
         """Abre el manual de usuario (MANUAL.md) con la aplicacion del sistema."""

@@ -296,6 +296,21 @@ def separacion_copa_cubierta(serie, fase_esp, reg=None):
                      "mezcla copa y calle.")}
 
 
+def _mes_de(fecha_iso):
+    """El mes (1-12) de una fecha ISO, o None si no hay fecha legible.
+
+    Sin fecha no se puede situar la pasada en el ano, y la ventana estacional es
+    parte del juicio: los dos diagnosticos de aqui abajo se plantan en vez de
+    adivinar. Todos los hermanos de este modulo ya se guardan igual
+    (`fase_fenologica`, `detectar_cubierta`, `fase_lenoso`): aqui faltaba, y una
+    fecha mal formada tumbaba `evaluar_parcela` entero.
+    """
+    try:
+        return datetime.strptime(fecha_iso, "%Y-%m-%d").month
+    except (TypeError, ValueError):
+        return None
+
+
 def diagnostico_lenoso(serie, fecha_iso, subtipo=""):
     """
     Decide, SOLO por contraste entre indices, si el verdor procede de la copa o
@@ -308,13 +323,8 @@ def diagnostico_lenoso(serie, fecha_iso, subtipo=""):
     c = contrastes(serie)
     if not c:
         return None
-    try:
-        mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
-    except (TypeError, ValueError):
-        # Sin fecha legible no se puede situar la pasada en el ano, y la ventana
-        # estacional es parte del juicio. Todos los hermanos de este modulo ya se
-        # guardan igual (`fase_fenologica`, `detectar_cubierta`, `fase_lenoso`):
-        # aqui faltaba, y una fecha mal formada tumbaba `evaluar_parcela` entero.
+    mes = _mes_de(fecha_iso)
+    if mes is None:
         return None
     ventana = mes in (12, 1, 2, 3, 4, 5)      # epoca de cubierta viva
 
@@ -402,13 +412,8 @@ def diagnostico_extensivo(serie, fecha_iso, subtipo=""):
     c = contrastes(serie)
     if not c:
         return None
-    try:
-        mes = datetime.strptime(fecha_iso, "%Y-%m-%d").month
-    except (TypeError, ValueError):
-        # Sin fecha legible no se puede situar la pasada en el ano, y la ventana
-        # estacional es parte del juicio. Todos los hermanos de este modulo ya se
-        # guardan igual (`fase_fenologica`, `detectar_cubierta`, `fase_lenoso`):
-        # aqui faltaba, y una fecha mal formada tumbaba `evaluar_parcela` entero.
+    mes = _mes_de(fecha_iso)
+    if mes is None:
         return None
 
     d_ndvi = c.get("d_ndvi")

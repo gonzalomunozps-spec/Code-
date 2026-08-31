@@ -3,6 +3,37 @@
 Se sigue [Keep a Changelog](https://keepachangelog.com/es/) y
 [SemVer](https://semver.org/lang/es/).
 
+## [1.21.1] — 2026-08
+
+Auditoría final de la revisión 1.16: no se añade ninguna funcionalidad, se repasa
+todo lo hecho y se arregla lo que la revisión destapó.
+
+### Corregido
+- **El botón «Copias» reventaba si se borraba el módulo opcional `copias`.** El
+  manejador importaba `ui_copias` al pulsar, no al arrancar, así que quedaba un botón
+  visible que lanzaba `ModuleNotFoundError`. Ahora la comprobación se hace una vez al
+  importar: sin el módulo, el botón ni se crea. Con **todos** los módulos opcionales
+  borrados a la vez, la suite (777) y la de interfaz pasan enteras.
+- **«Revisar datos» salía en tinta normal en el PDF anual**, mientras el panel lo
+  pinta en ámbar. Ahora coinciden: es el papel que se archiva y no debía disimularlo.
+- **`medir_ruido` no viajaba en `pip install .`**: faltaba en `py-modules`.
+
+### Añadido (sólo pruebas)
+- **Trinquete de empaquetado**: cada `.py` del árbol está en `py-modules` o en una
+  lista explícita de scripts de instalación. Verificado que falla al quitar un módulo.
+- **Prueba de interfaz** de que el manejador de copias no lanza sin el módulo.
+
+### Cambiado
+- La guarda de fecha duplicada en `contraste_indices` (7 líneas y su comentario, dos
+  veces) pasa a `_mes_de`. Salida del motor **idéntica**: 3.499 casos sin diferencias.
+- `ARQUITECTURA.md` al día donde el código la había dejado atrás: la tubería ya tiene
+  **9** reglas (no 7), `evaluar_parcela` está en **CC 12** (no 4: encima se le montó el
+  pliegue de la persistencia), 49 ficheros y ~18.000 líneas, y se documenta la única
+  arista hacia atrás del grafo (`calibracion_umbrales` → motor, diferida a propósito).
+- Se documenta como **deuda deliberada** por qué no se marcó uno a uno el origen de los
+  ~599 números de `fenologia_especies` (§8.2), con las medidas que llevaron a esa
+  decisión.
+
 ## [1.21.0] — 2026-08
 
 ### Añadido
